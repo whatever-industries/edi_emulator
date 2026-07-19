@@ -116,6 +116,21 @@ on receipt of ch2 `0x8A`, retain its SLAVE mode/flag state, and let the
 machine reset the 68070 and the other host-side devices at an instruction
 boundary.
 
+The CD-i 220 service manual's MMC signal list independently confirms the
+reset topology and active levels:
+
+- `RSTOUT` is the SLAVE processor's reset output; high starts the reset
+  sequence;
+- `RESETN` is the active-low reset for the other host ICs;
+- `NRESET` is the active-low video-system/VSR reset; and
+- `HALTN` is active-low, open-drain and bidirectional; asserted together with
+  reset it places the 68070 in the reset state.
+
+The same manual's block diagram keeps the SLAVE CPU outside the host reset
+domain. This corroborates a full host-device reset that preserves SLAVE RAM
+and protocol state, rather than a CPU-register-only reset or reconstruction of
+`SlaveHle`.
+
 ## Post-reset boot-mode conversation (BIOS `cdapdriv`)
 
 The launch mode is not returned by the `F4` test-plug query. Dynamic tracing
@@ -151,6 +166,13 @@ in the material assessed so far, document this private SLAVE/CDAP byte
 protocol; the values above come from firmware and BIOS disassembly plus the
 runtime trace.
 
+The archive contains 187 PDFs; the assessed source map and resulting emulator
+requirements are tracked in `icdia-archive-assessment.md`. In particular,
+`docs/pointing_devices.pdf` specifies a relative mouse as signed deltas with
+packets emitted only for motion or button transitions. This corroborates the
+relative frontend/HLE integration used here, while the SLAVE's host-side
+four-byte accumulated-coordinate response remains firmware-derived behavior.
+
 ### ch2 payload forms (`0x048D..0x0511`)
 
 - Bytes below `0x80` are collected as a four-byte payload in `$76..$79`,
@@ -175,8 +197,11 @@ runtime trace.
     responses (matches MAME's F0/F3/F4 replies)
   - 0xF6 → if `$5A.0`: latch port D bit7 into `$5A.2`; set `$5D.6`
     (NTSC/PAL query)
-  - 0xF7 → clr `$58.3` (input polling ON — `$58.3` gates the 0x3B status
-    suppression too); 0xFE → set `$58.3`
+  - 0xF7 → clr `$58.3`; 0xFE → set `$58.3`. This is a firmware input-mode
+    flag, not an off switch for the HLE pointer poller: Alien Gate sends FE
+    while taking over from the player shell, then continues consuming pointer
+    packets. The HLE therefore starts pointer reporting at F7 and keeps it
+    active through FE until reset (matching MAME's operational behavior).
   - 0xF8 / 0xF9 → set / clear `$63` bit 6
   - 0xFA / 0xFB → set / clear `$63` bit 7
   - 0xFC → `$BA=2`, drive PC6 high; 0xFD → release PC6

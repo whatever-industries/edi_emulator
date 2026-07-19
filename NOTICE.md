@@ -16,7 +16,15 @@ project's CD-i driver, licensed BSD-3-Clause:
 
 Files containing ported logic carry an attribution header naming the MAME
 source file. BSD-3-Clause code may be incorporated into GPL-2.0-or-later works;
-the original license text is reproduced in the relevant file headers.
+the complete BSD-3-Clause terms and preserved contributor notices are in
+[`LICENSES/BSD-3-Clause.txt`](LICENSES/BSD-3-Clause.txt).
+
+Copyright notices for the referenced MAME sources:
+
+- `cdi.cpp`, `cdislavehle.cpp`, `mcd212.cpp`, and `scc68070.cpp`:
+  Copyright Ryan Holtz.
+- `cdicdic.cpp`: Copyright Ryan Holtz and Vincent Halver.
+- Subsequent changes in upstream MAME: Copyright MAMEdev and contributors.
 
 ## CD-i Emulator data files (CD-i Fan)
 

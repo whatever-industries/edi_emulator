@@ -190,7 +190,9 @@ fn boot(
         if let Some((x, y)) = click_pos {
             // Hover from 50%, press at 60-65%, release after.
             let pct = i * 100 / instructions.max(1);
-            if pct >= 50 {
+            if i == instructions / 2 {
+                machine.bus.slave.set_pointer_absolute(x, y, 0);
+            } else if pct >= 50 {
                 let buttons = u8::from((60..65).contains(&pct));
                 machine.bus.slave.set_pointer(x, y, buttons);
             }

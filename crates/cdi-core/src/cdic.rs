@@ -262,6 +262,12 @@ impl Cdic {
                 if self.z_buffer & 0x2000 == 0 {
                     self.decode_addr = 0xFFFF;
                 } else if !self.decoding_audio_map {
+                    // CD-RTOS gives memory sound maps priority over disc
+                    // audio. Starting one aborts CD-DA; real-time ADPCM keeps
+                    // streaming but remains inaudible until the map ends.
+                    if self.disc_mode == DiscMode::Cdda {
+                        self.cancel_disc_read();
+                    }
                     self.decode_addr = self.z_buffer & 0x3A00;
                     self.audio_format_sectors = 0;
                     self.audio_sector_counter = 1;
@@ -366,7 +372,10 @@ impl Cdic {
                 }
             }
             0x2B => self.cancel_disc_read(), // Stop CDDA
-            0x2E => {}                       // Update
+            // Commit a live channel/configuration change. cdapdriv writes
+            // the affected registers before issuing this command, so those
+            // writes already have immediate effect in this HLE model.
+            0x2E => {}
             0x27 => self.init_disc_read(DiscMode::Toc),
             0x28 => self.init_disc_read(DiscMode::Cdda),
             0x29 | 0x2C => self.init_disc_read(DiscMode::Mode1), // Read Mode 1 / Seek
@@ -433,13 +442,17 @@ impl Cdic {
         if u16::from(buf[SECTOR_FILE2]) << 8 != self.file {
             return false;
         }
-        if buf[SECTOR_SUBMODE2] & SUBMODE_EOF != 0 {
+        let submode = buf[SECTOR_SUBMODE2];
+        if submode & SUBMODE_EOF != 0 {
             self.disc_command = 0;
         }
-        if buf[SECTOR_SUBMODE2] & (SUBMODE_EOF | SUBMODE_TRIG | SUBMODE_EOR) != 0 {
+        // The CDIC delivers event sectors after file selection. cdapdriv then
+        // applies the Green Book's finer rule by clearing EOR when the channel
+        // was not selected, while retaining EOF/TRIG (cdi220b ROM $2A804).
+        if submode & (SUBMODE_EOF | SUBMODE_TRIG | SUBMODE_EOR) != 0 {
             return true;
         }
-        if buf[SECTOR_SUBMODE2] & (SUBMODE_DATA | SUBMODE_AUDIO | SUBMODE_VIDEO) == 0 {
+        if submode & (SUBMODE_DATA | SUBMODE_AUDIO | SUBMODE_VIDEO) == 0 {
             return false;
         }
         self.channel & (1 << buf[SECTOR_CHAN2]) != 0
@@ -494,9 +507,7 @@ impl Cdic {
                 return;
             }
             if self.is_mode2_audio_selected(&buffer) {
-                self.audio_sector_counter = Self::sector_count_for_coding(buffer[SECTOR_CODING2]);
-                self.decoding_audio_map = false;
-                self.play_audio_sector(buffer[SECTOR_CODING2], &buffer, SECTOR_DATA);
+                self.play_realtime_audio_sector(buffer[SECTOR_CODING2], &buffer);
             }
         } else if self.disc_mode == DiscMode::Cdda {
             self.audio_sector_counter = 2;
@@ -721,6 +732,14 @@ impl Cdic {
         self.play_audio_data(coding, data);
     }
 
+    fn play_realtime_audio_sector(&mut self, coding: u8, buffer: &[u8]) {
+        if self.decoding_audio_map {
+            return;
+        }
+        self.audio_sector_counter = Self::sector_count_for_coding(coding);
+        self.play_audio_sector(coding, buffer, SECTOR_DATA);
+    }
+
     fn play_audio_data(&mut self, coding: u8, data: &[u8]) {
         if coding & CODING_CHAN_MASK > CODING_STEREO
             || coding & CODING_BPS_MASK == CODING_BPS_MPEG
@@ -905,5 +924,80 @@ mod tests {
         assert_eq!(c.audio_out[0], 0x1234);
         assert_eq!(c.audio_out[1], 0x5678);
         assert_eq!(c.audio_out.len(), 2 * (2352 / 4));
+    }
+
+    #[test]
+    fn sound_map_takes_priority_over_realtime_adpcm() {
+        let mut c = Cdic::new();
+        let sector = [0u8; SECTOR_SIZE];
+        let coding = CODING_STEREO; // Level B, 37.8 kHz stereo
+
+        c.decoding_audio_map = true;
+        c.play_realtime_audio_sector(coding, &sector);
+        assert!(c.audio_out.is_empty());
+        assert!(
+            c.decoding_audio_map,
+            "disc audio must not cancel a sound map"
+        );
+
+        c.decoding_audio_map = false;
+        c.play_realtime_audio_sector(coding, &sector);
+        assert!(!c.audio_out.is_empty());
+    }
+
+    #[test]
+    fn starting_sound_map_aborts_cdda() {
+        let mut c = Cdic::new();
+        c.disc_command = 0x28;
+        c.disc_mode = DiscMode::Cdda;
+
+        c.write16(0x3FFA, 0x2000);
+
+        assert!(c.decoding_audio_map);
+        assert_eq!(c.disc_command, 0);
+        assert_eq!(c.disc_mode, DiscMode::Idle);
+    }
+
+    fn mode2_sector(file: u8, channel: u8, submode: u8) -> [u8; 2352] {
+        let mut sector = [0u8; 2352];
+        sector[SECTOR_FILE2] = file;
+        sector[SECTOR_CHAN2] = channel;
+        sector[SECTOR_SUBMODE2] = submode;
+        sector
+    }
+
+    #[test]
+    fn mode2_ordinary_sector_requires_selected_channel() {
+        let mut c = Cdic::new();
+        c.file = 7 << 8;
+        c.channel = 1 << 3;
+
+        assert!(c.is_mode2_sector_selected(&mode2_sector(7, 3, SUBMODE_DATA)));
+        assert!(!c.is_mode2_sector_selected(&mode2_sector(7, 4, SUBMODE_DATA)));
+        assert!(!c.is_mode2_sector_selected(&mode2_sector(8, 3, SUBMODE_DATA)));
+    }
+
+    #[test]
+    fn mode2_event_sector_bypasses_channel_but_not_file_mask() {
+        let mut c = Cdic::new();
+        c.file = 7 << 8;
+        c.channel = 1 << 3;
+
+        // This is the low-level CDIC delivery contract. cdapdriv applies the
+        // application-visible EOR channel rule after receiving the sector.
+        assert!(c.is_mode2_sector_selected(&mode2_sector(7, 4, SUBMODE_TRIG)));
+        assert!(c.is_mode2_sector_selected(&mode2_sector(7, 4, SUBMODE_EOR | SUBMODE_DATA)));
+        assert!(c.is_mode2_sector_selected(&mode2_sector(7, 3, SUBMODE_EOR | SUBMODE_DATA)));
+        assert!(!c.is_mode2_sector_selected(&mode2_sector(8, 4, SUBMODE_TRIG)));
+    }
+
+    #[test]
+    fn mode2_eof_event_ends_the_read() {
+        let mut c = Cdic::new();
+        c.file = 7 << 8;
+        c.disc_command = 0x2A;
+
+        assert!(c.is_mode2_sector_selected(&mode2_sector(7, 4, SUBMODE_EOF)));
+        assert_eq!(c.disc_command, 0);
     }
 }

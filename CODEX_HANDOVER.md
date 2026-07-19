@@ -1,4 +1,4 @@
-# Handover: CD-i Emulator (Rust) — state as of 2026-07-18 (late)
+# Handover: CD-i Emulator (Rust) — state as of 2026-07-19
 
 You are picking up an open-source Philips CD-i emulator, written in Rust, at
 `/Volumes/Projects/Coding/cdi_emulator`. Read `docs/PLAN.md` first — it is the
@@ -69,6 +69,45 @@ ADPCM audio. A second necessary fix models SCC68070 DMA status as
 write-one-to-clear and software-start as setting COC; previously the label
 DMA worked once, then the BIOS waited forever before its next transfer.
 
+**DOCUMENT-DRIVEN REGRESSIONS (2026-07-19)**: the May 1994 Green Book plus
+cdi220b `cdapdriv` disassembly establish the two-layer Mode-2 filter: CDIC
+delivers file-matched EOF/EOR/TRIG even across the channel mask, then the BIOS
+routine at ROM `$2A804` clears cross-channel EOR/data-type flags while keeping
+EOF/TRIG. Unit tests lock the low-level CDIC behavior. MCD212 table 5-10 also
+showed that DCA storage always strides 64 bytes but the per-line fetch budget
+is 32 bytes with CF clear and 64 with CF set; the renderer and a synthetic DCA
+test now enforce that distinction. Tables 5-9 and 9-12/9-15 also require the
+channel-1 DE master gate plus IC and DC for DCA execution; those gates are now
+correctly enforced and tested. TN 069 section 3.3 establishes that the first
+linked LCT executes immediately after the FCT. The first DCA slot is therefore
+prefetched after ICA, with later slots advanced after rendered lines; a PAL test
+locks this to exactly 280 slots per frame. MCD212 interrupt instructions always
+set IT1/IT2, while active-high DI1/DI2 suppress only CPU-pin propagation; CSR2
+reads clear IT1/IT2/BE. Those distinctions are now modeled and tested.
+
+The literal table-5-8 non-interlaced ICA entry rule was tested but is not yet
+enabled: changing the simplified scheduler from alternating `$400/$404` to a
+fixed `$400` stranded both title regressions in the shell (identical hash
+`beddc17aebef95c370d529f0e5cd9fcc8727402c097ee4cdd54b81f409e9517d`).
+Keep the working alternating behavior until scan mode, half-lines and field
+parity are modeled as one timing change.
+
+Audio scheduling has one new Green-Book/TN-driven correction. Memory sound
+maps now retain priority over incoming real-time-file ADPCM instead of being
+canceled by the next disc-audio sector, and starting a sound map aborts CD-DA.
+Focused CDIC tests cover both. Sound-map completion is still too coarse: TN 069
+and TN 079 say it reports RAM-to-audio-processor transfer rather than audible
+completion, so a later change must split transfer and playback cursors and give
+each machine profile an internal buffer depth.
+
+Both title regressions still boot after the first-LCT timing correction
+(350,000,000 instructions, scripted shell click). Their expected final frames
+changed because DCA state now applies to the intended line: Alien Gate USA
+reaches its working menu
+(`72072c68036fdb7417cbd4d2db5cc780748960735c9f70f8757bea2b7929cb96`),
+and CD Shoot reaches its language/game screen
+(`5cab5e8d846e14ee64f48aff904ca21992b48525d8f833acd0a353e7dce9e8e2`).
+
 **SLAVE protocol decoded via firmware disassembly**: see
 `docs/slave-protocol.md` (findings) + `docs/slave-zx405042p.disasm.asm`
 (full disassembly, regenerate with `scripts/hc05dis.py`). Headline: the
@@ -81,6 +120,13 @@ jump to the reset routine. BIOS `cdapdriv` disassembly established the
 post-reset `B0`/`B1` response sequence; `0x3B` is not the launch signal.
 The project owner has stated Philips relinquished firmware copyright
 (recorded in NOTICE.md), so disassembly artifacts live openly in docs/.
+The 187-PDF local ICDIA mirror is now inventoried and the sources assessed for
+Mono-I work are tracked in `docs/icdia-archive-assessment.md`.
+The CD-i 220 service-manual block diagram/signal list now independently
+corroborates the reset model: SLAVE `RSTOUT` starts the sequence, active-low
+`RESETN` resets the other host ICs, `NRESET` resets the video/VSR domain, and
+SLAVE remains outside that host reset domain. Preserve `SlaveHle` while fully
+resetting the host devices.
 
 **Original analysis (pre-disassembly)**: the disc-play flow restarts the kernel and drives
 the CD *transport* through undocumented SLAVE commands: ch3 0xF8/0xF9/
@@ -109,12 +155,18 @@ fatal/idle loop is `BRA.s self` at 0x400636 right after writing ch2 0x8A.
 
 1. ~~Verify pointer interaction~~ DONE — user-confirmed in the live
    frontend: shell boots, menu behaves normally, mouse aligns with the
-   shell pointer. Two fixes were needed and are landed: (a) SlaveHle
-   assigns absolute pointer coords directly (the readback packets are
-   absolute; delta integration baked the initial hover position in as a
-   permanent offset), and (b) the frontend maps the mouse onto the active
+   shell pointer. The frontend initially synchronizes its absolute position,
+   then SlaveHle accumulates relative motion around guest-selected positions
+   (F3 reports a relative device even though F7 readback packets contain the
+   accumulated coordinates). This is required by titles such as Alien Gate.
+   The frontend also maps the mouse onto the active
    picture area (excluding the 24px Standard-mode borders, rescaled
    720→768) using border/active_width published per frame.
+   The firmware's ch3 `F8/F9` pair controls `$63.6`; it does **not** disable
+   pointer polling. `F7` starts the HLE poller. `FE` changes firmware input
+   mode `$58.3`, but the HLE poller must remain active: Alien Gate sends FE
+   during shell handoff and continues using the pointer. This behavior is
+   user-verified in the frontend, with no unintended menu activation.
 2. NTSC path: boot with a `--model` override forcing NTSC (video standard
    currently defaults PAL for all models; consider a `--ntsc` flag flowing
    into ModelDef/Mcd212/SlaveHle video_status).

@@ -1,0 +1,18 @@
+# Build artifacts
+/target
+
+# Copyrighted material — never commit
+/roms/
+/references/
+*.rom
+*.nvr
+
+# Private chat archives (other people's messages)
+/references/discord/
+
+# macOS
+.DS_Store
+
+# Local test artifacts
+/tests-data/local/
+/tests-data/harte-68000/

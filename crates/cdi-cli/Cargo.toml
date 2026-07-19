@@ -1,0 +1,20 @@
+[package]
+name = "cdi-cli"
+description = "Headless CD-i emulator harness (boot, trace, ROM inspection)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+log.workspace = true
+env_logger.workspace = true
+clap.workspace = true
+sha2.workspace = true
+png.workspace = true
+cdi-core = { path = "../cdi-core" }
+cdi-os9 = { path = "../cdi-os9" }
+cdi-disc = { version = "0.1.0", path = "../cdi-disc" }
+
+[lints]
+workspace = true

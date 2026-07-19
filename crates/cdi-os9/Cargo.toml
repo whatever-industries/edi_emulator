@@ -1,0 +1,13 @@
+[package]
+name = "cdi-os9"
+description = "OS-9/68k module parsing and CD-i ROM identification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+log.workspace = true
+
+[lints]
+workspace = true

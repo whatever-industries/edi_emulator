@@ -1,0 +1,13 @@
+[package]
+name = "cdi-disc"
+description = "CD-i disc images: CUE/BIN parsing, sectors, subheaders"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+log.workspace = true
+
+[lints]
+workspace = true

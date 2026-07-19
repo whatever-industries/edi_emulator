@@ -1,0 +1,21 @@
+[package]
+name = "cdi-scc68070"
+description = "Philips SCC68070 CPU core with on-chip peripherals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["savestate"]
+savestate = ["dep:serde"]
+
+[dependencies]
+log.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

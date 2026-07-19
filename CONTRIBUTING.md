@@ -1,0 +1,23 @@
+# Contributing
+
+## Licensing rules (read first)
+
+- All contributions are GPL-2.0-or-later. Every source file starts with
+  `// SPDX-License-Identifier: GPL-2.0-or-later`.
+- Porting logic from **MAME's** CD-i files (BSD-3-Clause) is allowed; add an
+  attribution comment naming the MAME source file and authors, and list the
+  file in NOTICE.md.
+- **CeDImu is study-only.** It has no license, so copying or closely
+  transliterating its code is not permitted. If you have looked at CeDImu
+  source while writing a patch, re-derive the logic from the datasheets or
+  MAME instead.
+- Never commit ROMs, disc images, or excerpts of them (including in test
+  fixtures). Synthetic fixtures only.
+
+## Practical notes
+
+- `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
+  `cargo test --workspace` must pass without ROMs present.
+- ROM-gated integration tests are `#[ignore]`d and keyed on `CDI_ROM_DIR`.
+- The emulation core (`cdi-core`, `cdi-scc68070`) must stay deterministic:
+  no wall-clock, no RNG, no UI/audio dependencies.

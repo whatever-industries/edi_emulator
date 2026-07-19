@@ -1,0 +1,909 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//! CDIC (CD Interface Controller) high-level emulation.
+//!
+//! Ported from MAME `src/mame/philips/cdicdic.cpp` (BSD-3-Clause,
+//! Ryan Holtz, Vincent Halver) — see NOTICE.md. The CDIC owns 16 KB of
+//! buffer RAM at `$300000`, a register file at `$303C00`/`$303FF4`+, a
+//! 75 Hz sector pump, XA-ADPCM audio decoding, and raises IN4 with its own
+//! programmable vector.
+//!
+//! Decoded audio is pushed into `audio_out` as 44.1 kHz interleaved stereo
+//! (naive rate conversion from 18.9/37.8 kHz XA rates); the frontend drains
+//! it.
+
+use cdi_disc::scramble::descramble_in_place;
+use cdi_disc::DiscImage;
+
+// Raw-sector byte offsets.
+const SECTOR_SIZE: usize = 2352;
+const SECTOR_HEADER: usize = 12;
+const SECTOR_MINUTES: usize = 12;
+const SECTOR_SECONDS: usize = 13;
+const SECTOR_FRACS: usize = 14;
+const SECTOR_MODE: usize = 15;
+const SECTOR_FILE1: usize = 16;
+const SECTOR_CHAN1: usize = 17;
+const SECTOR_SUBMODE1: usize = 18;
+const SECTOR_CODING1: usize = 19;
+const SECTOR_FILE2: usize = 20;
+const SECTOR_CHAN2: usize = 21;
+const SECTOR_SUBMODE2: usize = 22;
+const SECTOR_CODING2: usize = 23;
+const SECTOR_DATA: usize = 24;
+const SECTOR_AUDIO_SIZE: usize = 2304;
+
+// Submode bits.
+const SUBMODE_EOR: u8 = 0x01;
+const SUBMODE_VIDEO: u8 = 0x02;
+const SUBMODE_AUDIO: u8 = 0x04;
+const SUBMODE_DATA: u8 = 0x08;
+const SUBMODE_TRIG: u8 = 0x10;
+const SUBMODE_FORM: u8 = 0x20;
+const SUBMODE_EOF: u8 = 0x80;
+
+// Coding byte fields.
+const CODING_BPS_MASK: u8 = 0x30;
+const CODING_4BPS: u8 = 0x00;
+const CODING_8BPS: u8 = 0x10;
+const CODING_16BPS: u8 = 0x20;
+const CODING_BPS_MPEG: u8 = 0x30;
+const CODING_RATE_MASK: u8 = 0x0C;
+const CODING_37KHZ: u8 = 0x00;
+const CODING_18KHZ: u8 = 0x04;
+const CODING_RATE_RESV: u8 = 0x08;
+const CODING_44KHZ: u8 = 0x0C;
+const CODING_CHAN_MASK: u8 = 0x03;
+const CODING_MONO: u8 = 0x00;
+const CODING_STEREO: u8 = 0x01;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+enum DiscMode {
+    Idle,
+    Mode1,
+    Mode2,
+    Cdda,
+    Toc,
+}
+
+/// XA-ADPCM prediction filter coefficients.
+const XA_FILTER_COEF: [[i32; 2]; 4] = [
+    [0x000, 0x000],
+    [0x0F0, 0x000],
+    [0x1CC, -0x0D0],
+    [0x188, -0x0DC],
+];
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+pub struct Cdic {
+    /// 16 KB buffer RAM, stored in CPU (big-endian word) byte order.
+    #[cfg_attr(feature = "savestate", serde(skip, default = "default_ram"))]
+    pub ram: Vec<u8>,
+
+    // Registers
+    command: u16,
+    time: u32,
+    file: u16,
+    channel: u32,
+    audio_channel: u16,
+    audio_buffer: u16,
+    x_buffer: u16,
+    z_buffer: u16,
+    interrupt_vector: u16,
+    data_buffer: u16,
+
+    // Disc state
+    disc_command: u8,
+    disc_mode: DiscMode,
+    disc_spinup_counter: u8,
+    curr_lba: u32,
+    /// Physical frame of LBA 0 (150 normally; 0 when track 1 stores its
+    /// pregap, i.e. CD-i Ready rips — matches MAME's track layout).
+    lba_base: u32,
+
+    // Audio state
+    audio_sector_counter: u8,
+    audio_format_sectors: u8,
+    decoding_audio_map: bool,
+    decode_addr: u16,
+    atten: [u8; 4],
+    xa_last: [i16; 4],
+
+    /// Decoded audio, interleaved stereo i16 at 44.1 kHz; drained by the
+    /// frontend.
+    #[cfg_attr(feature = "savestate", serde(skip))]
+    pub audio_out: Vec<i16>,
+
+    // Timing (75 Hz pumps @ 15 MHz CPU clock)
+    sector_accum: u64,
+    audio_accum: u64,
+
+    int_line: bool,
+    /// Word-assembly latches for byte-wide bus access to 16-bit registers.
+    read_latch: u8,
+    write_latch: u8,
+}
+
+#[cfg(feature = "savestate")]
+fn default_ram() -> Vec<u8> {
+    vec![0; 0x4000]
+}
+
+const PUMP_PERIOD: u64 = 15_000_000 / 75;
+
+impl Default for Cdic {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Cdic {
+    pub fn new() -> Self {
+        Self {
+            ram: vec![0; 0x4000],
+            command: 0,
+            time: 0,
+            file: 0,
+            channel: 0xFFFF_FFFF,
+            audio_channel: 0xFFFF,
+            audio_buffer: 0,
+            x_buffer: 0,
+            z_buffer: 0,
+            interrupt_vector: 0x0F,
+            data_buffer: 0,
+            disc_command: 0,
+            disc_mode: DiscMode::Idle,
+            disc_spinup_counter: 0,
+            curr_lba: 0,
+            lba_base: 150,
+            audio_sector_counter: 0,
+            audio_format_sectors: 0,
+            decoding_audio_map: false,
+            decode_addr: 0,
+            atten: [0; 4],
+            xa_last: [0; 4],
+            audio_out: Vec::new(),
+            sector_accum: 0,
+            audio_accum: 0,
+            int_line: false,
+            read_latch: 0,
+            write_latch: 0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        let ram = std::mem::take(&mut self.ram);
+        *self = Self { ram, ..Self::new() };
+    }
+
+    pub fn int_line(&self) -> bool {
+        self.int_line
+    }
+
+    /// IN4 interrupt-acknowledge vector.
+    pub fn intack(&self) -> u8 {
+        (self.interrupt_vector & 0xFF) as u8
+    }
+
+    pub fn set_attenuation(&mut self, state: u32) {
+        self.atten = state.to_be_bytes();
+    }
+
+    /// Called when a disc is (un)loaded to set the LBA-0 physical base.
+    pub fn set_disc_layout(&mut self, disc: Option<&DiscImage>) {
+        self.lba_base = disc.and_then(|d| d.tracks().first()).map_or(150, |t| {
+            if t.region_start == 0 {
+                0
+            } else {
+                150
+            }
+        });
+    }
+
+    fn update_interrupt_state(&mut self) {
+        self.int_line = (self.x_buffer | self.audio_buffer) & 0x8000 != 0;
+    }
+
+    // --- Register access (16-bit registers at $303C00 / $303FF4+) --------
+
+    pub fn read16(&mut self, offset: u32) -> u16 {
+        log::trace!("cdic: read16 +{offset:#06x}");
+        match offset {
+            0x3C00 => self.command,
+            0x3C02 => (self.time >> 16) as u16,
+            0x3C04 => self.time as u16,
+            0x3C06 => self.file,
+            0x3C08 => (self.channel >> 16) as u16,
+            0x3C0A => self.channel as u16,
+            0x3C0C => self.audio_channel,
+            0x3FF4 => {
+                let v = self.audio_buffer;
+                self.audio_buffer &= 0x7FFF;
+                self.update_interrupt_state();
+                v
+            }
+            0x3FF6 => {
+                let v = self.x_buffer;
+                self.x_buffer &= 0x7FFF;
+                self.update_interrupt_state();
+                v
+            }
+            0x3FFA => {
+                if !self.decoding_audio_map {
+                    self.z_buffer ^= 0x0001;
+                }
+                self.z_buffer
+            }
+            0x3FFE => self.data_buffer,
+            _ => {
+                log::trace!("cdic: read16 +{offset:#06x} (unknown)");
+                0
+            }
+        }
+    }
+
+    /// Write; DMA control (0x3FF8) is handled by the caller (needs bus
+    /// access) via [`Cdic::dma_request`].
+    pub fn write16(&mut self, offset: u32, data: u16) {
+        log::trace!("cdic: write16 +{offset:#06x} = {data:#06x}");
+        match offset {
+            0x3C00 => self.command = data,
+            0x3C02 => self.time = (self.time & 0x0000_FFFF) | (u32::from(data) << 16),
+            0x3C04 => self.time = (self.time & 0xFFFF_0000) | u32::from(data),
+            0x3C06 => self.file = data,
+            0x3C08 => self.channel = (self.channel & 0x0000_FFFF) | (u32::from(data) << 16),
+            0x3C0A => self.channel = (self.channel & 0xFFFF_0000) | u32::from(data),
+            0x3C0C => self.audio_channel = data,
+            0x3FF4 => self.audio_buffer = data,
+            0x3FF6 => self.x_buffer = data,
+            0x3FFA => {
+                self.z_buffer = data;
+                if self.z_buffer & 0x2000 == 0 {
+                    self.decode_addr = 0xFFFF;
+                } else if !self.decoding_audio_map {
+                    self.decode_addr = self.z_buffer & 0x3A00;
+                    self.audio_format_sectors = 0;
+                    self.audio_sector_counter = 1;
+                    self.decoding_audio_map = true;
+                    self.xa_last = [0; 4];
+                }
+            }
+            0x3FFC => self.interrupt_vector = data,
+            0x3FFE => {
+                self.data_buffer = data;
+                if self.data_buffer & 0x8000 != 0 {
+                    self.handle_command();
+                }
+                if self.data_buffer & 0x4000 == 0 {
+                    self.disc_command = 0;
+                    self.disc_mode = DiscMode::Idle;
+                    self.disc_spinup_counter = 0;
+                    self.curr_lba = 0;
+                }
+            }
+            _ => log::trace!("cdic: write16 +{offset:#06x} = {data:#06x} (unknown)"),
+        }
+    }
+
+    /// Byte-lane access: a 68k word access arrives as even (high) then odd
+    /// (low) byte; the 16-bit handler fires on the even read / odd write.
+    pub fn read8(&mut self, offset: u32) -> u8 {
+        if offset & 1 == 0 {
+            let v = self.read16(offset);
+            self.read_latch = v as u8;
+            (v >> 8) as u8
+        } else {
+            self.read_latch
+        }
+    }
+
+    pub fn write8(&mut self, offset: u32, val: u8) -> Option<u16> {
+        if offset & 1 == 0 {
+            self.write_latch = val;
+            None
+        } else {
+            let word = (u16::from(self.write_latch) << 8) | u16::from(val);
+            let reg = offset & !1;
+            if reg == 0x3FF8 {
+                // DMA control: the machine performs the copy.
+                return Some(word);
+            }
+            self.write16(reg, word);
+            None
+        }
+    }
+
+    pub fn ram_read8(&self, offset: u32) -> u8 {
+        self.ram[(offset as usize) & 0x3FFF]
+    }
+
+    pub fn ram_write8(&mut self, offset: u32, val: u8) {
+        let idx = (offset as usize) & 0x3FFF;
+        self.ram[idx] = val;
+    }
+
+    // --- Commands ---------------------------------------------------------
+
+    fn lba_from_time(&self) -> u32 {
+        let from_bcd = |v: u8| u32::from(v >> 4) * 10 + u32::from(v & 0xF);
+        let mins = from_bcd((self.time >> 24) as u8);
+        let secs = from_bcd((self.time >> 16) as u8);
+        let mut lba = (mins * 60 + secs) * 75;
+        let frac_bcd = (self.time >> 8) as u8;
+        if frac_bcd & 0x80 == 0 {
+            lba += from_bcd(frac_bcd);
+        }
+        lba.saturating_sub(150)
+    }
+
+    fn init_disc_read(&mut self, mode: DiscMode) {
+        self.disc_command = self.command as u8;
+        self.disc_mode = mode;
+        self.curr_lba = self.lba_from_time();
+        // Spinup delay; MAME uses >= 6 ticks to avoid softlocks.
+        self.disc_spinup_counter = 6;
+    }
+
+    fn cancel_disc_read(&mut self) {
+        self.disc_command = 0;
+        self.disc_mode = DiscMode::Idle;
+        self.curr_lba = 0;
+        self.disc_spinup_counter = 0;
+    }
+
+    fn handle_command(&mut self) {
+        log::debug!(
+            "cdic: command {:#06x} time {:#010x}",
+            self.command,
+            self.time
+        );
+        match self.command {
+            0x23 | 0x24 => {
+                // Reset Mode 1 / Mode 2
+                if self.disc_command == 0 {
+                    self.init_disc_read(DiscMode::Mode1);
+                }
+            }
+            0x2B => self.cancel_disc_read(), // Stop CDDA
+            0x2E => {}                       // Update
+            0x27 => self.init_disc_read(DiscMode::Toc),
+            0x28 => self.init_disc_read(DiscMode::Cdda),
+            0x29 | 0x2C => self.init_disc_read(DiscMode::Mode1), // Read Mode 1 / Seek
+            0x2A => self.init_disc_read(DiscMode::Mode2),
+            other => log::debug!("cdic: unknown command {other:#06x}"),
+        }
+        self.data_buffer &= !0x8000;
+    }
+
+    // --- Sector pump ------------------------------------------------------
+
+    /// Advance by `cycles` CPU cycles; needs the loaded disc (if any).
+    pub fn tick(&mut self, cycles: u64, disc: Option<&DiscImage>) {
+        self.sector_accum += cycles;
+        while self.sector_accum >= PUMP_PERIOD {
+            self.sector_accum -= PUMP_PERIOD;
+            self.sector_tick(disc);
+        }
+        self.audio_accum += cycles;
+        while self.audio_accum >= PUMP_PERIOD {
+            self.audio_accum -= PUMP_PERIOD;
+            self.audio_tick();
+        }
+    }
+
+    fn sector_tick(&mut self, disc: Option<&DiscImage>) {
+        if self.disc_command == 0 {
+            return;
+        }
+        if self.disc_spinup_counter != 0 {
+            self.disc_spinup_counter -= 1;
+            return;
+        }
+        let Some(disc) = disc else {
+            return;
+        };
+        self.process_disc_sector(disc);
+        if self.disc_command == 0 {
+            self.cancel_disc_read();
+            return;
+        }
+        self.curr_lba += 1;
+    }
+
+    fn expected_msf_bcd(&self) -> [u8; 3] {
+        let real = self.curr_lba + 150;
+        let bcd = |v: u32| (((v / 10) << 4) | (v % 10)) as u8;
+        [bcd(real / (60 * 75)), bcd((real / 75) % 60), bcd(real % 75)]
+    }
+
+    fn is_valid_sector(&self, buf: &[u8]) -> bool {
+        let msf = self.expected_msf_bcd();
+        buf[SECTOR_MINUTES] == msf[0]
+            && buf[SECTOR_SECONDS] == msf[1]
+            && buf[SECTOR_FRACS] == msf[2]
+            && (buf[SECTOR_MODE] == 1 || buf[SECTOR_MODE] == 2)
+            && buf[SECTOR_FILE1] == buf[SECTOR_FILE2]
+            && buf[SECTOR_CHAN1] == buf[SECTOR_CHAN2]
+            && buf[SECTOR_SUBMODE1] == buf[SECTOR_SUBMODE2]
+            && buf[SECTOR_CODING1] == buf[SECTOR_CODING2]
+    }
+
+    fn is_mode2_sector_selected(&mut self, buf: &[u8]) -> bool {
+        if u16::from(buf[SECTOR_FILE2]) << 8 != self.file {
+            return false;
+        }
+        if buf[SECTOR_SUBMODE2] & SUBMODE_EOF != 0 {
+            self.disc_command = 0;
+        }
+        if buf[SECTOR_SUBMODE2] & (SUBMODE_EOF | SUBMODE_TRIG | SUBMODE_EOR) != 0 {
+            return true;
+        }
+        if buf[SECTOR_SUBMODE2] & (SUBMODE_DATA | SUBMODE_AUDIO | SUBMODE_VIDEO) == 0 {
+            return false;
+        }
+        self.channel & (1 << buf[SECTOR_CHAN2]) != 0
+    }
+
+    fn is_mode2_audio_selected(&self, buf: &[u8]) -> bool {
+        if buf[SECTOR_SUBMODE2] & SUBMODE_FORM == 0 || buf[SECTOR_SUBMODE2] & SUBMODE_AUDIO == 0 {
+            return false;
+        }
+        self.audio_channel & (1 << buf[SECTOR_CHAN2]) != 0
+    }
+
+    fn sector_count_for_coding(coding: u8) -> u8 {
+        let mut count: u8 = 2;
+        match coding & CODING_BPS_MASK {
+            CODING_4BPS => count *= 2,
+            CODING_8BPS | CODING_16BPS => {}
+            _ => count = 0, // MPEG unsupported
+        }
+        match coding & CODING_RATE_MASK {
+            CODING_18KHZ => count = count.saturating_mul(2),
+            CODING_37KHZ | CODING_44KHZ => {}
+            _ => count = 0,
+        }
+        match coding & CODING_CHAN_MASK {
+            CODING_MONO => count = count.saturating_mul(2),
+            CODING_STEREO => {}
+            _ => count = 0,
+        }
+        count
+    }
+
+    fn process_disc_sector(&mut self, disc: &DiscImage) {
+        let abs = self.curr_lba + self.lba_base;
+        let Some(mut buffer) = disc.read_sector_raw(abs) else {
+            log::debug!("cdic: read past disc end at abs {abs}");
+            self.cancel_disc_read();
+            return;
+        };
+
+        if !self.is_valid_sector(&buffer) {
+            let mut candidate = buffer;
+            descramble_in_place(&mut candidate);
+            if self.is_valid_sector(&candidate) {
+                buffer = candidate;
+            }
+        }
+
+        let mode2_read = self.disc_mode == DiscMode::Mode2;
+        if buffer[SECTOR_MODE] == 2 && mode2_read {
+            if !self.is_mode2_sector_selected(&buffer) {
+                return;
+            }
+            if self.is_mode2_audio_selected(&buffer) {
+                self.audio_sector_counter = Self::sector_count_for_coding(buffer[SECTOR_CODING2]);
+                self.decoding_audio_map = false;
+                self.play_audio_sector(buffer[SECTOR_CODING2], &buffer, SECTOR_DATA);
+            }
+        } else if self.disc_mode == DiscMode::Cdda {
+            self.audio_sector_counter = 2;
+            self.decoding_audio_map = false;
+            self.play_cdda_sector(&buffer);
+            if (self.curr_lba + 150) % 75 != 0 {
+                return;
+            }
+        }
+
+        // Subcode-Q synthesis.
+        let msf = self.expected_msf_bcd();
+        let mut q = [0u8; 12];
+        if self.disc_mode == DiscMode::Toc {
+            self.build_toc_into_buffer(disc, &mut buffer, &mut q, msf);
+        } else {
+            q[0] = if self.disc_mode == DiscMode::Cdda {
+                0x01
+            } else {
+                0x41
+            };
+            q[1] = 0x01;
+            q[2] = 0x01;
+            q[3..6].copy_from_slice(&msf);
+            q[6] = 0x00;
+            q[7..10].copy_from_slice(&msf);
+        }
+        let crc = crc_ccitt(&q[..10]);
+        q[10] = (crc >> 8) as u8;
+        q[11] = crc as u8;
+
+        self.deliver_sector(&buffer, &q);
+    }
+
+    fn build_toc_into_buffer(
+        &self,
+        disc: &DiscImage,
+        buffer: &mut [u8],
+        q: &mut [u8; 12],
+        msf: [u8; 3],
+    ) {
+        let bcd = |v: u32| (((v / 10) << 4) | (v % 10)) as u8;
+        let mut entries: Vec<[u8; 5]> = Vec::new();
+
+        let audio_tracks: Vec<u32> = disc
+            .tracks()
+            .iter()
+            .filter(|t| !t.mode.is_data())
+            .map(|t| t.start)
+            .collect();
+        let has_data = disc.tracks().iter().any(|t| t.mode.is_data());
+
+        for (i, &start) in audio_tracks.iter().enumerate() {
+            let entry = [
+                0x01,
+                bcd((i + 1) as u32),
+                bcd(start / (60 * 75)),
+                bcd((start / 75) % 60),
+                bcd(start % 75),
+            ];
+            for _ in 0..3 {
+                entries.push(entry);
+            }
+        }
+        for _ in 0..3 {
+            entries.push([
+                if has_data { 0x41 } else { 0x01 },
+                0xA0,
+                0x01,
+                if has_data { 0x10 } else { 0x00 },
+                0x00,
+            ]);
+        }
+        for _ in 0..3 {
+            let last_audio = audio_tracks.len().saturating_sub(1) as u32;
+            entries.push([
+                if audio_tracks.is_empty() { 0x41 } else { 0x01 },
+                0xA1,
+                bcd(last_audio),
+                0x00,
+                0x00,
+            ]);
+        }
+        let leadout = disc.leadout();
+        for _ in 0..3 {
+            entries.push([
+                if audio_tracks.is_empty() { 0x41 } else { 0x01 },
+                0xA2,
+                bcd(leadout / (60 * 75)),
+                bcd((leadout / 75) % 60),
+                bcd(leadout % 75),
+            ]);
+        }
+
+        for (i, e) in entries.iter().enumerate() {
+            let at = i * 5;
+            if at + 5 <= buffer.len() {
+                buffer[at..at + 5].copy_from_slice(e);
+            }
+        }
+
+        let pick = &entries[(self.curr_lba as usize) % entries.len()];
+        q[0] = pick[0];
+        q[1] = 0x00;
+        q[2] = pick[1];
+        q[3] = 0xA0;
+        q[4] = msf[1];
+        q[5] = msf[2];
+        q[6] = 0x00;
+        q[7] = pick[2];
+        q[8] = pick[3];
+        q[9] = pick[4];
+    }
+
+    /// Copy a processed sector + subcode into the ping-pong buffers and
+    /// raise the data-ready interrupt.
+    fn deliver_sector(&mut self, buffer: &[u8], q: &[u8; 12]) {
+        self.data_buffer ^= 0x0001;
+        self.data_buffer &= !0x0004;
+
+        let mut word_idx = usize::from(self.data_buffer & 0x0005) * 0xA00 / 2;
+        let put = |ram: &mut [u8], idx: &mut usize, word: u16| {
+            let at = (*idx * 2) & 0x3FFE;
+            ram[at] = (word >> 8) as u8;
+            ram[at + 1] = word as u8;
+            *idx += 1;
+        };
+
+        for i in (SECTOR_HEADER..SECTOR_FILE2).step_by(2) {
+            let w = (u16::from(buffer[i]) << 8) | u16::from(buffer[i + 1]);
+            put(&mut self.ram, &mut word_idx, w);
+        }
+        if self.command == 0x2A && self.is_mode2_audio_selected(buffer) {
+            self.data_buffer |= 0x0004;
+            word_idx += 0x1400;
+        }
+        for i in (SECTOR_FILE2..SECTOR_SIZE).step_by(2) {
+            let w = (u16::from(buffer[i]) << 8) | u16::from(buffer[i + 1]);
+            put(&mut self.ram, &mut word_idx, w);
+        }
+        for &b in q.iter() {
+            put(&mut self.ram, &mut word_idx, u16::from(b));
+        }
+
+        self.x_buffer |= 0x8000;
+        self.data_buffer |= 0x4000;
+        self.update_interrupt_state();
+        log::debug!(
+            "cdic: sector delivered (lba {}, buffer {:#06x}, vector {:#04x})",
+            self.curr_lba,
+            self.data_buffer,
+            self.interrupt_vector
+        );
+
+        if self.command == 0x23 || self.command == 0x24 {
+            self.cancel_disc_read();
+        }
+    }
+
+    // --- Audio ------------------------------------------------------------
+
+    fn audio_tick(&mut self) {
+        if self.audio_sector_counter > 0 {
+            self.audio_sector_counter -= 1;
+            if self.audio_sector_counter > 0 {
+                return;
+            }
+        }
+        if self.decoding_audio_map {
+            self.process_audio_map();
+        }
+    }
+
+    fn process_audio_map(&mut self) {
+        if self.decode_addr == 0xFFFF {
+            self.audio_sector_counter = 0;
+            self.audio_format_sectors = 0;
+            self.decoding_audio_map = false;
+            return;
+        }
+        let base = usize::from(self.decode_addr & 0x3FFE);
+        self.decode_addr ^= 0x1A00;
+
+        let was_decoding = self.audio_format_sectors != 0;
+        let coding = self.ram[(base + (SECTOR_CODING2 - SECTOR_HEADER)) & 0x3FFF];
+        if coding != 0xFF {
+            self.decoding_audio_map = true;
+            self.audio_format_sectors = Self::sector_count_for_coding(coding);
+            self.audio_sector_counter = self.audio_format_sectors;
+            let data_start = base + (SECTOR_DATA - SECTOR_HEADER);
+            let mut sector_data = vec![0u8; SECTOR_AUDIO_SIZE];
+            for (i, b) in sector_data.iter_mut().enumerate() {
+                *b = self.ram[(data_start + i) & 0x3FFF];
+            }
+            self.play_audio_data(coding, &sector_data);
+        } else {
+            self.decode_addr = 0xFFFF;
+            self.audio_sector_counter = 0;
+        }
+        if was_decoding && !self.decoding_audio_map {
+            self.audio_buffer |= 0x8000;
+            self.update_interrupt_state();
+        }
+        if coding == 0xFF && was_decoding {
+            self.audio_buffer |= 0x8000;
+            self.update_interrupt_state();
+        }
+    }
+
+    fn play_cdda_sector(&mut self, data: &[u8]) {
+        // Red-book audio: 16-bit little-endian stereo at 44.1 kHz.
+        for pair in data.chunks_exact(4) {
+            let l = i16::from_le_bytes([pair[0], pair[1]]);
+            let r = i16::from_le_bytes([pair[2], pair[3]]);
+            self.audio_out.push(l);
+            self.audio_out.push(r);
+        }
+    }
+
+    fn play_audio_sector(&mut self, coding: u8, buffer: &[u8], data_offset: usize) {
+        let data = &buffer[data_offset..data_offset + SECTOR_AUDIO_SIZE];
+        self.play_audio_data(coding, data);
+    }
+
+    fn play_audio_data(&mut self, coding: u8, data: &[u8]) {
+        if coding & CODING_CHAN_MASK > CODING_STEREO
+            || coding & CODING_BPS_MASK == CODING_BPS_MPEG
+            || coding & CODING_RATE_MASK == CODING_RATE_RESV
+            || coding & CODING_RATE_MASK == CODING_44KHZ
+            || coding & CODING_BPS_MASK == CODING_16BPS
+        {
+            log::debug!("cdic: unsupported audio coding {coding:#04x}");
+            return;
+        }
+        let stereo = coding & CODING_CHAN_MASK == CODING_STEREO;
+        let source_rate: u32 = if coding & CODING_RATE_MASK == CODING_18KHZ {
+            18_900
+        } else {
+            37_800
+        };
+
+        let bps8 = coding & CODING_BPS_MASK == CODING_8BPS;
+        let group_samples = if bps8 { 4 } else { 8 } / if stereo { 2 } else { 1 };
+        let samples_per_group = 28 * group_samples;
+        let group_count = SECTOR_AUDIO_SIZE / 128;
+        let total = samples_per_group * group_count;
+        let mut left = vec![0i16; total];
+        let mut right = vec![0i16; total];
+
+        for (g, group) in data.chunks_exact(128).enumerate().take(group_count) {
+            let idx = g * samples_per_group;
+            self.play_xa_group(coding, group, idx, &mut left, &mut right);
+        }
+        if !stereo {
+            right.copy_from_slice(&left);
+        }
+
+        // Attenuation matrix (L->L, L->R, R->R, R->L), dB steps.
+        let scale = |a: u8| 10f32.powf(-f32::from(a) / 20.0);
+        let (sll, slr, srr, srl) = (
+            scale(self.atten[0]),
+            scale(self.atten[1]),
+            scale(self.atten[2]),
+            scale(self.atten[3]),
+        );
+
+        // Naive resample to 44.1 kHz.
+        let mut pos: u32 = 0;
+        for i in 0..total {
+            let l = f32::from(left[i]);
+            let r = f32::from(right[i]);
+            let out_l = ((l * sll + r * srl) * 0.25) as i16;
+            let out_r = ((l * slr + r * srr) * 0.25) as i16;
+            pos += 44_100;
+            while pos >= source_rate {
+                pos -= source_rate;
+                self.audio_out.push(out_l);
+                self.audio_out.push(out_r);
+            }
+        }
+    }
+
+    fn play_xa_group(
+        &mut self,
+        coding: u8,
+        group: &[u8],
+        idx: usize,
+        left: &mut [i16],
+        right: &mut [i16],
+    ) {
+        const HDR4: [usize; 8] = [4, 5, 6, 7, 12, 13, 14, 15];
+        const HDR8: [usize; 4] = [4, 5, 6, 7];
+        const DATA4: [usize; 8] = [16, 16, 17, 17, 18, 18, 19, 19];
+        const DATA8: [usize; 4] = [16, 17, 18, 19];
+
+        let bps8 = coding & CODING_BPS_MASK == CODING_8BPS;
+        let stereo = coding & CODING_CHAN_MASK == CODING_STEREO;
+        let units = if bps8 { 4 } else { 8 };
+
+        for i in 0..units {
+            let (param, data_at, shift) = if bps8 {
+                (group[HDR8[i]], DATA8[i], 0)
+            } else {
+                (group[HDR4[i]], DATA4[i], if i & 1 != 0 { 4 } else { 0 })
+            };
+            let channel = if stereo { i & 1 } else { 0 };
+            let out_idx = if stereo {
+                idx + (i >> 1) * 28
+            } else {
+                idx + i * 28
+            };
+            let out = if stereo && channel == 1 {
+                &mut right[out_idx..out_idx + 28]
+            } else {
+                &mut left[out_idx..out_idx + 28]
+            };
+
+            let mut s0 = self.xa_last[channel * 2];
+            let mut s1 = self.xa_last[channel * 2 + 1];
+            let filter = XA_FILTER_COEF[usize::from((param >> 4) & 3)];
+            let range = (param & 0xF).min(12);
+            for (j, slot) in out.iter_mut().enumerate() {
+                let raw = group[data_at + j * 4];
+                let sample: i16 = if bps8 {
+                    i16::from_le_bytes([0, raw])
+                } else {
+                    i16::from((raw >> shift) & 0xF) << 12
+                };
+                let mut s32 = i32::from(sample) >> range;
+                s32 += (filter[0] * i32::from(s0) + filter[1] * i32::from(s1) + 128) >> 8;
+                let clipped = s32.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+                s1 = s0;
+                s0 = clipped;
+                *slot = clipped;
+            }
+            self.xa_last[channel * 2] = s0;
+            self.xa_last[channel * 2 + 1] = s1;
+        }
+    }
+}
+
+/// CRC-16/CCITT over the Q-channel data (poly 0x1021), complemented.
+fn crc_ccitt(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0;
+    for &b in data {
+        crc ^= u16::from(b) << 8;
+        for _ in 0..8 {
+            crc = if crc & 0x8000 != 0 {
+                (crc << 1) ^ 0x1021
+            } else {
+                crc << 1
+            };
+        }
+    }
+    !crc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_starts_disc_read() {
+        let mut c = Cdic::new();
+        // Seek to MSF 00:02:16 (LBA 16).
+        c.write16(0x3C02, 0x0002);
+        c.write16(0x3C04, 0x1600);
+        c.write16(0x3C00, 0x0029); // Read Mode 1
+        c.write16(0x3FFE, 0xC000); // begin processing, keep disc running
+        assert_eq!(c.disc_command, 0x29);
+        assert_eq!(c.curr_lba, 16);
+        assert_eq!(c.disc_mode, DiscMode::Mode1);
+    }
+
+    #[test]
+    fn byte_lane_word_assembly() {
+        let mut c = Cdic::new();
+        c.write8(0x3C06, 0x12);
+        assert_eq!(c.write8(0x3C07, 0x34), None);
+        assert_eq!(c.read16(0x3C06), 0x1234);
+        // Reads: even fetches+latches, odd returns latch.
+        assert_eq!(c.read8(0x3C06), 0x12);
+        assert_eq!(c.read8(0x3C07), 0x34);
+    }
+
+    #[test]
+    fn xbuf_read_clears_interrupt() {
+        let mut c = Cdic::new();
+        c.x_buffer = 0x8123;
+        c.update_interrupt_state();
+        assert!(c.int_line());
+        assert_eq!(c.read16(0x3FF6), 0x8123);
+        assert!(!c.int_line());
+        assert_eq!(c.read16(0x3FF6), 0x0123);
+    }
+
+    #[test]
+    fn cdda_pushes_samples() {
+        let mut c = Cdic::new();
+        let mut sector = [0u8; 2352];
+        sector[0] = 0x34;
+        sector[1] = 0x12;
+        sector[2] = 0x78;
+        sector[3] = 0x56;
+        c.play_cdda_sector(&sector);
+        assert_eq!(c.audio_out[0], 0x1234);
+        assert_eq!(c.audio_out[1], 0x5678);
+        assert_eq!(c.audio_out.len(), 2 * (2352 / 4));
+    }
+}

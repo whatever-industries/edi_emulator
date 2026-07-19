@@ -1,0 +1,8 @@
+# Known-good framebuffer hashes for deterministic headless boots.
+# Verify with scripts/verify-boot.sh (requires ROMs in roms/).
+
+[cdi220b]
+rom = "roms/cdi220b.rom"
+instructions = 150000000
+# Player shell fully drawn (PHILIPS / Compact Disc Interactive screen).
+sha256 = "85345c3901ab4fa9af8fc48f149786d25f584da6a7de3c7f414671f461960a5b"

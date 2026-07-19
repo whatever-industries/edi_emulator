@@ -1,0 +1,21 @@
+[package]
+name = "cdi-core"
+description = "CD-i machine core: bus, scheduler, boards, and devices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["savestate"]
+savestate = ["dep:serde", "cdi-scc68070/savestate"]
+
+[dependencies]
+log.workspace = true
+serde = { workspace = true, optional = true }
+cdi-scc68070 = { path = "../cdi-scc68070" }
+cdi-disc = { path = "../cdi-disc" }
+cdi-os9 = { path = "../cdi-os9" }
+
+[lints]
+workspace = true

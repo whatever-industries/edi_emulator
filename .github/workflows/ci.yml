@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install linux deps (eframe/cpal)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Cache Harte 68000 test vectors
+        uses: actions/cache@v4
+        with:
+          path: tests-data/harte-68000
+          key: harte-68000-v1
+      - name: Test
+        run: cargo test --workspace

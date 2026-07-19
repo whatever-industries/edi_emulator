@@ -31,6 +31,8 @@ pub struct SlaveHle {
     in_index: usize,
     in_count: usize,
     polling_active: bool,
+    /// Firmware `$63.4`: allow pending pointer events to notify the host.
+    pointer_interrupt_enable: bool,
     xbus_interrupt_enable: bool,
     lcd_state: [u8; 16],
     /// SLAVE revision bytes reported to the BIOS (e.g. "21" for v3231).
@@ -45,6 +47,13 @@ pub struct SlaveHle {
     /// The retained-RAM launch mode selected by ch2 0x8A. In this mode the
     /// drive-status packet advertises the follow-up B1 disc-base response.
     disc_boot_mode: bool,
+    /// Firmware `$59.1`, toggled by ch2 0x88. It enables the two-byte
+    /// parameter form armed by ch2 0x90.
+    transport_adjust_enabled: bool,
+    /// Number of parameter bytes still expected after an accepted ch2 0x90.
+    transport_parameter_bytes: u8,
+    /// Firmware `$D8`: repeat delay used by the transport-position controls.
+    transport_repeat_delay: u8,
 
     // Pointer device state (absolute position, updated by the frontend).
     input_x: i32,
@@ -81,6 +90,7 @@ impl SlaveHle {
             in_index: 0,
             in_count: 0,
             polling_active: false,
+            pointer_interrupt_enable: false,
             xbus_interrupt_enable: false,
             lcd_state: [0; 16],
             version,
@@ -88,6 +98,9 @@ impl SlaveHle {
             boot_status: 0,
             host_reset_requested: false,
             disc_boot_mode: false,
+            transport_adjust_enabled: false,
+            transport_parameter_bytes: 0,
+            transport_repeat_delay: 0x0A,
             input_x: 0,
             input_y: 0,
             input_buttons: 0,
@@ -134,6 +147,19 @@ impl SlaveHle {
         self.input_buttons = buttons;
     }
 
+    /// Place the emulated pointer at an absolute device coordinate and
+    /// anchor subsequent relative host motion there.
+    pub fn set_pointer_absolute(&mut self, x: i32, y: i32, buttons: u8) {
+        self.input_x = x;
+        self.input_y = y;
+        self.input_buttons = buttons;
+        self.last_x = x;
+        self.last_y = y;
+        self.last_buttons = buttons;
+        self.device_x = x.clamp(0, 767);
+        self.device_y = y.clamp(0, 559);
+    }
+
     fn prepare_readback(
         &mut self,
         delay: Option<u64>,
@@ -169,6 +195,15 @@ impl SlaveHle {
 
     fn poll_inputs(&mut self) {
         let (x, y, btn) = (self.input_x, self.input_y, self.input_buttons);
+        if self.last_x < 0 || self.last_y < 0 {
+            // A relative device's first host position is only an anchor. It
+            // must not move the CD-i pointer away from coordinates that the
+            // BIOS/title has programmed through a ch0 0xC0..=0xFF packet.
+            self.last_x = x;
+            self.last_y = y;
+            self.last_buttons = btn;
+            return;
+        }
         if x == self.last_x && y == self.last_y && btn == self.last_buttons {
             return;
         }
@@ -182,23 +217,27 @@ impl SlaveHle {
         if btn & 4 != 0 {
             button_bits |= 0x06;
         }
+        let delta_x = x - self.last_x;
+        let delta_y = y - self.last_y;
         self.last_x = x;
         self.last_y = y;
         self.last_buttons = btn;
-        // The readback packets carry absolute coordinates, and our input
-        // source is absolute too — assign directly (no delta integration,
-        // which would bake in the initial hover position as an offset).
-        self.device_x = x.clamp(0, 767);
-        self.device_y = y.clamp(0, 559);
+        self.device_x = (self.device_x + delta_x).clamp(0, 767);
+        self.device_y = (self.device_y + delta_y).clamp(0, 559);
 
         if self.polling_active {
             let byte3 = (((self.device_x as u32 & 0x380) >> 7) as u8) | (button_bits << 3);
             let byte2 = (self.device_x & 0x7F) as u8;
             let byte1 = ((self.device_y as u32 & 0x380) >> 7) as u8;
             let byte0 = (self.device_y & 0x7F) as u8;
-            self.prepare_readback(Some(0), 0, 4, [byte3, byte2, byte1, byte0], 0xF7);
-            self.irq_asserted = true;
-            self.irq_countdown = None;
+            // The firmware records the packet and sets its `$54.4` pending
+            // bit even while `$63.4` masks host notification. Keep the most
+            // recent packet queued, but only assert IN2 when ch0 command 0x83
+            // has enabled pointer-event notification.
+            self.prepare_readback(None, 0, 4, [byte3, byte2, byte1, byte0], 0xF7);
+            if self.pointer_interrupt_enable {
+                self.irq_asserted = true;
+            }
         }
     }
 
@@ -283,6 +322,13 @@ impl SlaveHle {
             // 0x87/0x88 pair is significant: bit 1 is reported by the F4
             // test-plug status query.
             match data {
+                0x83 => {
+                    self.pointer_interrupt_enable = true;
+                    if self.channels[0].cmd == 0xF7 && self.channels[0].count != 0 {
+                        self.irq_asserted = true;
+                    }
+                }
+                0x84 => self.pointer_interrupt_enable = false,
                 0x87 => self.boot_status &= !0x02,
                 0x88 => self.boot_status |= 0x02,
                 0x80..=0x8C => {}
@@ -295,6 +341,15 @@ impl SlaveHle {
     }
 
     fn write_ch2(&mut self, data: u8) {
+        if self.transport_parameter_bytes != 0 {
+            self.transport_parameter_bytes -= 1;
+            if self.transport_parameter_bytes == 0 && data != 0xFF {
+                self.transport_repeat_delay = data;
+            }
+            self.clear_input();
+            return;
+        }
+
         if self.in_index > 1 {
             if self.in_index == self.in_count {
                 match self.in_buf[0] {
@@ -329,7 +384,17 @@ impl SlaveHle {
                     log::trace!("slave: ch2 enable response notifications");
                     self.clear_input();
                 }
-                0x80..=0x89 | 0x8B..=0x8C | 0x8E..=0x93 => {
+                0x88 => {
+                    self.transport_adjust_enabled = !self.transport_adjust_enabled;
+                    self.clear_input();
+                }
+                0x90 => {
+                    if self.transport_adjust_enabled {
+                        self.transport_parameter_bytes = 2;
+                    }
+                    self.clear_input();
+                }
+                0x80..=0x87 | 0x89 | 0x8B..=0x8C | 0x8E..=0x8F | 0x91..=0x93 => {
                     // Immediate flag/control commands decoded from the
                     // firmware. Their lower-level SERVO effects are not
                     // required for host transport yet.
@@ -419,15 +484,23 @@ impl SlaveHle {
                     self.in_index = 0;
                 }
                 0xF8 => {
-                    // Experimentally: inverse of 0xF7 (disable input polling).
-                    self.polling_active = false;
+                    // Firmware sets $63.6 here; this is unrelated to pointer
+                    // polling. Alien Gate sends F8 while its pointer is live.
+                    self.in_index = 0;
+                }
+                0xFE => {
+                    // Firmware sets $58.3, but this is not the HLE pointer
+                    // delivery gate. Titles such as Alien Gate send FE when
+                    // taking over from the player shell and continue to use
+                    // the same pointer channel afterwards. F7 starts the HLE
+                    // poller; it remains active until reset, as in MAME.
                     self.in_index = 0;
                 }
                 0xFA => {
                     self.xbus_interrupt_enable = true;
                     self.in_index = 0;
                 }
-                0xF9 | 0xFB..=0xFE => {
+                0xF9 | 0xFB..=0xFD => {
                     // Undocumented queries used by the disc-play flow;
                     // acknowledge with a polled (no-IRQ) echoed response so
                     // the driver's wait loop completes (protocol under
@@ -481,6 +554,88 @@ mod tests {
     }
 
     #[test]
+    fn title_mode_commands_keep_pointer_polling_active() {
+        let mut s = SlaveHle::new("3231", true);
+        s.write(0, 0x83);
+        s.write(3, 0xF7);
+        s.set_pointer(100, 100, 0);
+        s.tick(POLL_INTERVAL);
+        assert_eq!(s.read(0), 0xFF, "the first relative sample is an anchor");
+        s.set_pointer(101, 100, 0);
+        s.tick(POLL_INTERVAL);
+        for _ in 0..3 {
+            assert_ne!(s.read(0), 0xFF);
+        }
+        assert_ne!(s.read(0), 0xFF);
+
+        s.write(3, 0xF8);
+        s.set_pointer(110, 105, 0);
+        s.tick(POLL_INTERVAL);
+        assert!(s.irq());
+        assert_ne!(s.read(0), 0xFF);
+        for _ in 0..3 {
+            s.read(0);
+        }
+
+        s.write(3, 0xFE);
+        s.set_pointer(120, 110, 0);
+        s.tick(POLL_INTERVAL);
+        assert!(s.irq());
+        assert_ne!(s.read(0), 0xFF);
+    }
+
+    #[test]
+    fn pointer_packet_sets_only_real_mouse_buttons() {
+        let mut s = SlaveHle::new("3231", true);
+        s.write(0, 0x83);
+        s.write(3, 0xF7);
+        s.set_pointer(90, 90, 0);
+        s.tick(POLL_INTERVAL);
+        s.set_pointer(100, 100, 1);
+        s.tick(POLL_INTERVAL);
+        assert_eq!(s.read(0) & 0x38, 0x18);
+    }
+
+    #[test]
+    fn pointer_notification_gate_retains_the_latest_packet() {
+        let mut s = SlaveHle::new("3231", true);
+        s.write(3, 0xF7);
+        s.set_pointer(100, 100, 0);
+        s.tick(POLL_INTERVAL);
+        s.set_pointer(110, 110, 0);
+        s.tick(POLL_INTERVAL);
+        assert!(!s.irq(), "F7 polling alone must not notify the host");
+
+        s.write(0, 0x83);
+        assert!(s.irq(), "0x83 exposes the retained pointer event");
+        for _ in 0..4 {
+            assert_ne!(s.read(0), 0xFF);
+        }
+
+        s.write(0, 0x84);
+        s.set_pointer(200, 200, 0);
+        s.tick(POLL_INTERVAL);
+        assert!(!s.irq(), "0x84 masks later pointer events");
+
+        s.write(0, 0x83);
+        assert!(s.irq(), "re-enabling exposes the latest retained event");
+    }
+
+    #[test]
+    fn relative_input_preserves_title_programmed_pointer_position() {
+        let mut s = SlaveHle::new("3231", true);
+        s.device_x = 400;
+        s.device_y = 300;
+        s.set_pointer(100, 100, 0);
+        s.tick(POLL_INTERVAL);
+        assert_eq!((s.device_x, s.device_y), (400, 300));
+
+        s.set_pointer(106, 97, 0);
+        s.tick(POLL_INTERVAL);
+        assert_eq!((s.device_x, s.device_y), (406, 297));
+    }
+
+    #[test]
     fn disc_boot_status_and_host_reset_latch_survive_host_handshake() {
         let mut s = SlaveHle::new("3231", true);
         s.write(0, 0x88);
@@ -518,5 +673,26 @@ mod tests {
             [s.read(3), s.read(3), s.read(3), s.read(3)],
             [0xB1, 0x00, 0x00, 0x00]
         );
+    }
+
+    #[test]
+    fn ch2_90_accepts_two_parameters_only_in_transport_adjust_mode() {
+        let mut s = SlaveHle::new("3231", true);
+
+        s.write(2, 0x90);
+        s.write(2, 0xFF);
+        s.write(2, 0x17);
+        assert_eq!(s.transport_repeat_delay, 0x0A);
+
+        s.write(2, 0x88);
+        s.write(2, 0x90);
+        s.write(2, 0xFF);
+        s.write(2, 0x17);
+        assert_eq!(s.transport_repeat_delay, 0x17);
+
+        s.write(2, 0x90);
+        s.write(2, 0x00);
+        s.write(2, 0xFF);
+        assert_eq!(s.transport_repeat_delay, 0x17);
     }
 }

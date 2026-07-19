@@ -16,3 +16,4 @@
 # Local test artifacts
 /tests-data/local/
 /tests-data/harte-68000/
+/tmp/

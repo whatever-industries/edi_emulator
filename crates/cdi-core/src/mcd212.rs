@@ -21,6 +21,9 @@ pub const CSR2R_IT1: u8 = 0x04;
 pub const CSR2R_IT2: u8 = 0x02;
 pub const CSR2R_BE: u8 = 0x01;
 
+const CSR1W_DI1: u16 = 1 << 15;
+const CSR2W_DI2: u16 = 1 << 15;
+
 /// DCR bits.
 pub const DCR_DE: u16 = 1 << 15; // Display Enable
 pub const DCR_CF: u16 = 1 << 14; // Crystal Frequency
@@ -309,9 +312,22 @@ impl Mcd212 {
 
     fn raise_it(&mut self, path: usize) {
         self.csrr[1] |= 1 << (2 - path);
-        if self.csrr[1] & (CSR2R_IT1 | CSR2R_IT2) != 0 {
-            self.int_asserted = true;
-        }
+        self.refresh_int_line();
+    }
+
+    fn refresh_int_line(&mut self) {
+        // DI1/DI2 suppress propagation to the shared active-low INT pin; they
+        // do not prevent the ICA/DCA engines from recording IT1/IT2 status.
+        self.int_asserted = (self.csrr[1] & CSR2R_IT1 != 0 && self.csrw[0] & CSR1W_DI1 == 0)
+            || (self.csrr[1] & CSR2R_IT2 != 0 && self.csrw[1] & CSR2W_DI2 == 0);
+    }
+
+    fn ica_enabled(&self, path: usize) -> bool {
+        self.dcr[0] & DCR_DE != 0 && self.dcr[path] & DCR_ICA != 0
+    }
+
+    fn dca_enabled(&self, path: usize) -> bool {
+        self.dcr[0] & DCR_DE != 0 && self.dcr[path] & (DCR_ICA | DCR_DCA) == (DCR_ICA | DCR_DCA)
     }
 
     /// Register write from a control program (register numbers $80-$FF).
@@ -336,25 +352,33 @@ impl Mcd212 {
                     self.plane_order = value & 7;
                 }
             }
-            0xC3 => self.clut_bank[path] = (value & 3) as u8,
+            0xC3 => {
+                // Plane A owns CLUT banks 0/1 and plane B owns 2/3. The
+                // plane-B register exposes only its low bank-select bit.
+                self.clut_bank[path] = if path == 0 {
+                    (value & 3) as u8
+                } else {
+                    2 | (value & 1) as u8
+                };
+            }
             0xC4 => {
                 if path == 0 {
-                    self.transparent_color[0] = value;
+                    self.transparent_color[0] = value & 0x00FC_FCFC;
                 }
             }
             0xC6 => {
                 if path == 1 {
-                    self.transparent_color[1] = value;
+                    self.transparent_color[1] = value & 0x00FC_FCFC;
                 }
             }
             0xC7 => {
                 if path == 0 {
-                    self.mask_color[0] = value;
+                    self.mask_color[0] = value & 0x00FC_FCFC;
                 }
             }
             0xC9 => {
                 if path == 1 {
-                    self.mask_color[1] = value;
+                    self.mask_color[1] = value & 0x00FC_FCFC;
                 }
             }
             0xCA => {
@@ -387,7 +411,11 @@ impl Mcd212 {
                 self.matte_control[usize::from(reg - 0xD0)] = value;
                 self.update_matte_arrays();
             }
-            0xD8 => self.backdrop_color = (value & 0xF) as u8,
+            0xD8 => {
+                if path == 0 {
+                    self.backdrop_color = (value & 0xF) as u8;
+                }
+            }
             0xD9 => self.mosaic_hold[0] = value,
             0xDA => self.mosaic_hold[1] = value,
             0xDB => {
@@ -867,9 +895,12 @@ impl Mcd212 {
     fn process_dca(&mut self, path: usize, plane: &[u8]) {
         let mut addr = (self.dca[path] & 0x0007_FFFF) / 2;
         let mut count = 0u32;
-        let max = 64u32;
+        // MCD212 table 5-10: the retrace-time fetch budget is 32 bytes when
+        // CF is clear and 64 when set. Storage/stride remains 64 bytes in
+        // either mode; exceeding the fetch budget performs an automatic stop.
+        let fetch_max = if self.dcr[0] & DCR_CF != 0 { 64 } else { 32 };
         loop {
-            if count >= max {
+            if count >= fetch_max {
                 break;
             }
             let cmd = (Self::plane_word(plane, addr) << 16) | Self::plane_word(plane, addr + 1);
@@ -894,7 +925,7 @@ impl Mcd212 {
                 reg => self.set_register(path, reg as u8, cmd & 0x00FF_FFFF),
             }
         }
-        addr += (max - count) / 2;
+        addr += (64 - count) / 2;
         self.dca[path] = (addr * 2) & 0x0007_FFFC;
     }
 
@@ -911,21 +942,25 @@ impl Mcd212 {
             }
 
             if self.line == 0 {
-                // Frame start: DA drops, ICA programs run, DCA pointers
-                // reload from the DCP.
+                // Frame start: DA drops and each field-control table runs.
+                // Hardware immediately executes the first linked line-control
+                // table after that field program, before the first visible
+                // line (Philips Technical Note 69, section 3.3).
                 self.csrr[0] &= !CSR1R_DA;
                 self.frame_count += 1;
-                if self.dcr[0] & DCR_ICA != 0 {
+                if self.ica_enabled(0) {
                     self.process_ica(0, planea);
+                    if self.dca_enabled(0) {
+                        self.dca[0] = self.get_dcp(0);
+                        self.process_dca(0, planea);
+                    }
                 }
-                if self.dcr[1] & DCR_ICA != 0 {
+                if self.ica_enabled(1) {
                     self.process_ica(1, planeb);
-                }
-                if self.dcr[0] & DCR_DCA != 0 {
-                    self.dca[0] = self.get_dcp(0);
-                }
-                if self.dcr[1] & DCR_DCA != 0 {
-                    self.dca[1] = self.get_dcp(1);
+                    if self.dca_enabled(1) {
+                        self.dca[1] = self.get_dcp(1);
+                        self.process_dca(1, planeb);
+                    }
                 }
                 // Cursor blink cadence (MCD212 section 7.5, as modeled by
                 // MAME): advance once per frame.
@@ -946,10 +981,13 @@ impl Mcd212 {
                 if self.dcr[0] & DCR_DE != 0 {
                     self.render_line(planea, planeb);
                 }
-                if self.dcr[0] & DCR_DCA != 0 {
+                // The first DCA slot was fetched after ICA. Fetch the next
+                // slot after each visible line except the final one so the
+                // frame still consumes exactly one slot per displayed line.
+                if self.line + 1 < total_height && self.dca_enabled(0) {
                     self.process_dca(0, planea);
                 }
-                if self.dcr[1] & DCR_DCA != 0 {
+                if self.line + 1 < total_height && self.dca_enabled(1) {
                     self.process_dca(1, planeb);
                 }
             }
@@ -967,12 +1005,10 @@ impl Mcd212 {
         let path2 = 1usize; // offsets 0x00.. are channel 2 (plane B path)
         match offset {
             0x01 => {
-                // CSR2R read: returns IT flags then clears them.
+                // CSR2R read returns status, then clears IT1, IT2, and BE.
                 let data = self.csrr[1];
-                self.csrr[1] &= !(CSR2R_IT1 | CSR2R_IT2);
-                if data & (CSR2R_IT1 | CSR2R_IT2) != 0 {
-                    self.int_asserted = false;
-                }
+                self.csrr[1] &= !(CSR2R_IT1 | CSR2R_IT2 | CSR2R_BE);
+                self.refresh_int_line();
                 data
             }
             0x02 => (self.dcr[path2] >> 8) as u8,
@@ -999,7 +1035,10 @@ impl Mcd212 {
     pub fn write8(&mut self, offset: u32, val: u8) {
         let v = u16::from(val);
         match offset {
-            0x00 => self.csrw[1] = (self.csrw[1] & 0x00FF) | (v << 8),
+            0x00 => {
+                self.csrw[1] = (self.csrw[1] & 0x00FF) | (v << 8);
+                self.refresh_int_line();
+            }
             0x01 => self.csrw[1] = (self.csrw[1] & 0xFF00) | v,
             0x02 => self.dcr[1] = (self.dcr[1] & 0x00FF) | (v << 8),
             0x03 => self.dcr[1] = (self.dcr[1] & 0xFF00) | v,
@@ -1009,7 +1048,10 @@ impl Mcd212 {
             0x09 => self.ddr[1] = (self.ddr[1] & 0xFF00) | v,
             0x0A => self.dca[1] = (self.dca[1] & 0x00FF) | (u32::from(v) << 8),
             0x0B => self.dca[1] = (self.dca[1] & 0xFF00) | u32::from(v),
-            0x10 => self.csrw[0] = (self.csrw[0] & 0x00FF) | (v << 8),
+            0x10 => {
+                self.csrw[0] = (self.csrw[0] & 0x00FF) | (v << 8);
+                self.refresh_int_line();
+            }
             0x11 => self.csrw[0] = (self.csrw[0] & 0xFF00) | v,
             0x12 => self.dcr[0] = (self.dcr[0] & 0x00FF) | (v << 8),
             0x13 => self.dcr[0] = (self.dcr[0] & 0xFF00) | v,
@@ -1054,6 +1096,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plane_b_clut_register_selects_only_banks_two_and_three() {
+        let mut m = Mcd212::new(true);
+
+        m.set_register(1, 0xC3, 0);
+        assert_eq!(m.clut_bank[1], 2);
+        m.set_register(1, 0x80, 0x0012_3456);
+        assert_eq!(m.clut[0x80], 0x0010_3454);
+
+        m.set_register(1, 0xC3, 3);
+        assert_eq!(m.clut_bank[1], 3);
+        m.set_register(1, 0x80, 0x00AB_CDEF);
+        assert_eq!(m.clut[0xC0], 0x00A8_CCEC);
+    }
+
+    #[test]
+    fn dca_fetch_budget_depends_on_clock_factor_but_stride_is_64_bytes() {
+        let mut plane = vec![0u8; 0x80000];
+        for instruction in 0..8 {
+            plane[instruction * 4] = 0x10; // NOP: first 32 bytes
+        }
+        plane[32..36].copy_from_slice(&[0xD8, 0, 0, 5]); // backdrop = 5
+
+        let mut normal = Mcd212::new(true);
+        normal.process_dca(0, &plane);
+        assert_eq!(
+            normal.backdrop_color, 0,
+            "byte 32 is beyond the CF=0 budget"
+        );
+        assert_eq!(normal.dca[0], 64, "DCA storage always has a 64-byte stride");
+
+        let mut double_clock = Mcd212::new(true);
+        double_clock.dcr[0] |= DCR_CF;
+        double_clock.process_dca(0, &plane);
+        assert_eq!(double_clock.backdrop_color, 5);
+        assert_eq!(double_clock.dca[0], 64);
+    }
+
+    #[test]
+    fn dca_requires_display_ic_and_dc_control_bits() {
+        let mut m = Mcd212::new(true);
+        let mut plane = vec![0u8; 0x80000];
+        plane[..4].copy_from_slice(&[0xD8, 0, 0, 5]); // backdrop = 5
+
+        m.dcr[0] = DCR_ICA | DCR_DCA;
+        m.tick(cycles_per_line(true) * 32, &plane, &plane);
+        assert_eq!(m.backdrop_color, 0);
+
+        m.dcr[0] |= DCR_DE;
+        m.tick(cycles_per_line(true), &plane, &plane);
+        assert_eq!(m.backdrop_color, 5);
+    }
+
+    #[test]
+    fn first_dca_slot_runs_after_ica_and_slot_count_matches_visible_lines() {
+        let mut m = Mcd212::new(true);
+        let mut plane = vec![0u8; 0x80000];
+        plane[..8].copy_from_slice(&[0xD8, 0, 0, 5, 0, 0, 0, 0]);
+        m.dcr[0] = DCR_DE | DCR_ICA | DCR_DCA;
+
+        // Reaching the next frame start executes ICA and its first linked DCA
+        // slot before any active line is rendered.
+        m.tick(cycles_per_line(true) * 312, &plane, &plane);
+        assert_eq!(m.backdrop_color, 5);
+        assert_eq!(m.dca[0], 64);
+
+        // PAL has 280 visible lines. The prefetch plus 279 post-line fetches
+        // consume exactly 280 64-byte slots, not an extra slot at frame end.
+        m.tick(cycles_per_line(true) * 311, &plane, &plane);
+        assert_eq!(m.dca[0], 280 * 64);
+    }
+
+    #[test]
     fn da_bit_toggles_over_frame() {
         let mut m = Mcd212::new(true);
         let plane = vec![0u8; 0x80000];
@@ -1090,7 +1204,7 @@ mod tests {
         // cover both: INTERRUPT, INTERRUPT, STOP, STOP.
         plane[0x400..0x410]
             .copy_from_slice(&[0x60, 0, 0, 0, 0x60, 0, 0, 0, 0x00, 0, 0, 0, 0x00, 0, 0, 0]);
-        m.dcr[0] |= DCR_ICA;
+        m.dcr[0] |= DCR_DE | DCR_ICA;
         // Advance a full frame so line 0 processing happens.
         m.tick(cycles_per_line(true) * 313, &plane, &plane);
         assert!(m.int_line(), "ICA INTERRUPT must assert INT");
@@ -1103,6 +1217,41 @@ mod tests {
     }
 
     #[test]
+    fn disable_interrupt_bits_gate_the_pin_but_not_status() {
+        let mut m = Mcd212::new(true);
+
+        m.write8(0x10, 0x80); // DI1
+        m.raise_it(0);
+        assert_ne!(m.csrr[1] & CSR2R_IT1, 0);
+        assert!(!m.int_line(), "DI1 must suppress IT1 propagation");
+
+        // INT is a combinational function of pending status and the disable
+        // bits, so clearing DI1 exposes the still-pending IT1 condition.
+        m.write8(0x10, 0x00);
+        assert!(m.int_line());
+        m.write8(0x10, 0x80);
+        assert!(!m.int_line());
+
+        m.raise_it(1);
+        assert_ne!(m.csrr[1] & CSR2R_IT2, 0);
+        assert!(m.int_line(), "DI1 must not suppress channel 2");
+        m.write8(0x00, 0x80); // DI2
+        assert!(!m.int_line());
+
+        let status = m.read8(0x01);
+        assert_eq!(status & (CSR2R_IT1 | CSR2R_IT2), CSR2R_IT1 | CSR2R_IT2);
+        assert_eq!(m.csrr[1] & (CSR2R_IT1 | CSR2R_IT2), 0);
+    }
+
+    #[test]
+    fn csr2_read_clears_bus_error_status() {
+        let mut m = Mcd212::new(true);
+        m.csrr[1] |= CSR2R_BE;
+        assert_ne!(m.read8(0x01) & CSR2R_BE, 0);
+        assert_eq!(m.csrr[1] & CSR2R_BE, 0);
+    }
+
+    #[test]
     fn ica_reload_display_parameters() {
         let mut m = Mcd212::new(true);
         let mut plane = vec![0u8; 0x80000];
@@ -1111,7 +1260,7 @@ mod tests {
         plane[0x400..0x410].copy_from_slice(&[
             0x78, 0, 0, 0x1F, 0x78, 0, 0, 0x1F, 0x00, 0, 0, 0, 0x00, 0, 0, 0,
         ]);
-        m.dcr[0] |= DCR_ICA;
+        m.dcr[0] |= DCR_DE | DCR_ICA;
         m.tick(cycles_per_line(true) * 313, &plane, &plane);
         assert_eq!(m.ddr[0] & 0x0F00, 0x0F00);
         assert_ne!(m.dcr[0] & DCR_CM, 0);

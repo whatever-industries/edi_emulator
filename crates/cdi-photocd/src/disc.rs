@@ -515,3 +515,58 @@ fn cue_dir(cue: &Path) -> PathBuf {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a synthetic INFO.PCD: header, one session descriptor, and two
+    /// image descriptors (spec Section III.2.3 layout).
+    fn synthetic_info_pcd() -> Vec<u8> {
+        let mut data = vec![0u8; 38 + 68 + 2 * 6];
+        data[0..8].copy_from_slice(b"PHOTO_CD");
+        data[8] = 1; // spec version major
+        data[9] = 0; // spec version minor
+        data[10..22].copy_from_slice(b"TESTSERIAL12");
+        data[22..26].copy_from_slice(&0x1234_5678u32.to_be_bytes());
+        data[30..32].copy_from_slice(&2u16.to_be_bytes());
+        data[33] = (3 << 4) | 1; // res highest 3, lowest 1
+        data[37] = 1; // one session
+        let sd = 38;
+        data[sd + 8..sd + 16].copy_from_slice(b"KODAK\0\0\0");
+        data[sd + 16..sd + 24].copy_from_slice(b"WRITERPR");
+        let id = 38 + 68;
+        data[id..id + 4].copy_from_slice(&1055u32.to_be_bytes());
+        data[id + 4] = (2 << 2) | 1; // 16Base, 90 CCW
+        data[id + 6..id + 10].copy_from_slice(&2121u32.to_be_bytes());
+        data[id + 10] = 0; // Base, no rotation
+        data
+    }
+
+    #[test]
+    fn parse_info_pcd_reads_synthetic_fields() {
+        let info = parse_info_pcd(&synthetic_info_pcd());
+        assert_eq!(info.disc_id, "PHOTO_CD");
+        assert_eq!(info.spec_version, "1.00");
+        assert_eq!(info.serial, "TESTSERIAL12");
+        assert_eq!(info.creation_unix_ts, 0x1234_5678);
+        assert_eq!(info.n_images, 2);
+        assert_eq!(info.n_sessions, 1);
+        assert_eq!(info.res_highest, 3);
+        assert_eq!(info.res_lowest, 1);
+        assert_eq!(info.writer_vendor, "KODAK");
+        assert_eq!(info.image_descriptors.len(), 2);
+        assert_eq!(info.image_descriptors[0].lba, 1055);
+        assert_eq!(info.image_descriptors[0].resolution, 2);
+        assert_eq!(info.image_descriptors[0].rotation, 1);
+        assert_eq!(info.image_descriptors[1].lba, 2121);
+        assert_eq!(info.image_descriptors[1].rotation, 0);
+    }
+
+    #[test]
+    fn parse_info_pcd_tolerates_truncated_data() {
+        let info = parse_info_pcd(&[0u8; 10]);
+        assert_eq!(info.n_images, 0);
+        assert!(info.image_descriptors.is_empty());
+    }
+}

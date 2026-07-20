@@ -24,7 +24,7 @@
 
 ## Photo CD player
 
-- [ ] Incorporate the Photo CD player functionality under
+- [x] Incorporate the Photo CD player functionality under
   `/Volumes/Projects/Coding/Photo CD player`.
   - [x] Detect Photo CD disc images, including the root-level `CDI` directory
     found on images under `/Volumes/Projects/Coding/Disc Images/Photo CD`.
@@ -38,9 +38,11 @@
     CD-i application drives photo display natively per the CD Bridge spec.)
   - [x] Integrate image navigation, playback/view modes, status, and
     eject/reset behavior without disrupting normal CD-i input or rendering.
-  - [ ] Add synthetic parser/UI tests and local, media-gated integration tests
-    (currently: rotation unit tests plus the `cdi-photocd` probe example for
-    manual disc verification).
+  - [x] Add synthetic parser/UI tests and local, media-gated integration tests
+    (synthetic INFO.PCD parser and rotation unit tests; media-gated tests in
+    `cdi-photocd/tests/local_media.rs` cover a bridge disc with a CD-i
+    application and the Aktuelles Berlin no-CDI exception, skipping when the
+    local library is absent).
 
 ## Video CD CD-i menu and controls
 

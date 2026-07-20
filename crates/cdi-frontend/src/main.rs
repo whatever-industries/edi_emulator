@@ -189,6 +189,11 @@ enum PcdEvent {
     Opened {
         names: Vec<String>,
         max_tier: usize,
+        /// The disc carries a CD-i application (root `CDI` directory, per the
+        /// CD Bridge layout in the Photo CD System Description III.2.2). When
+        /// true the emulated player drives photo display natively and the
+        /// host-side viewer stays out of the way.
+        has_cdi_app: bool,
     },
     NotPhotoCd,
     Decoded {
@@ -226,8 +231,22 @@ fn photocd_worker(rx: mpsc::Receiver<PcdCmd>, tx: mpsc::Sender<PcdEvent>, ctx: e
                     Ok(mut opened) if !opened.images.is_empty() => {
                         let names = opened.images.iter().map(|i| i.name.clone()).collect();
                         let max_tier = cdi_photocd::decode::image_max_tier(&mut opened, 0);
+                        let has_cdi_app = cdi_photocd::iso9660::find_entry(
+                            &mut *opened.reader,
+                            opened.pvd.root_lba,
+                            opened.pvd.root_size,
+                            "CDI",
+                        )
+                        .ok()
+                        .flatten()
+                        .map(|entry| entry.is_dir)
+                        .unwrap_or(false);
                         disc = Some(opened);
-                        let _ = tx.send(PcdEvent::Opened { names, max_tier });
+                        let _ = tx.send(PcdEvent::Opened {
+                            names,
+                            max_tier,
+                            has_cdi_app,
+                        });
                     }
                     _ => {
                         let _ = tx.send(PcdEvent::NotPhotoCd);
@@ -1374,20 +1393,40 @@ impl eframe::App for App {
         let mut request_first_decode = false;
         while let Ok(event) = self.pcd_rx.try_recv() {
             match event {
-                PcdEvent::Opened { names, max_tier } => {
-                    self.photocd = Some(PhotoCdUi {
-                        names,
-                        current: 0,
-                        tier: 0,
-                        max_tier,
-                        view_photo: false,
-                        slideshow: false,
-                        last_advance: Instant::now(),
-                        decoding: false,
-                        decoded: None,
-                        texture: None,
-                        error: None,
-                    });
+                PcdEvent::Opened {
+                    names,
+                    max_tier,
+                    has_cdi_app,
+                } => {
+                    if has_cdi_app {
+                        // CD Bridge disc with a CD-i application: the emulated
+                        // player displays the photos natively; no host viewer.
+                        log::info!(
+                            "photo cd with CD-i application ({} images) — CD-i drives display",
+                            names.len()
+                        );
+                        self.photocd = None;
+                        let _ = self.pcd_tx.send(PcdCmd::Close);
+                    } else {
+                        // No CD-i application on the disc: the emulated player
+                        // cannot show these photos, so the host viewer takes
+                        // over immediately (same exception the Photo CD Player
+                        // app handles).
+                        self.photocd = Some(PhotoCdUi {
+                            names,
+                            current: 0,
+                            tier: 0,
+                            max_tier,
+                            view_photo: true,
+                            slideshow: false,
+                            last_advance: Instant::now(),
+                            decoding: false,
+                            decoded: None,
+                            texture: None,
+                            error: None,
+                        });
+                        request_first_decode = true;
+                    }
                 }
                 PcdEvent::NotPhotoCd => self.photocd = None,
                 PcdEvent::Decoded { index, image } => {
@@ -1566,7 +1605,10 @@ impl eframe::App for App {
         if let Some(p) = &mut self.photocd {
             egui::TopBottomPanel::bottom("photocd_panel").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(format!("Photo CD — {} images", p.names.len()));
+                    ui.label(format!(
+                        "Photo CD (no CD-i application) — {} images",
+                        p.names.len()
+                    ));
                     let view_label = if p.view_photo {
                         "Back to CD-i"
                     } else {

@@ -26,15 +26,21 @@
 
 - [ ] Incorporate the Photo CD player functionality under
   `/Volumes/Projects/Coding/Photo CD player`.
-  - [ ] Detect Photo CD disc images, including the root-level `CDI` directory
+  - [x] Detect Photo CD disc images, including the root-level `CDI` directory
     found on images under `/Volumes/Projects/Coding/Disc Images/Photo CD`.
-  - [ ] Distinguish Photo CD from ordinary CD-i and VCD media using disc
+    (Decoder absorbed as `cdi-photocd`; detection is content-based on a
+    frontend worker thread.)
+  - [x] Distinguish Photo CD from ordinary CD-i and VCD media using disc
     contents rather than filenames alone.
-  - [ ] When a Photo CD is inserted, populate Photo CD interface controls in a
-    panel beneath the E-Di display.
-  - [ ] Integrate image navigation, playback/view modes, status, and eject/reset
-    behavior without disrupting normal CD-i input or rendering.
-  - [ ] Add synthetic parser/UI tests and local, media-gated integration tests.
+  - [x] When a Photo CD is inserted, populate Photo CD interface controls in a
+    panel beneath the E-Di display. (Panel appears only for discs without a
+    CD-i application — when the root `CDI` directory exists, the emulated
+    CD-i application drives photo display natively per the CD Bridge spec.)
+  - [x] Integrate image navigation, playback/view modes, status, and
+    eject/reset behavior without disrupting normal CD-i input or rendering.
+  - [ ] Add synthetic parser/UI tests and local, media-gated integration tests
+    (currently: rotation unit tests plus the `cdi-photocd` probe example for
+    manual disc verification).
 
 ## Video CD CD-i menu and controls
 

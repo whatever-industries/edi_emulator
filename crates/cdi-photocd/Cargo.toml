@@ -1,0 +1,13 @@
+[package]
+name = "cdi-photocd"
+description = "Kodak Photo CD image pack decoder (absorbed from the Photo CD Player project)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

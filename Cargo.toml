@@ -7,6 +7,7 @@ members = [
     "crates/cdi-os9",
     "crates/cdi-frontend",
     "crates/cdi-cli",
+    "crates/cdi-photocd",
 ]
 
 [workspace.package]
@@ -17,6 +18,7 @@ rust-version = "1.80"
 
 [workspace.dependencies]
 log = "0.4"
+thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 bincode = "1.3"
 clap = { version = "4", features = ["derive"] }

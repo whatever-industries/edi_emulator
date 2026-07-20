@@ -22,6 +22,7 @@ rtrb.workspace = true
 cdi-core = { path = "../cdi-core" }
 cdi-disc = { path = "../cdi-disc" }
 cdi-os9 = { path = "../cdi-os9" }
+cdi-photocd = { path = "../cdi-photocd" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda.workspace = true

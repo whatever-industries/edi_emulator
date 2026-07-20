@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cdi_core::mcd212::{presentation_rgb, FB_HEIGHT, FB_WIDTH};
@@ -174,6 +174,101 @@ fn button_name(button: gilrs::Button) -> &'static str {
         B::DPadLeft => "D-pad left",
         B::DPadRight => "D-pad right",
         B::Unknown => "Unknown",
+    }
+}
+
+/// Commands for the Photo CD worker thread.
+enum PcdCmd {
+    Open(PathBuf),
+    Decode { index: usize, tier: usize },
+    Close,
+}
+
+/// Events from the Photo CD worker thread.
+enum PcdEvent {
+    Opened {
+        names: Vec<String>,
+        max_tier: usize,
+    },
+    NotPhotoCd,
+    Decoded {
+        index: usize,
+        image: cdi_photocd::decode::DecodedImage,
+    },
+    DecodeError(String),
+}
+
+/// UI-side state for a detected Photo CD.
+struct PhotoCdUi {
+    names: Vec<String>,
+    current: usize,
+    tier: usize,
+    max_tier: usize,
+    view_photo: bool,
+    slideshow: bool,
+    last_advance: Instant,
+    decoding: bool,
+    decoded: Option<cdi_photocd::decode::DecodedImage>,
+    texture: Option<egui::TextureHandle>,
+    error: Option<String>,
+}
+
+/// Photo CD worker: owns the opened disc (its own file handles, independent
+/// of the emulation core) and performs detection and image-pack decoding off
+/// the UI thread.
+fn photocd_worker(rx: mpsc::Receiver<PcdCmd>, tx: mpsc::Sender<PcdEvent>, ctx: egui::Context) {
+    let mut disc: Option<cdi_photocd::disc::OpenedDisc> = None;
+    while let Ok(cmd) = rx.recv() {
+        match cmd {
+            PcdCmd::Open(path) => {
+                disc = None;
+                match cdi_photocd::disc::open_disc(&path) {
+                    Ok(mut opened) if !opened.images.is_empty() => {
+                        let names = opened.images.iter().map(|i| i.name.clone()).collect();
+                        let max_tier = cdi_photocd::decode::image_max_tier(&mut opened, 0);
+                        disc = Some(opened);
+                        let _ = tx.send(PcdEvent::Opened { names, max_tier });
+                    }
+                    _ => {
+                        let _ = tx.send(PcdEvent::NotPhotoCd);
+                    }
+                }
+            }
+            PcdCmd::Decode { index, tier } => {
+                if let Some(opened) = disc.as_mut() {
+                    match cdi_photocd::decode::decode_image(opened, index, tier) {
+                        Ok(image) => {
+                            let _ = tx.send(PcdEvent::Decoded { index, image });
+                        }
+                        Err(error) => {
+                            let _ = tx.send(PcdEvent::DecodeError(error));
+                        }
+                    }
+                }
+            }
+            PcdCmd::Close => disc = None,
+        }
+        ctx.request_repaint();
+    }
+}
+
+/// Write a decoded photo as PNG via a save dialog.
+fn save_photo_png(suggested_name: &str, image: &cdi_photocd::decode::DecodedImage) {
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("Save photo as PNG")
+        .set_file_name(suggested_name)
+        .save_file()
+    else {
+        return;
+    };
+    let Ok(file) = std::fs::File::create(&path) else {
+        return;
+    };
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), image.width, image.height);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    if let Ok(mut writer) = encoder.write_header() {
+        let _ = writer.write_image_data(&image.rgb);
     }
 }
 
@@ -364,6 +459,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dvc_inserted = dvc.is_some();
     let mut machine = cdi_core::Machine::with_dvc(&model, image, dvc)?;
     let mut disc_status = "No disc inserted".to_owned();
+    let initial_disc = disc.clone();
     if let Some(cue) = disc {
         let disc = cdi_disc::DiscImage::load(&cue)?;
         log::info!(
@@ -437,7 +533,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = eframe::run_native(
         &title,
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(app_shared, cc)))),
+        Box::new(move |cc| Ok(Box::new(App::new(app_shared, cc, initial_disc)))),
     );
 
     shared.running.store(false, Ordering::Relaxed);
@@ -746,12 +842,29 @@ struct App {
     capture_frac: egui::Vec2,
     capture_origin: Option<egui::Pos2>,
     capture_motion_grace: u8,
+    pcd_tx: mpsc::Sender<PcdCmd>,
+    pcd_rx: mpsc::Receiver<PcdEvent>,
+    photocd: Option<PhotoCdUi>,
     #[cfg(target_os = "macos")]
     native_menu: NativeMenu,
 }
 
 impl App {
-    fn new(shared: Arc<Shared>, cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(
+        shared: Arc<Shared>,
+        cc: &eframe::CreationContext<'_>,
+        initial_disc: Option<PathBuf>,
+    ) -> Self {
+        let (pcd_tx, cmd_rx) = mpsc::channel();
+        let (event_tx, pcd_rx) = mpsc::channel();
+        let worker_ctx = cc.egui_ctx.clone();
+        std::thread::Builder::new()
+            .name("photocd".into())
+            .spawn(move || photocd_worker(cmd_rx, event_tx, worker_ctx))
+            .expect("spawn photocd worker");
+        if let Some(path) = initial_disc {
+            let _ = pcd_tx.send(PcdCmd::Open(path));
+        }
         let prefs: Prefs = cc
             .storage
             .and_then(|storage| storage.get_string(PREFS_KEY))
@@ -797,6 +910,9 @@ impl App {
             capture_frac: egui::Vec2::ZERO,
             capture_origin: None,
             capture_motion_grace: 0,
+            pcd_tx,
+            pcd_rx,
+            photocd: None,
             #[cfg(target_os = "macos")]
             native_menu: NativeMenu::new().expect("initialize native macOS menu"),
         }
@@ -810,19 +926,38 @@ impl App {
         }
     }
 
-    fn open_disc(&self) {
+    fn open_disc(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .set_title("Open a CD-i disc image")
             .add_filter("CUE sheets", &["cue"])
             .pick_file()
         {
             *self.shared.status.lock().unwrap() = format!("Loading {}…", display_name(&path));
+            self.photocd = None;
+            let _ = self.pcd_tx.send(PcdCmd::Open(path.clone()));
             *self.shared.command.lock().unwrap() = Some(MachineCommand::LoadDisc(path));
         }
     }
 
-    fn eject_disc(&self) {
+    fn eject_disc(&mut self) {
+        self.photocd = None;
+        let _ = self.pcd_tx.send(PcdCmd::Close);
         *self.shared.command.lock().unwrap() = Some(MachineCommand::EjectDisc);
+    }
+
+    /// Ask the worker to decode the current photo at the current tier.
+    fn request_photo_decode(&mut self) {
+        if let Some(p) = &mut self.photocd {
+            if p.names.is_empty() {
+                return;
+            }
+            p.decoding = true;
+            p.error = None;
+            let _ = self.pcd_tx.send(PcdCmd::Decode {
+                index: p.current,
+                tier: p.tier,
+            });
+        }
     }
 
     fn reset_machine(&self) {
@@ -1235,6 +1370,65 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Photo CD worker events.
+        let mut request_first_decode = false;
+        while let Ok(event) = self.pcd_rx.try_recv() {
+            match event {
+                PcdEvent::Opened { names, max_tier } => {
+                    self.photocd = Some(PhotoCdUi {
+                        names,
+                        current: 0,
+                        tier: 0,
+                        max_tier,
+                        view_photo: false,
+                        slideshow: false,
+                        last_advance: Instant::now(),
+                        decoding: false,
+                        decoded: None,
+                        texture: None,
+                        error: None,
+                    });
+                }
+                PcdEvent::NotPhotoCd => self.photocd = None,
+                PcdEvent::Decoded { index, image } => {
+                    if let Some(p) = &mut self.photocd {
+                        p.decoding = false;
+                        p.current = index.min(p.names.len().saturating_sub(1));
+                        let size = [image.width as usize, image.height as usize];
+                        let color = egui::ColorImage::from_rgb(size, &image.rgb);
+                        p.texture = Some(ctx.load_texture(
+                            "photocd_image",
+                            color,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                        p.decoded = Some(image);
+                    }
+                }
+                PcdEvent::DecodeError(error) => {
+                    if let Some(p) = &mut self.photocd {
+                        p.decoding = false;
+                        p.error = Some(error);
+                    }
+                }
+            }
+        }
+        // Slideshow auto-advance.
+        if let Some(p) = &mut self.photocd {
+            if p.slideshow
+                && p.view_photo
+                && !p.decoding
+                && p.names.len() > 1
+                && p.last_advance.elapsed() >= Duration::from_secs(5)
+            {
+                p.current = (p.current + 1) % p.names.len();
+                p.last_advance = Instant::now();
+                request_first_decode = true;
+            }
+        }
+        if request_first_decode {
+            self.request_photo_decode();
+        }
+
         let escape_pressed =
             ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         let release_capture =
@@ -1365,9 +1559,124 @@ impl eframe::App for App {
             });
         });
 
+        // Photo CD control panel (stacks above the status bar).
+        let mut photo_decode = false;
+        let mut photo_save: Option<(String, cdi_photocd::decode::DecodedImage)> = None;
+        let mut photo_entered_view = false;
+        if let Some(p) = &mut self.photocd {
+            egui::TopBottomPanel::bottom("photocd_panel").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(format!("Photo CD — {} images", p.names.len()));
+                    let view_label = if p.view_photo {
+                        "Back to CD-i"
+                    } else {
+                        "View Photos"
+                    };
+                    if ui.button(view_label).clicked() {
+                        p.view_photo = !p.view_photo;
+                        if p.view_photo {
+                            photo_entered_view = true;
+                            if p.decoded.is_none() && !p.decoding {
+                                photo_decode = true;
+                            }
+                        } else {
+                            p.slideshow = false;
+                        }
+                    }
+                    if p.view_photo && !p.names.is_empty() {
+                        ui.separator();
+                        if ui.button("◀").clicked() {
+                            p.current = (p.current + p.names.len() - 1) % p.names.len();
+                            photo_decode = true;
+                        }
+                        if ui.button("▶").clicked() {
+                            p.current = (p.current + 1) % p.names.len();
+                            photo_decode = true;
+                        }
+                        ui.label(format!("{} / {}", p.current + 1, p.names.len()));
+                        ui.weak(&p.names[p.current]);
+                        ui.separator();
+                        let prev_tier = p.tier;
+                        egui::ComboBox::from_id_salt("pcd_tier")
+                            .selected_text(cdi_photocd::decode::TIER_LABELS[p.tier])
+                            .show_ui(ui, |ui| {
+                                for tier in 0..=p.max_tier.min(2) {
+                                    ui.selectable_value(
+                                        &mut p.tier,
+                                        tier,
+                                        cdi_photocd::decode::TIER_LABELS[tier],
+                                    );
+                                }
+                            });
+                        if p.tier != prev_tier {
+                            photo_decode = true;
+                        }
+                        if p.names.len() > 1 {
+                            let label = if p.slideshow {
+                                "■ Stop"
+                            } else {
+                                "▶ Slideshow"
+                            };
+                            if ui.button(label).clicked() {
+                                p.slideshow = !p.slideshow;
+                                p.last_advance = Instant::now();
+                            }
+                        }
+                        if p.decoded.is_some() && ui.button("Save PNG…").clicked() {
+                            let stem = p.names[p.current]
+                                .rsplit_once('.')
+                                .map(|(s, _)| s.to_owned())
+                                .unwrap_or_else(|| p.names[p.current].clone());
+                            let name =
+                                format!("{stem}_{}.png", cdi_photocd::decode::TIER_LABELS[p.tier]);
+                            photo_save = Some((name, p.decoded.clone().unwrap()));
+                        }
+                        if p.decoding {
+                            ui.spinner();
+                            ui.weak("Decoding…");
+                        } else if let Some(error) = &p.error {
+                            ui.colored_label(egui::Color32::RED, error);
+                        }
+                    }
+                });
+            });
+        }
+        if photo_entered_view && self.mouse_captured {
+            self.set_mouse_capture(ctx, false);
+        }
+        if photo_decode {
+            self.request_photo_decode();
+        }
+        if let Some((name, image)) = photo_save {
+            save_photo_png(&name, &image);
+        }
+
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
             .show(ctx, |ui| {
+                // Photo view replaces the emulated picture while active; the
+                // emulation itself keeps running untouched.
+                if let Some(p) = &self.photocd {
+                    if p.view_photo {
+                        if let Some(texture) = &p.texture {
+                            let avail = ui.available_size();
+                            let tex_size = texture.size_vec2();
+                            let scale = (avail.x / tex_size.x).min(avail.y / tex_size.y).max(0.05);
+                            let size = tex_size * scale;
+                            let rect = egui::Rect::from_center_size(ui.max_rect().center(), size);
+                            ui.painter().image(
+                                texture.id(),
+                                rect,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                        return;
+                    }
+                }
                 let Some(texture) = &self.texture else {
                     return;
                 };

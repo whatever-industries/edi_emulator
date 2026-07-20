@@ -893,8 +893,7 @@ impl App {
             } else {
                 cdi_core::VideoStandard::Ntsc
             };
-            *self.shared.command.lock().unwrap() =
-                Some(MachineCommand::SetVideoStandard(standard));
+            *self.shared.command.lock().unwrap() = Some(MachineCommand::SetVideoStandard(standard));
         }
         ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
         ui.checkbox(&mut self.show_fps, "Show frame rate");
@@ -914,12 +913,8 @@ impl App {
                 } else {
                     ui.label(format!("Connected: {}", names.join(", ")));
                 }
-                ui.add(
-                    egui::Slider::new(&mut self.pad_speed, 1.0..=20.0).text("Pointer speed"),
-                );
-                ui.add(
-                    egui::Slider::new(&mut self.pad_deadzone, 0.0..=0.5).text("Stick deadzone"),
-                );
+                ui.add(egui::Slider::new(&mut self.pad_speed, 1.0..=20.0).text("Pointer speed"));
+                ui.add(egui::Slider::new(&mut self.pad_deadzone, 0.0..=0.5).text("Stick deadzone"));
                 ui.horizontal(|ui| {
                     ui.label("CD-i button 1:");
                     let text = if self.pad_rebind == Some(0) {
@@ -1293,10 +1288,8 @@ impl eframe::App for App {
                     };
                     let x_scale = tex_size.x * 768.0 / (size.x * active_w);
                     let y_scale = 560.0 / size.y;
-                    let scaled = egui::vec2(
-                        motion_points.x * x_scale,
-                        motion_points.y * y_scale,
-                    ) + self.capture_frac;
+                    let scaled = egui::vec2(motion_points.x * x_scale, motion_points.y * y_scale)
+                        + self.capture_frac;
                     let step = egui::vec2(scaled.x.trunc(), scaled.y.trunc());
                     self.capture_frac = scaled - step;
                     if motion != egui::Vec2::ZERO {

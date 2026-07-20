@@ -109,6 +109,13 @@ struct Prefs {
     pad_deadzone: f32,
     pad_button1: gilrs::Button,
     pad_button2: gilrs::Button,
+    kb_speed: f32,
+    kb_up: egui::Key,
+    kb_down: egui::Key,
+    kb_left: egui::Key,
+    kb_right: egui::Key,
+    kb_button1: egui::Key,
+    kb_button2: egui::Key,
 }
 
 impl Default for Prefs {
@@ -121,9 +128,26 @@ impl Default for Prefs {
             pad_deadzone: 0.15,
             pad_button1: gilrs::Button::South,
             pad_button2: gilrs::Button::East,
+            kb_speed: 6.0,
+            kb_up: egui::Key::ArrowUp,
+            kb_down: egui::Key::ArrowDown,
+            kb_left: egui::Key::ArrowLeft,
+            kb_right: egui::Key::ArrowRight,
+            kb_button1: egui::Key::Z,
+            kb_button2: egui::Key::X,
         }
     }
 }
+
+/// The keyboard binding slots, in UI order.
+const KB_SLOTS: [&str; 6] = [
+    "Pointer up",
+    "Pointer down",
+    "Pointer left",
+    "Pointer right",
+    "CD-i button 1",
+    "CD-i button 2",
+];
 
 const PREFS_KEY: &str = "prefs";
 
@@ -711,6 +735,13 @@ struct App {
     pad_button2: gilrs::Button,
     /// CD-i button (0 or 1) awaiting a controller press to rebind.
     pad_rebind: Option<u8>,
+    kb_speed: f32,
+    kb_keys: [egui::Key; 6],
+    kb_buttons: u8,
+    /// Sub-pixel remainder of keyboard pointer motion.
+    kb_frac: egui::Vec2,
+    /// Binding slot (index into KB_SLOTS) awaiting a key press to rebind.
+    kb_rebind: Option<usize>,
     /// Sub-pixel remainder of captured-mouse motion carried across frames.
     capture_frac: egui::Vec2,
     capture_origin: Option<egui::Pos2>,
@@ -751,6 +782,18 @@ impl App {
             pad_button1: prefs.pad_button1,
             pad_button2: prefs.pad_button2,
             pad_rebind: None,
+            kb_speed: prefs.kb_speed,
+            kb_keys: [
+                prefs.kb_up,
+                prefs.kb_down,
+                prefs.kb_left,
+                prefs.kb_right,
+                prefs.kb_button1,
+                prefs.kb_button2,
+            ],
+            kb_buttons: 0,
+            kb_frac: egui::Vec2::ZERO,
+            kb_rebind: None,
             capture_frac: egui::Vec2::ZERO,
             capture_origin: None,
             capture_motion_grace: 0,
@@ -898,69 +941,182 @@ impl App {
         ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
         ui.checkbox(&mut self.show_fps, "Show frame rate");
         ui.separator();
-        ui.heading("Input");
-        ui.checkbox(&mut self.capture_mouse_enabled, "Capture mouse on click");
-        ui.separator();
-        ui.heading("Controller");
-        match &self.gamepad {
-            Some(gilrs) => {
-                let names: Vec<String> = gilrs
-                    .gamepads()
-                    .map(|(_, pad)| pad.name().to_owned())
-                    .collect();
-                if names.is_empty() {
-                    ui.label("No controller connected");
-                } else {
-                    ui.label(format!("Connected: {}", names.join(", ")));
+        ui.heading("CD-i Peripherals");
+        ui.label("The emulated player exposes a relative pointing device; every input source below drives it.");
+
+        // A pending keyboard rebind captures the next key pressed while the
+        // settings window has focus.
+        if let Some(slot) = self.kb_rebind {
+            let captured = ui.ctx().input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Key {
+                        key, pressed: true, ..
+                    } => Some(*key),
+                    _ => None,
+                })
+            });
+            if let Some(key) = captured {
+                if key != egui::Key::Escape {
+                    self.kb_keys[slot] = key;
                 }
-                ui.add(egui::Slider::new(&mut self.pad_speed, 1.0..=20.0).text("Pointer speed"));
-                ui.add(egui::Slider::new(&mut self.pad_deadzone, 0.0..=0.5).text("Stick deadzone"));
-                ui.horizontal(|ui| {
-                    ui.label("CD-i button 1:");
-                    let text = if self.pad_rebind == Some(0) {
-                        "Press a controller button…"
-                    } else {
-                        button_name(self.pad_button1)
-                    };
-                    if ui.button(text).clicked() {
-                        self.pad_rebind = if self.pad_rebind == Some(0) {
-                            None
-                        } else {
-                            Some(0)
-                        };
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("CD-i button 2:");
-                    let text = if self.pad_rebind == Some(1) {
-                        "Press a controller button…"
-                    } else {
-                        button_name(self.pad_button2)
-                    };
-                    if ui.button(text).clicked() {
-                        self.pad_rebind = if self.pad_rebind == Some(1) {
-                            None
-                        } else {
-                            Some(1)
-                        };
-                    }
-                });
-                if ui.button("Reset controller defaults").clicked() {
-                    let defaults = Prefs::default();
-                    self.pad_speed = defaults.pad_speed;
-                    self.pad_deadzone = defaults.pad_deadzone;
-                    self.pad_button1 = defaults.pad_button1;
-                    self.pad_button2 = defaults.pad_button2;
-                    self.pad_rebind = None;
-                }
-                ui.label(
-                    "Left stick and d-pad move the pointer. Layouts are auto-detected via the open-source SDL_GameControllerDB mappings bundled with gilrs.",
-                );
-            }
-            None => {
-                ui.label("Controller support unavailable on this system");
+                self.kb_rebind = None;
             }
         }
+
+        egui::CollapsingHeader::new("Pointing device — Mouse")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.checkbox(&mut self.capture_mouse_enabled, "Capture mouse on click");
+                ui.label("Captured: relative motion like a real CD-i mouse. Uncaptured: the pointer follows the cursor over the picture.");
+            });
+
+        egui::CollapsingHeader::new("Pointing device — Keyboard")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add(egui::Slider::new(&mut self.kb_speed, 1.0..=20.0).text("Pointer speed"));
+                for (slot, name) in KB_SLOTS.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{name}:"));
+                        let text = if self.kb_rebind == Some(slot) {
+                            "Press a key… (Esc cancels)".to_owned()
+                        } else {
+                            self.kb_keys[slot].name().to_owned()
+                        };
+                        if ui.button(text).clicked() {
+                            self.kb_rebind = if self.kb_rebind == Some(slot) {
+                                None
+                            } else {
+                                Some(slot)
+                            };
+                        }
+                    });
+                }
+                if ui.button("Reset keyboard defaults").clicked() {
+                    let defaults = Prefs::default();
+                    self.kb_speed = defaults.kb_speed;
+                    self.kb_keys = [
+                        defaults.kb_up,
+                        defaults.kb_down,
+                        defaults.kb_left,
+                        defaults.kb_right,
+                        defaults.kb_button1,
+                        defaults.kb_button2,
+                    ];
+                    self.kb_rebind = None;
+                }
+            });
+
+        egui::CollapsingHeader::new("Pointing device — Controller")
+            .default_open(true)
+            .show(ui, |ui| match &self.gamepad {
+                Some(gilrs) => {
+                    let names: Vec<String> = gilrs
+                        .gamepads()
+                        .map(|(_, pad)| pad.name().to_owned())
+                        .collect();
+                    if names.is_empty() {
+                        ui.label("No controller connected");
+                    } else {
+                        ui.label(format!("Connected: {}", names.join(", ")));
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut self.pad_speed, 1.0..=20.0).text("Pointer speed"),
+                    );
+                    ui.add(
+                        egui::Slider::new(&mut self.pad_deadzone, 0.0..=0.5)
+                            .text("Stick deadzone"),
+                    );
+                    ui.horizontal(|ui| {
+                        ui.label("CD-i button 1:");
+                        let text = if self.pad_rebind == Some(0) {
+                            "Press a controller button…"
+                        } else {
+                            button_name(self.pad_button1)
+                        };
+                        if ui.button(text).clicked() {
+                            self.pad_rebind = if self.pad_rebind == Some(0) {
+                                None
+                            } else {
+                                Some(0)
+                            };
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("CD-i button 2:");
+                        let text = if self.pad_rebind == Some(1) {
+                            "Press a controller button…"
+                        } else {
+                            button_name(self.pad_button2)
+                        };
+                        if ui.button(text).clicked() {
+                            self.pad_rebind = if self.pad_rebind == Some(1) {
+                                None
+                            } else {
+                                Some(1)
+                            };
+                        }
+                    });
+                    if ui.button("Reset controller defaults").clicked() {
+                        let defaults = Prefs::default();
+                        self.pad_speed = defaults.pad_speed;
+                        self.pad_deadzone = defaults.pad_deadzone;
+                        self.pad_button1 = defaults.pad_button1;
+                        self.pad_button2 = defaults.pad_button2;
+                        self.pad_rebind = None;
+                    }
+                    ui.label(
+                        "Left stick and d-pad move the pointer. Layouts are auto-detected via the open-source SDL_GameControllerDB mappings bundled with gilrs.",
+                    );
+                }
+                None => {
+                    ui.label("Controller support unavailable on this system");
+                }
+            });
+
+        egui::CollapsingHeader::new("CD-i Keyboard (not yet emulated)")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(
+                    "Some CD-i players (notably authoring/industrial models) support a keyboard peripheral. Emulating it needs core-side support for the keyboard port; planned in TODO.md.",
+                );
+            });
+    }
+
+    /// Poll the bindable keyboard controls and translate them onto the CD-i
+    /// pointer, mirroring the gamepad path (relative deltas, SLAVE-clamped).
+    fn poll_keyboard(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let (delta, buttons) = ctx.input(|input| {
+            let held = |key: egui::Key| input.key_down(key);
+            let delta = egui::vec2(
+                f32::from(held(self.kb_keys[3])) - f32::from(held(self.kb_keys[2])),
+                f32::from(held(self.kb_keys[1])) - f32::from(held(self.kb_keys[0])),
+            );
+            let mut buttons = 0u8;
+            if held(self.kb_keys[4]) {
+                buttons |= 1;
+            }
+            if held(self.kb_keys[5]) {
+                buttons |= 2;
+            }
+            (delta, buttons)
+        });
+        let scaled = delta * self.kb_speed + self.kb_frac;
+        let step = egui::vec2(scaled.x.trunc(), scaled.y.trunc());
+        self.kb_frac = scaled - step;
+        // Don't feed a key being captured for a settings rebind into the game.
+        let buttons = if self.kb_rebind.is_some() { 0 } else { buttons };
+        let buttons_changed = buttons != self.kb_buttons;
+        self.kb_buttons = buttons;
+        if step == egui::Vec2::ZERO && !buttons_changed {
+            return;
+        }
+        let mut input = self.shared.input.lock().unwrap();
+        input.dx += step.x as i32;
+        input.dy += step.y as i32;
+        input.buttons = self.game_buttons | self.pad_buttons | self.kb_buttons;
     }
 
     /// Poll connected gamepads and translate them onto the CD-i pointer:
@@ -1039,7 +1195,7 @@ impl App {
         let mut input = self.shared.input.lock().unwrap();
         input.dx += step.x as i32;
         input.dy += step.y as i32;
-        input.buttons = self.game_buttons | self.pad_buttons;
+        input.buttons = self.game_buttons | self.pad_buttons | self.kb_buttons;
     }
 
     #[cfg(target_os = "macos")]
@@ -1065,6 +1221,13 @@ impl eframe::App for App {
             pad_deadzone: self.pad_deadzone,
             pad_button1: self.pad_button1,
             pad_button2: self.pad_button2,
+            kb_speed: self.kb_speed,
+            kb_up: self.kb_keys[0],
+            kb_down: self.kb_keys[1],
+            kb_left: self.kb_keys[2],
+            kb_right: self.kb_keys[3],
+            kb_button1: self.kb_keys[4],
+            kb_button2: self.kb_keys[5],
         };
         if let Ok(json) = serde_json::to_string(&prefs) {
             storage.set_string(PREFS_KEY, json);
@@ -1304,7 +1467,7 @@ impl eframe::App for App {
                     let mut input = self.shared.input.lock().unwrap();
                     input.dx += step.x as i32;
                     input.dy += step.y as i32;
-                    input.buttons = self.game_buttons | self.pad_buttons;
+                    input.buttons = self.game_buttons | self.pad_buttons | self.kb_buttons;
                 } else if !self.capture_mouse_enabled
                     && ctx.input(|input| input.pointer.delta() != egui::Vec2::ZERO)
                 {
@@ -1320,28 +1483,12 @@ impl eframe::App for App {
                         let mut input = self.shared.input.lock().unwrap();
                         input.x = x;
                         input.y = y;
-                        input.buttons = self.game_buttons | self.pad_buttons;
+                        input.buttons = self.game_buttons | self.pad_buttons | self.kb_buttons;
                     }
                 }
             });
 
-        if self.mouse_captured {
-            const KEYBOARD_STEP: f32 = 6.0;
-            let keyboard_delta = ctx.input(|input| {
-                egui::vec2(
-                    f32::from(input.key_down(egui::Key::ArrowRight))
-                        - f32::from(input.key_down(egui::Key::ArrowLeft)),
-                    f32::from(input.key_down(egui::Key::ArrowDown))
-                        - f32::from(input.key_down(egui::Key::ArrowUp)),
-                ) * KEYBOARD_STEP
-            });
-            if keyboard_delta != egui::Vec2::ZERO {
-                let mut input = self.shared.input.lock().unwrap();
-                input.dx += keyboard_delta.x as i32;
-                input.dy += keyboard_delta.y as i32;
-            }
-        }
-
+        self.poll_keyboard(ctx);
         self.poll_gamepad();
 
         ctx.request_repaint_after(Duration::from_millis(10));

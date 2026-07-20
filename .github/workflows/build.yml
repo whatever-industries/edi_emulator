@@ -1,0 +1,215 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+  VERSION: "0.1.0"
+
+jobs:
+  build-macos:
+    name: macOS App (ARM64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (aarch64-apple-darwin)
+        run: |
+          rustup update stable
+          rustup target add aarch64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-arm64-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release -p cdi-frontend --target aarch64-apple-darwin
+
+      - name: Create .app bundle
+        run: |
+          APP="dist/E-Di.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp target/aarch64-apple-darwin/release/cdi-frontend "$APP/Contents/MacOS/E-Di"
+          chmod +x "$APP/Contents/MacOS/E-Di"
+          cp assets/E-Di.icns "$APP/Contents/Resources/E-Di.icns"
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>E-Di</string>
+            <key>CFBundleDisplayName</key><string>E-Di</string>
+            <key>CFBundleIdentifier</key><string>industries.whatever.edi</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleExecutable</key><string>E-Di</string>
+            <key>CFBundleIconFile</key><string>E-Di</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Ad-hoc sign
+        run: codesign --force --deep --sign - "dist/E-Di.app"
+
+      - name: Zip .app
+        run: |
+          cd dist
+          zip -r "E-Di_macOS_v${{ env.VERSION }}.zip" "E-Di.app"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: E-Di-macOS
+          path: "dist/E-Di_macOS_v${{ env.VERSION }}.zip"
+          retention-days: 1
+
+  build-windows:
+    name: Windows EXE
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup update stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release -p cdi-frontend
+
+      - name: Rename EXE
+        shell: pwsh
+        run: |
+          Copy-Item "target/release/cdi-frontend.exe" "E-Di_Windows_v${{ env.VERSION }}.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: E-Di-Windows
+          path: "E-Di_Windows_v${{ env.VERSION }}.exe"
+          retention-days: 1
+
+  build-linux:
+    name: Linux AppImage
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libasound2-dev libgtk-3-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxkbcommon-dev libudev-dev libfuse2 pkg-config
+
+      - name: Install Rust
+        run: rustup update stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release
+        run: cargo build --release -p cdi-frontend
+
+      - name: Build AppImage
+        run: |
+          set -e
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool
+          chmod +x appimagetool
+
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/256x256/apps
+          cp target/release/cdi-frontend AppDir/usr/bin/e-di
+          cp assets/icon_256.png AppDir/usr/share/icons/hicolor/256x256/apps/e-di.png
+          cp assets/icon_256.png AppDir/e-di.png
+
+          cat > AppDir/usr/share/applications/e-di.desktop <<'EOF'
+          [Desktop Entry]
+          Name=E-Di
+          Comment=Emulator Disc Interactive — CD-i emulator
+          Exec=e-di
+          Icon=e-di
+          Type=Application
+          Categories=Game;Emulator;
+          StartupWMClass=e-di
+          EOF
+          cp AppDir/usr/share/applications/e-di.desktop AppDir/e-di.desktop
+
+          cat > AppDir/AppRun <<'EOF'
+          #!/bin/bash
+          SELF=$(readlink -f "$0")
+          HERE=$(dirname "$SELF")
+          exec "$HERE/usr/bin/e-di" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "E-Di_Linux_v${{ env.VERSION }}.AppImage"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: E-Di-Linux
+          path: "E-Di_Linux_v${{ env.VERSION }}.AppImage"
+          retention-days: 1
+
+  release:
+    name: Publish Release
+    needs: [build-windows, build-macos, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: E-Di v${{ env.VERSION }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          body: |
+            ## E-Di v${{ env.VERSION }}
+
+            E-Di: Emulator Disc Interactive — a Philips CD-i player emulator.
+            System and VMPEG DVC firmware are bundled; open a `.cue` disc image
+            and play. Mouse, keyboard, and gamepad input supported.
+
+            ### Downloads
+            | Platform | File |
+            |----------|------|
+            | macOS (ARM64) | `E-Di_macOS_v${{ env.VERSION }}.zip` |
+            | Windows | `E-Di_Windows_v${{ env.VERSION }}.exe` |
+            | Linux | `E-Di_Linux_v${{ env.VERSION }}.AppImage` |
+          files: |
+            artifacts/E-Di-macOS/E-Di_macOS_v${{ env.VERSION }}.zip
+            artifacts/E-Di-Windows/E-Di_Windows_v${{ env.VERSION }}.exe
+            artifacts/E-Di-Linux/E-Di_Linux_v${{ env.VERSION }}.AppImage

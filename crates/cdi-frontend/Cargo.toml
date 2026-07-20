@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 log.workspace = true
 env_logger.workspace = true
+png.workspace = true
 eframe = { workspace = true, features = ["persistence"] }
 egui.workspace = true
 serde.workspace = true

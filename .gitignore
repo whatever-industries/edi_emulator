@@ -17,3 +17,6 @@
 /tests-data/local/
 /tests-data/harte-68000/
 /tmp/
+
+# Assembled app bundles
+/dist/

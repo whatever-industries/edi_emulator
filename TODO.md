@@ -31,6 +31,12 @@
 
 ## Video CD CD-i menu and controls
 
+- [ ] Fix MPEG video presentation defects seen with the VCDs under
+  `/Volumes/Projects/Coding/Disc Images/VCD`: during playback of video
+  content there is a pillarbox on the right-hand side of the screen that
+  flashes to black, and intermittent macroblocking. The CD-i menus display
+  fine, so this looks specific to the DVC full-motion video path (decode or
+  MCD212 composition), not general rendering.
 - [ ] Incorporate the CD-i menu functionality present on Video CDs under
   `/Volumes/Projects/Coding/Disc Images/VCD`.
   - [ ] Detect VCD media and its root-level `CDI` directory, which contains the

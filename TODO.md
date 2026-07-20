@@ -1,5 +1,12 @@
 # E-Di: Emulator Disc Interactive TODO
 
+## Input peripherals
+
+- [ ] Emulate the CD-i keyboard peripheral (used by authoring/industrial
+  players): core-side support for the keyboard port and protocol, then host
+  keyboard passthrough behind a Settings toggle. The Settings peripherals UI
+  already reserves a section for it.
+
 ## Compatibility testing
 
 - [ ] Test a broad selection of CD-i discs.

@@ -846,6 +846,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cdi-photocd"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cdi-scc68070"
 version = "0.1.0"
 dependencies = [

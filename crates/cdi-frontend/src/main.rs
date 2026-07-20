@@ -20,6 +20,34 @@ const AUDIO_RING_SAMPLES: usize = AUDIO_RATE as usize * 2;
 const APP_NAME: &str = "E-Di: Emulator Disc Interactive";
 const BUNDLED_CDI220B: &[u8] = include_bytes!("../../../firmware/cdi220b.rom");
 const BUNDLED_VMPEGA: &[u8] = include_bytes!("../../../firmware/vmpega.rom");
+const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/icon_256.png");
+
+/// Decode the embedded application icon for the window/taskbar. The macOS
+/// Dock icon instead comes from the app bundle's `.icns` (see
+/// `scripts/make-app-bundle.sh`).
+fn load_app_icon() -> Option<egui::IconData> {
+    let decoder = png::Decoder::new(APP_ICON_PNG);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    buf.truncate(info.buffer_size());
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => buf
+            .chunks_exact(3)
+            .flat_map(|px| [px[0], px[1], px[2], 0xFF])
+            .collect(),
+        _ => return None,
+    };
+    Some(egui::IconData {
+        rgba,
+        width: info.width,
+        height: info.height,
+    })
+}
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum VideoStandardArg {
@@ -359,8 +387,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .name("emu".into())
         .spawn(move || emu_loop(machine, emu_shared, audio_producer))?;
 
+    let mut viewport = egui::ViewportBuilder::default();
+    if let Some(icon) = load_app_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: viewport
             // Stable id for the eframe preferences store regardless of the
             // ROM-dependent window title.
             .with_app_id("cdi-frontend")
@@ -1161,18 +1193,17 @@ impl eframe::App for App {
 
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if self.show_fps {
-                    ui.label(format!("{:.1} fps", *self.shared.fps.lock().unwrap()));
-                }
                 ui.label(self.shared.status.lock().unwrap().as_str());
-                ui.label(self.shared.dvc_status.lock().unwrap().as_str());
                 if self.mouse_captured {
-                    ui.label("Mouse captured — arrows move — Esc releases");
+                    ui.weak("Esc releases the mouse");
                 } else if self.capture_mouse_enabled {
-                    ui.label("Mouse: click screen to capture — arrows move when captured");
-                } else {
-                    ui.label("Mouse: direct mapping — capture disabled in Settings");
+                    ui.weak("Click the screen to capture the mouse");
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.show_fps {
+                        ui.weak(format!("{:.0} fps", *self.shared.fps.lock().unwrap()));
+                    }
+                });
             });
         });
 

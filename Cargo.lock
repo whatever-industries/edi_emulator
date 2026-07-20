@@ -831,6 +831,7 @@ dependencies = [
  "gilrs",
  "log",
  "muda",
+ "png 0.17.16",
  "rfd",
  "rtrb",
  "serde",

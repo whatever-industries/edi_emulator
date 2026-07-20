@@ -9,6 +9,7 @@
 
 pub mod base;
 pub mod cue;
+pub mod decode;
 pub mod disc;
 pub mod hires;
 pub mod huffman;

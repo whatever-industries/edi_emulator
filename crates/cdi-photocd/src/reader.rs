@@ -25,7 +25,7 @@ pub enum ReaderError {
     NoSpans,
 }
 
-pub trait SectorReader {
+pub trait SectorReader: Send {
     /// Read one 2048-byte user-data sector at the given absolute LBA.
     fn read_sector(&mut self, lba: u32) -> Result<[u8; ISO_SECTOR_SIZE], ReaderError>;
 

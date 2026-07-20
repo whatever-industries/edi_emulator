@@ -823,6 +823,7 @@ dependencies = [
  "cdi-core",
  "cdi-disc",
  "cdi-os9",
+ "cdi-photocd",
  "clap",
  "cpal",
  "eframe",

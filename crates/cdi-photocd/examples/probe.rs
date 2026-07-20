@@ -16,6 +16,17 @@ fn main() {
     for (i, img) in disc.images.iter().enumerate().take(8) {
         println!("  [{i}] {} lba={} size={}", img.name, img.lba, img.size);
     }
+    let has_cdi = cdi_photocd::iso9660::find_entry(
+        &mut *disc.reader,
+        disc.pvd.root_lba,
+        disc.pvd.root_size,
+        "CDI",
+    )
+    .ok()
+    .flatten()
+    .map(|entry| entry.is_dir)
+    .unwrap_or(false);
+    println!("cd-i application directory present: {has_cdi}");
     let max_tier = cdi_photocd::decode::image_max_tier(&mut disc, 0);
     println!("image 0 max tier: {max_tier}");
     let image = cdi_photocd::decode::decode_image(&mut disc, 0, tier).expect("decode");

@@ -1,11 +1,20 @@
 # Bundled CD-i firmware
 
-| File | Size | SHA-256 | Use |
-|---|---:|---|---|
-| `cdi200.rom` | 524,288 | `24e388c72df21237a89d8d775d41a90208af24c4112c61429b8e47f190ac18c6` | Supported Mono-I CD-i 200 system firmware |
-| `cdi220.rom` | 524,288 | `5987947cb6b9330459ffba59bee44bd843134fe91baccb39d11cf9bf99fb4613` | Supported Mono-I CD-i 220 system firmware |
-| `cdi220b.rom` | 524,288 | `fd123e66beadaf844cb220a44166ea33f9fd0d64bafb9e6399febff445429db2` | Default supported CD-i 220 F2 system firmware |
-| `vmpega.rom` | 262,144 | `4aed8f33a557cec13f4267acfd9f969eafd9cccf6270f16f389a16e89eb5c6f6` | Supported 22ER9141 VMPEG Digital Video Cartridge firmware |
+Firmware images used by E-Di, plus board-level dumps retained for future
+device support. [`players.yaml`](players.yaml) is the database: player
+makes/models/regions, firmware files, sizes, SHA-256 hashes, roles, and
+provenance.
 
-Unsupported Mono-IV/IMPEG firmware and already-HLE SLAVE/SERVO MCU dumps are
-not bundled. Game discs and their assets are not part of this directory.
+Supported today (Mono-I system + VMPEG cartridge):
+
+- `cdi220b.rom` — CD-i 220 F2, the default player profile
+- `cdi220.rom`, `cdi200.rom` — alternate supported Mono-I firmware
+- `vmpega.rom` — 22ER9141 VMPEG Digital Video Cartridge (default DVC)
+
+Retained for future work: `cdi490a.rom` + `impega.rom` (Mono-IV with
+integrated IMPEG digital video, deferred to M4), `cdi910.rom` and its
+board-level chip dumps (`mcu/`, `pal/`, TC574200), and unidentified items
+under `aux/` pending research.
+
+Unsupported Mono-IV/IMPEG behavior and the HLE'd SLAVE/SERVO MCUs do not load
+these dumps yet. Game discs and their assets are not part of this directory.

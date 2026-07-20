@@ -1,0 +1,379 @@
+# CD-i player and firmware database
+#
+# Purpose: map player makes/models/regions to firmware images so E-Di can
+# offer model selection and title-compatibility hints.
+#
+# Region note: most CD-i titles are region-free, but some titles require a
+# player of the matching region (e.g. NTSC-timed titles on an NTSC player).
+# The emulator's PAL/NTSC switch covers timing; model/region selection here
+# covers firmware behavior differences.
+#
+# Provenance levels:
+#   verified   — file is tracked in firmware/ and its SHA-256 was computed
+#                locally from the imported dump.
+#   reported   — from an external research dataset (AI-assembled); not
+#                verified against a local dump. Treat as lead, not fact.
+#   uncertain  — the dataset itself marks the dump/claim as unconfirmed.
+
+files:
+  cdi200.rom:
+    sha256: 24e388c72df21237a89d8d775d41a90208af24c4112c61429b8e47f190ac18c6
+    size: 524288
+    role: Mono-I CD-i 200 system firmware
+    supported: true
+    provenance: verified
+  cdi220.rom:
+    sha256: 5987947cb6b9330459ffba59bee44bd843134fe91baccb39d11cf9bf99fb4613
+    size: 524288
+    role: Mono-I CD-i 220 system firmware
+    supported: true
+    provenance: verified
+  cdi220b.rom:
+    sha256: fd123e66beadaf844cb220a44166ea33f9fd0d64bafb9e6399febff445429db2
+    size: 524288
+    role: Mono-I CD-i 220 F2 system firmware (default)
+    supported: true
+    provenance: verified
+  cdi490a.rom:
+    sha256: b27fb5388baa870cf2e7317439b14d4aa3a01f85534fa3701262392da448746a
+    size: 524288
+    role: Mono-IV CD-i 490 system firmware (unsupported board; research input)
+    supported: false
+    provenance: verified
+  cdi910.rom:
+    sha256: 7ef42f06eefc244123fa103a53f06a9aab356aaca14718db87adad739dce637e
+    size: 524288
+    role: CD-i 910 (early NTSC Mono-I) system firmware
+    supported: false
+    provenance: verified
+  vmpega.rom:
+    sha256: 4aed8f33a557cec13f4267acfd9f969eafd9cccf6270f16f389a16e89eb5c6f6
+    size: 262144
+    role: 22ER9141 VMPEG Digital Video Cartridge firmware (default DVC)
+    supported: true
+    provenance: verified
+    note: The same image also ships in MAME's cdi490a container.
+  impega.rom:
+    sha256: e3131518b608fe444e03828db91ed05f0c5065a482b2635ce982e27e0ff93ff8
+    size: 262144
+    role: IMPEG Digital Video firmware, dumped alongside cdi490a.rom
+    supported: false
+    provenance: verified
+    note: >
+      Imported from the cdi490a container, where it pairs with the Mono-IV
+      system ROM (the 490 line integrated digital video rather than using a
+      plug-in cartridge). Whether this exact image appears in other IMPEG
+      player models is unconfirmed. IMPEG emulation is deferred (M4).
+  philips__cd-i_2.1__mb834200b-15__26b_aa__9224_z01.tc574200.7211:
+    sha256: 140d3d70918a230a6bec7acc4b892c21633e013fcce9bb916051dcf7a2fe5d51
+    size: 524288
+    role: CD-i 910 board-level TC574200 system ROM chip dump
+    supported: false
+    provenance: verified
+  mcu/zx405037p__cdi_servo_2.1__b43t__llek9215.mc68hc705c8a_withtestrom.7201:
+    sha256: b467fb3e9bb9e38d195c55116aecd6bc4c8023cdfe4b4d50fd9699139f221b9b
+    size: 8192
+    role: Mono-I SERVO MCU dump (68HC705C8A, with test ROM) — SERVO is HLE'd
+    supported: false
+    provenance: verified
+  mcu/zx405042p__cdi_slave_2.0__b43t__zzmk9213.mc68hc705c8a_withtestrom.7206:
+    sha256: 15794460f2ad630f6dd483a02ef958818c7a5c65f8afe76364bc9ffb7ccad3cc
+    size: 8192
+    role: Mono-I SLAVE MCU dump (68HC705C8A, with test ROM) — SLAVE is HLE'd
+    supported: false
+    provenance: verified
+  pal/ti_portugal_206xf__tibpal20l8-15cnt__m7205n.7205.bin:
+    sha256: b2c0cb62adb63d61dd9da42934f66decf8d6866d23b6bd889a4bfc2c5ee62c1f
+    size: 324
+    role: CD-i 910 board PAL dump (TIBPAL20L8)
+    supported: false
+    provenance: verified
+  pal/ti_portugal_774_206xf__tibpal16l8-10cn_m7204n.7204.bin:
+    sha256: 458db15da1f8188d9d7a7576398f38461eb4d9eb8e2a61057a0da3ae5cc1b032
+    size: 260
+    role: CD-i 910 board PAL dump (TIBPAL16L8)
+    supported: false
+    provenance: verified
+  aux/cdiscon1/cdiscon1.cas:
+    sha256: 19d391d959fa5e0e96e19fde68d487e18a425a603d41d42092db0505a7daa132
+    size: 32768
+    role: Unidentified (imported with the BIOS set; purpose not yet determined)
+    supported: false
+    provenance: verified
+  aux/cdiscon1/csweetht.cas:
+    sha256: 23f19acec39fa94d473e732302ded7e03219464a06fec422ee316080c4a40caa
+    size: 32768
+    role: Unidentified (imported with the BIOS set; purpose not yet determined)
+    supported: false
+    provenance: verified
+  aux/cdiscon1/dp-1190_b.dgl:
+    sha256: a077c1a018c220b151e99d0c7dfd24dd912ee4ec0648f9ab26143834fb5b1f64
+    size: 2048
+    role: Unidentified (imported with the BIOS set; purpose not yet determined)
+    supported: false
+    provenance: verified
+
+players:
+  - manufacturer: Philips
+    model: CD-i 910 / 205
+    form_factor: console-front-loader
+    segment: consumer-early
+    hardware_base: mono-1
+    clone_of: null
+    mame_container: cdimono1 / cdi910
+    rom: cdi205.rom (910 profile uses cdi910.rom)
+    regions: [US/NTSC]
+    os9: "2.4"
+    provenance: reported
+    notes: First US consumer model (1991); cdi910.rom enforces NTSC timing and
+      regional flags on boot.
+  - manufacturer: Philips
+    model: CD-i 210 / 220
+    form_factor: console-front-loader
+    segment: consumer-mid
+    hardware_base: mono-1
+    clone_of: null
+    mame_container: cdimono1
+    rom: cdi220.rom
+    regions: [EU/PAL, US/NTSC]
+    os9: "2.4"
+    provenance: reported
+    notes: Standard consumer firmware; replaced block interface with
+      cursor/shell.
+  - manufacturer: Philips
+    model: CD-i 220 (B revision)
+    form_factor: console-front-loader
+    segment: consumer-mid
+    hardware_base: mono-1
+    clone_of: null
+    mame_container: cdimono1
+    rom: cdi220b.rom
+    regions: [EU/PAL, US/NTSC]
+    os9: "2.4"
+    provenance: reported
+    notes: Revision-B board firmware; noticeably faster cold boot. E-Di's
+      default player profile.
+  - manufacturer: Philips
+    model: CD-i 450 / 470
+    form_factor: console-top-loader
+    segment: consumer-budget
+    hardware_base: mono-2
+    clone_of: null
+    mame_container: cdimono2
+    rom: cdi450.rom
+    regions: [EU/PAL, US/NTSC]
+    os9: "2.5"
+    provenance: reported
+    notes: Cost-reduced architecture optimized for gamepad play. ROM not yet
+      in firmware/.
+  - manufacturer: Philips
+    model: CD-i 550
+    form_factor: console-top-loader
+    segment: consumer-bundle
+    hardware_base: mono-2
+    clone_of: CD-i 450
+    mame_container: cdimono2
+    rom: cdi550.rom
+    regions: [EU/PAL, US/NTSC]
+    os9: "2.5"
+    provenance: reported
+    notes: Auto-boots titles with the built-in Digital Video Cartridge. ROM
+      not yet in firmware/.
+  - manufacturer: Philips
+    model: CD-i 490a
+    form_factor: profile-target
+    segment: consumer-slimline
+    hardware_base: mono-4
+    clone_of: null
+    mame_container: cdi490a
+    rom: cdi490a.rom (+ impega.rom digital video)
+    regions: [EU/PAL, US/NTSC]
+    os9: "2.5"
+    provenance: verified
+    notes: Late slimline revision with integrated IMPEG digital video; the two
+      images pair together in the dump set.
+  - manufacturer: Philips
+    model: CD-i 350 / 360 / 370
+    form_factor: portable-clamshell
+    segment: professional
+    hardware_base: mono-1 (portable branch)
+    clone_of: null
+    mame_container: cdibios / misc
+    rom: cdi350.rom / cdi360.rom
+    regions: [EU/PAL, US/NTSC]
+    os9: "2.4"
+    provenance: reported
+    notes: Portable branch with power-saving sleep code. ROM not yet in
+      firmware/.
+  - manufacturer: Philips
+    model: 601 / 602 / 604 / 605
+    form_factor: console-front-loader
+    segment: industrial-dev
+    hardware_base: mono-1
+    clone_of: null
+    mame_container: cdibios / misc
+    rom: cdi605.rom
+    regions: [EU/PAL, US/NTSC]
+    os9: "2.4 (industrial)"
+    provenance: reported
+    notes: Professional authoring firmware; boots into an interactive OS-9
+      shell. ROM not yet in firmware/.
+  - manufacturer: Philips
+    model: CD-i 615 / 660 / 670
+    form_factor: console-front-loader
+    segment: industrial-dev
+    hardware_base: mono-1/mono-2 era industrial
+    clone_of: null
+    mame_container: cdibios / misc
+    rom: cdi615.rom
+    regions: [EU/PAL, US/NTSC]
+    os9: "2.5 (industrial)"
+    provenance: reported
+    notes: Late industrial master; integrated SCSI disk mounting. ROM not yet
+      in firmware/.
+  - manufacturer: Magnavox
+    model: CD-i 200
+    form_factor: console-front-loader
+    segment: consumer-early
+    hardware_base: mono-1
+    clone_of: Philips CD-i 910 / 205
+    mame_container: cdimono1
+    rom: cdi205.rom
+    regions: [US/NTSC]
+    os9: "2.4"
+    provenance: reported
+    notes: 1:1 rebadge of the Philips 205 binary; region toggled by mainboard
+      jumper.
+  - manufacturer: Magnavox
+    model: CD-i 450 / CD-i 550
+    form_factor: console-top-loader
+    segment: consumer
+    hardware_base: mono-2
+    clone_of: Philips CD-i 450 / 550
+    mame_container: cdimono2
+    rom: cdi450.rom / cdi550.rom
+    regions: [US/NTSC]
+    os9: "2.5"
+    provenance: reported
+    notes: Identical production runs of the Philips equivalents.
+  - manufacturer: Memorex
+    model: CD-i 2200 (and possibly 2100)
+    form_factor: console-front-loader
+    segment: consumer-budget
+    hardware_base: mono-1
+    clone_of: Philips CD-i 910 / 205
+    mame_container: cdimono1
+    rom: cdi205.rom
+    regions: [US/NTSC]
+    os9: "2.4"
+    provenance: reported
+    notes: Vanilla Philips 205 code. The 2100 listing is uncertain.
+  - manufacturer: GoldStar (LG)
+    model: GDI-750 / GDI-1000
+    form_factor: console-top-loader
+    segment: consumer
+    hardware_base: mono-2
+    clone_of: Philips CD-i 450
+    mame_container: cdimono2
+    rom: gdi750.rom (fallback cdi450.rom)
+    regions: [KR, EU/PAL]
+    os9: "2.5"
+    provenance: uncertain
+    notes: Custom clone firmware with GoldStar splash branding.
+  - manufacturer: GoldStar (LG)
+    model: GDI-700 / GDI-700M
+    form_factor: console-front-loader
+    segment: industrial-kiosk
+    hardware_base: custom
+    clone_of: null
+    mame_container: cdibios / misc
+    rom: gdi700.rom
+    regions: [KR]
+    os9: "2.4 (industrial)"
+    provenance: uncertain
+    notes: Kiosk-targeted; bypasses the consumer shell.
+  - manufacturer: GoldStar (LG)
+    model: GPI-1100M
+    form_factor: portable-clamshell
+    segment: professional
+    hardware_base: mono-1 (portable branch)
+    clone_of: Philips 300-series
+    mame_container: cdibios / misc
+    rom: gpi1100.rom
+    regions: [KR]
+    os9: "2.4"
+    provenance: uncertain
+    notes: Portable clone with display-driving exceptions for non-standard
+      panels.
+  - manufacturer: Sony
+    model: IVO-V10 / IVO-V11 ("Intelligent Discman")
+    form_factor: portable-clamshell
+    segment: professional
+    hardware_base: custom
+    clone_of: null
+    mame_container: cdibios / misc
+    rom: ivov11.rom
+    regions: [JP, US/NTSC]
+    os9: "2.4"
+    provenance: uncertain
+    notes: Proprietary OS build with custom CD-DA interfaces.
+  - manufacturer: Bang & Olufsen
+    model: Beocenter AV5
+    form_factor: integrated-crt-tv
+    segment: luxury-consumer
+    hardware_base: mono-1
+    clone_of: Philips CD-i 220
+    mame_container: cdimono1
+    rom: beocenter_av5.rom (fallback cdi220.rom)
+    regions: [EU/PAL]
+    os9: "2.4"
+    provenance: uncertain
+    notes: Bespoke 220 variant parsing B&O serial/I2C control.
+  - manufacturer: Kyocera
+    model: Pro 1000S
+    form_factor: portable-clamshell
+    segment: industrial
+    hardware_base: mono-1 (portable branch)
+    clone_of: Philips 300-series
+    mame_container: cdibios / misc
+    rom: pro1000s.rom
+    regions: [JP]
+    os9: "2.4"
+    provenance: uncertain
+    notes: Presentation-focused; dump status widely considered unverified.
+  - manufacturer: Digital Video Systems
+    model: DVS VE-200
+    form_factor: console-front-loader
+    segment: consumer
+    hardware_base: mono-2
+    clone_of: GoldStar GDI-750
+    mame_container: cdimono2
+    rom: gdi750.rom
+    regions: [unknown]
+    os9: "2.5"
+    provenance: uncertain
+    notes: Unconfirmed dump status; probably stock GoldStar code.
+  - manufacturer: Grundig
+    model: CD-i 100V / 100E
+    form_factor: console-front-loader
+    segment: consumer
+    hardware_base: mono-1
+    clone_of: Philips CD-i 220
+    mame_container: cdimono1
+    rom: cdi220.rom (assumed)
+    regions: [EU/PAL]
+    os9: "2.4"
+    provenance: uncertain
+    notes: Extraction unverified; believed stock Philips 220.
+  - manufacturer: Saab Electric
+    model: unknown automotive unit
+    form_factor: automotive
+    segment: industrial
+    hardware_base: custom
+    clone_of: null
+    mame_container: null
+    rom: null
+    regions: [unknown]
+    os9: "2.4 (industrial)"
+    provenance: uncertain
+    notes: No known dump; presumed lost automotive evaluation unit.

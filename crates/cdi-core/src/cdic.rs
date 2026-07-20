@@ -106,6 +106,7 @@ pub struct Cdic {
     audio_sector_counter: u8,
     audio_format_sectors: u8,
     decoding_audio_map: bool,
+    audio_map_stop_requested: bool,
     decode_addr: u16,
     atten: [u8; 4],
     xa_last: [i16; 4],
@@ -160,6 +161,7 @@ impl Cdic {
             audio_sector_counter: 0,
             audio_format_sectors: 0,
             decoding_audio_map: false,
+            audio_map_stop_requested: false,
             decode_addr: 0,
             atten: [0; 4],
             xa_last: [0; 4],
@@ -259,8 +261,20 @@ impl Cdic {
             0x3FF6 => self.x_buffer = data,
             0x3FFA => {
                 self.z_buffer = data;
+                log::debug!(
+                    "cdic: Z-buffer write {data:#06x} (map={}, decode={:#06x})",
+                    self.decoding_audio_map,
+                    self.decode_addr
+                );
                 if self.z_buffer & 0x2000 == 0 {
-                    self.decode_addr = 0xFFFF;
+                    if self.decoding_audio_map {
+                        // AUDCTL cannot stop the sector already being
+                        // decoded. Latch the request and report completion
+                        // only when that sector's playback time elapses.
+                        self.audio_map_stop_requested = true;
+                    } else {
+                        self.decode_addr = 0xFFFF;
+                    }
                 } else if !self.decoding_audio_map {
                     // CD-RTOS gives memory sound maps priority over disc
                     // audio. Starting one aborts CD-DA; real-time ADPCM keeps
@@ -272,6 +286,7 @@ impl Cdic {
                     self.audio_format_sectors = 0;
                     self.audio_sector_counter = 1;
                     self.decoding_audio_map = true;
+                    self.audio_map_stop_requested = false;
                     self.xa_last = [0; 4];
                 }
             }
@@ -282,10 +297,7 @@ impl Cdic {
                     self.handle_command();
                 }
                 if self.data_buffer & 0x4000 == 0 {
-                    self.disc_command = 0;
-                    self.disc_mode = DiscMode::Idle;
-                    self.disc_spinup_counter = 0;
-                    self.curr_lba = 0;
+                    self.cancel_disc_read();
                 }
             }
             _ => log::trace!("cdic: write16 +{offset:#06x} = {data:#06x} (unknown)"),
@@ -372,9 +384,9 @@ impl Cdic {
                 }
             }
             0x2B => self.cancel_disc_read(), // Stop CDDA
-            // Commit a live channel/configuration change. cdapdriv writes
-            // the affected registers before issuing this command, so those
-            // writes already have immediate effect in this HLE model.
+            // The channel/configuration registers are live. cdapdriv issues
+            // Update after changing them, but no additional CDIC-side latch
+            // is observable (see docs/icdia-archive-assessment.md).
             0x2E => {}
             0x27 => self.init_disc_read(DiscMode::Toc),
             0x28 => self.init_disc_read(DiscMode::Cdda),
@@ -656,10 +668,16 @@ impl Cdic {
         self.data_buffer |= 0x4000;
         self.update_interrupt_state();
         log::debug!(
-            "cdic: sector delivered (lba {}, buffer {:#06x}, vector {:#04x})",
+            "cdic: sector delivered (lba {}, buffer {:#06x}, vector {:#04x}, file/channel/submode {:02x}/{:02x}/{:02x}, filters {:#06x}/{:#010x}/{:#06x})",
             self.curr_lba,
             self.data_buffer,
-            self.interrupt_vector
+            self.interrupt_vector,
+            buffer[SECTOR_FILE2],
+            buffer[SECTOR_CHAN2],
+            buffer[SECTOR_SUBMODE2],
+            self.file,
+            self.channel,
+            self.audio_channel,
         );
 
         if self.command == 0x23 || self.command == 0x24 {
@@ -677,15 +695,29 @@ impl Cdic {
             }
         }
         if self.decoding_audio_map {
+            if self.audio_map_stop_requested {
+                self.audio_map_stop_requested = false;
+                self.decode_addr = 0xFFFF;
+                self.audio_format_sectors = 0;
+                self.decoding_audio_map = false;
+                self.audio_buffer |= 0x8000;
+                self.update_interrupt_state();
+                return;
+            }
             self.process_audio_map();
         }
     }
 
     fn process_audio_map(&mut self) {
         if self.decode_addr == 0xFFFF {
+            let was_decoding = self.decoding_audio_map;
             self.audio_sector_counter = 0;
             self.audio_format_sectors = 0;
             self.decoding_audio_map = false;
+            if was_decoding {
+                self.audio_buffer |= 0x8000;
+                self.update_interrupt_state();
+            }
             return;
         }
         let base = usize::from(self.decode_addr & 0x3FFE);
@@ -693,6 +725,10 @@ impl Cdic {
 
         let was_decoding = self.audio_format_sectors != 0;
         let coding = self.ram[(base + (SECTOR_CODING2 - SECTOR_HEADER)) & 0x3FFF];
+        log::trace!(
+            "cdic: sound-map buffer {base:#06x}, coding {coding:#04x}, next {:#06x}",
+            self.decode_addr
+        );
         if coding != 0xFF {
             self.decoding_audio_map = true;
             self.audio_format_sectors = Self::sector_count_for_coding(coding);
@@ -704,14 +740,16 @@ impl Cdic {
             }
             self.play_audio_data(coding, &sector_data);
         } else {
+            log::debug!("cdic: sound map ended at buffer {base:#06x}");
             self.decode_addr = 0xFFFF;
             self.audio_sector_counter = 0;
         }
-        if was_decoding && !self.decoding_audio_map {
-            self.audio_buffer |= 0x8000;
-            self.update_interrupt_state();
-        }
-        if coding == 0xFF && was_decoding {
+        // The completion bit reports transfer of the preceding sound-map
+        // buffer to the audio processor, not the end of the whole map.  The
+        // CD-RTOS driver relies on this per-buffer IRQ to refill the inactive
+        // half or write its 0xff terminator.  Waiting for the terminator here
+        // deadlocks software and repeats the same two buffers forever.
+        if was_decoding {
             self.audio_buffer |= 0x8000;
             self.update_interrupt_state();
         }
@@ -958,6 +996,46 @@ mod tests {
         assert_eq!(c.disc_mode, DiscMode::Idle);
     }
 
+    #[test]
+    fn stopping_sound_map_waits_for_sector_and_signals_completion() {
+        let mut c = Cdic::new();
+        c.decoding_audio_map = true;
+        c.audio_sector_counter = 2;
+        c.decode_addr = 0x2800;
+
+        c.write16(0x3FFA, 0x0000);
+        assert!(c.decoding_audio_map);
+        assert_eq!(c.audio_buffer & 0x8000, 0);
+
+        c.audio_tick();
+        assert!(c.decoding_audio_map);
+        c.audio_tick();
+        assert!(!c.decoding_audio_map);
+        assert_eq!(c.audio_buffer & 0x8000, 0x8000);
+        assert!(c.int_line());
+    }
+
+    #[test]
+    fn sound_map_interrupts_after_each_consumed_buffer() {
+        let mut c = Cdic::new();
+        let coding = CODING_18KHZ | CODING_MONO;
+        c.ram[0x2800 + (SECTOR_CODING2 - SECTOR_HEADER)] = coding;
+        c.ram[0x3200 + (SECTOR_CODING2 - SECTOR_HEADER)] = coding;
+
+        c.write16(0x3FFA, 0x2800);
+        c.audio_tick(); // Prime the first half; there is no preceding buffer.
+        assert!(c.decoding_audio_map);
+        assert!(!c.int_line());
+
+        for _ in 0..Cdic::sector_count_for_coding(coding) {
+            c.audio_tick();
+        }
+        assert!(c.decoding_audio_map, "the second half remains playable");
+        assert_eq!(c.decode_addr, 0x2800);
+        assert_eq!(c.audio_buffer & 0x8000, 0x8000);
+        assert!(c.int_line(), "software must be told that a half is free");
+    }
+
     fn mode2_sector(file: u8, channel: u8, submode: u8) -> [u8; 2352] {
         let mut sector = [0u8; 2352];
         sector[SECTOR_FILE2] = file;
@@ -978,6 +1056,21 @@ mod tests {
     }
 
     #[test]
+    fn mode2_filters_are_live_and_update_is_a_noop() {
+        let mut c = Cdic::new();
+        c.file = 7 << 8;
+        c.channel = 1 << 3;
+        c.audio_channel = 1 << 3;
+        assert!(c.is_mode2_sector_selected(&mode2_sector(7, 3, SUBMODE_DATA)));
+        assert!(c.is_mode2_audio_selected(&mode2_sector(7, 3, SUBMODE_FORM | SUBMODE_AUDIO,)));
+
+        c.audio_channel = 0;
+        c.command = 0x2E;
+        c.handle_command();
+        assert!(!c.is_mode2_audio_selected(&mode2_sector(7, 3, SUBMODE_FORM | SUBMODE_AUDIO,)));
+    }
+
+    #[test]
     fn mode2_event_sector_bypasses_channel_but_not_file_mask() {
         let mut c = Cdic::new();
         c.file = 7 << 8;
@@ -992,9 +1085,23 @@ mod tests {
     }
 
     #[test]
+    fn clearing_dbuf_enable_stops_mode2_delivery() {
+        let mut c = Cdic::new();
+        c.disc_mode = DiscMode::Mode2;
+        c.disc_command = 0x2A;
+        c.curr_lba = 123;
+
+        c.write16(0x3FFE, 0);
+        assert_eq!(c.disc_command, 0);
+        assert_eq!(c.disc_mode, DiscMode::Idle);
+        assert_eq!(c.curr_lba, 0);
+    }
+
+    #[test]
     fn mode2_eof_event_ends_the_read() {
         let mut c = Cdic::new();
         c.file = 7 << 8;
+        c.audio_channel = 1 << 3;
         c.disc_command = 0x2A;
 
         assert!(c.is_mode2_sector_selected(&mode2_sector(7, 4, SUBMODE_EOF)));

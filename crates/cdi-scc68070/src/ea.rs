@@ -80,6 +80,9 @@ impl Cpu {
     /// Decode a brief extension word (d8(An,Xn) / d8(PC,Xn)).
     fn indexed_addr<B: Bus68k>(&mut self, bus: &mut B, base: u32) -> u32 {
         let ext = self.fetch16(bus);
+        // Table 11: indexed addressing has six internal clocks in addition
+        // to its extension-word and operand bus transfers.
+        self.cycles += 6;
         let disp = ext as u8 as i8 as u32;
         let reg = ((ext >> 12) & 7) as usize;
         let idx_raw = if ext & 0x8000 != 0 {
@@ -109,12 +112,16 @@ impl Cpu {
                 Ea::Mem(addr)
             }
             4 => {
+                // Predecrement costs three internal clocks beyond the data
+                // transfer (Table 11), for every operand size.
+                self.cycles += 3;
                 let addr = self.a[r].wrapping_sub(Self::step_size(size, r));
                 self.a[r] = addr;
                 Ea::Mem(addr)
             }
             5 => {
                 let disp = self.fetch16(bus) as i16 as u32;
+                self.cycles += 3;
                 Ea::Mem(self.a[r].wrapping_add(disp))
             }
             6 => {
@@ -127,6 +134,7 @@ impl Cpu {
                 2 => {
                     let base = self.pc;
                     let disp = self.fetch16(bus) as i16 as u32;
+                    self.cycles += 3;
                     Ea::Mem(base.wrapping_add(disp))
                 }
                 3 => {
@@ -193,6 +201,7 @@ impl Cpu {
             2 => self.a[r],
             5 => {
                 let disp = self.fetch16(bus) as i16 as u32;
+                self.cycles += 3;
                 self.a[r].wrapping_add(disp)
             }
             6 => {
@@ -205,6 +214,7 @@ impl Cpu {
                 2 => {
                     let base = self.pc;
                     let disp = self.fetch16(bus) as i16 as u32;
+                    self.cycles += 3;
                     base.wrapping_add(disp)
                 }
                 3 => {

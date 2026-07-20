@@ -8,11 +8,14 @@
 pub mod board;
 pub mod boards;
 pub mod cdic;
+pub mod dvc;
 pub mod machine;
 pub mod mcd212;
+mod mpeg1_video;
 pub mod sched;
 pub mod slave;
 
 pub use board::{BoardDef, DeviceKind, ModelDef, VideoStandard};
+pub use dvc::{DvcConfig, DvcKind, DvcStats, Vmpeg};
 pub use machine::{Machine, MachineBus};
 pub use sched::{EventId, Scheduler, Ticks};

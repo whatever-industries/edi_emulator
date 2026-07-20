@@ -12,6 +12,13 @@
 
 use crate::bus::{Bus68k, FnCode};
 
+/// An SCC68070 external word/byte transfer occupies four CPU clock periods
+/// before any device-specific wait states.  Philips SCC68070 (April 1993),
+/// section 6.2, lists the bus reads/writes for every instruction alongside
+/// the total clock periods; charging the transfers here lets the execution
+/// code add only the instruction's internal clocks.
+const BUS_ACCESS_CLOCKS: u64 = 4;
+
 /// Status register bit positions.
 pub mod sr_bits {
     pub const C: u16 = 1 << 0;
@@ -148,13 +155,13 @@ impl Cpu {
 
     pub fn read8<B: Bus68k>(&mut self, bus: &mut B, addr: u32, fc: FnCode) -> u8 {
         let (v, wait) = bus.read8(addr, fc);
-        self.cycles += u64::from(wait);
+        self.cycles += BUS_ACCESS_CLOCKS + u64::from(wait);
         v
     }
 
     pub fn read16<B: Bus68k>(&mut self, bus: &mut B, addr: u32, fc: FnCode) -> u16 {
         let (v, wait) = bus.read16(addr, fc);
-        self.cycles += u64::from(wait);
+        self.cycles += BUS_ACCESS_CLOCKS + u64::from(wait);
         v
     }
 
@@ -166,12 +173,12 @@ impl Cpu {
 
     pub fn write8<B: Bus68k>(&mut self, bus: &mut B, addr: u32, v: u8, fc: FnCode) {
         let wait = bus.write8(addr, v, fc);
-        self.cycles += u64::from(wait);
+        self.cycles += BUS_ACCESS_CLOCKS + u64::from(wait);
     }
 
     pub fn write16<B: Bus68k>(&mut self, bus: &mut B, addr: u32, v: u16, fc: FnCode) {
         let wait = bus.write16(addr, v, fc);
-        self.cycles += u64::from(wait);
+        self.cycles += BUS_ACCESS_CLOCKS + u64::from(wait);
     }
 
     pub fn write32<B: Bus68k>(&mut self, bus: &mut B, addr: u32, v: u32, fc: FnCode) {
@@ -241,7 +248,16 @@ impl Cpu {
         self.push32(bus, self.pc);
         self.push16(bus, old_sr);
         self.pc = self.read32(bus, u32::from(vector) * 4, FnCode::SupervisorProgram);
-        self.cycles += 40; // placeholder until datasheet timing pass
+        // Table 23 totals include the opcode fetch and the four stack writes
+        // plus two vector reads performed above.  What remains is internal
+        // exception processing; CHK and divide-by-zero have longer paths.
+        self.cycles += match vector {
+            x if x == Vector::ZeroDivide as u8 => 33,
+            x if x == Vector::Chk as u8 => 39,
+            x if x == Vector::TrapV as u8 => 24,
+            32..=47 => 21,
+            _ => 24,
+        };
     }
 
     /// Take an interrupt at `level` with `vector`, raising the mask.
@@ -255,7 +271,10 @@ impl Cpu {
         self.push32(bus, self.pc);
         self.push16(bus, old_sr);
         self.pc = self.read32(bus, u32::from(vector) * 4, FnCode::SupervisorProgram);
-        self.cycles += 44;
+        // Table 23: 65 clocks including four writes, two vector reads and an
+        // assumed four-clock interrupt-acknowledge cycle.  IACK is modeled as
+        // an instantaneous callback, so include those remaining 41 clocks.
+        self.cycles += 41;
     }
 
     fn check_interrupts<B: Bus68k>(&mut self, bus: &mut B) -> bool {

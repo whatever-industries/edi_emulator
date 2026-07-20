@@ -1,6 +1,6 @@
 [package]
 name = "cdi-frontend"
-description = "CD-i emulator desktop frontend (egui/eframe)"
+description = "E-Di: Emulator Disc Interactive desktop frontend (egui/eframe)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,11 +9,14 @@ rust-version.workspace = true
 [dependencies]
 log.workspace = true
 env_logger.workspace = true
-eframe.workspace = true
+eframe = { workspace = true, features = ["persistence"] }
 egui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 rfd.workspace = true
 clap.workspace = true
 cpal.workspace = true
+gilrs.workspace = true
 rtrb.workspace = true
 cdi-core = { path = "../cdi-core" }
 cdi-disc = { path = "../cdi-disc" }

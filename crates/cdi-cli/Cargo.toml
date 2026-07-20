@@ -1,6 +1,6 @@
 [package]
 name = "cdi-cli"
-description = "Headless CD-i emulator harness (boot, trace, ROM inspection)"
+description = "Headless E-Di: Emulator Disc Interactive harness (boot, trace, ROM inspection)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

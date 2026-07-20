@@ -46,13 +46,14 @@ CPU conformance tests use the 68000 vectors from the SingleStepTests project
 (https://github.com/SingleStepTests/680x0), MIT-licensed; they are downloaded
 at test time, not redistributed here.
 
-## ROMs and disc images
+## gen2brain/mpeg (MIT)
 
-CD-i system ROMs and disc images are **not** distributed with this project;
-users supply their own dumps.
+`crates/cdi-core/src/mpeg1_video.rs` and `mpeg1_tables.rs` are a safe-Rust
+translation of the MPEG-1 video decoder from `gen2brain/mpeg`, pinned at
+revision `27c6f084c6ca342380c99a59a6a130b3f716e9d7`. The original project is
+Copyright (c) 2022 Milan Nikolic and licensed under the MIT License. Its unsafe
+Go pixel-view convenience was not translated. The complete license text is in
+[`LICENSES/MIT-gen2brain-mpeg.txt`](LICENSES/MIT-gen2brain-mpeg.txt).
 
-Per the project owner's representation that Philips has relinquished
-copyright in the CD-i player firmware, this repository includes analysis
-and annotated protocol documentation derived from firmware disassembly
-(see `docs/`). The firmware binaries themselves are still not distributed
-here.
+MPEG Layer-II audio decoding is provided by the unmodified MIT-licensed
+`oxideav-mp2` 0.0.9 Cargo dependency.

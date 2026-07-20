@@ -12,13 +12,14 @@
   transliterating its code is not permitted. If you have looked at CeDImu
   source while writing a patch, re-derive the logic from the datasheets or
   MAME instead.
-- Never commit ROMs, disc images, or excerpts of them (including in test
-  fixtures). Synthetic fixtures only.
+- Supported system/DVC firmware may be distributed in `firmware/`. Never
+  commit game disc images or excerpts of commercial-title media (including in
+  test fixtures). Synthetic fixtures only.
 
 ## Practical notes
 
 - `cargo fmt`, `cargo clippy --workspace -- -D warnings`, and
-  `cargo test --workspace` must pass without ROMs present.
+  `cargo test --workspace` must not require external firmware or disc images.
 - ROM-gated integration tests are `#[ignore]`d and keyed on `CDI_ROM_DIR`.
 - The emulation core (`cdi-core`, `cdi-scc68070`) must stay deterministic:
   no wall-clock, no RNG, no UI/audio dependencies.

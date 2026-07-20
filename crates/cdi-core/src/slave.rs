@@ -64,6 +64,10 @@ pub struct SlaveHle {
     last_x: i32,
     last_y: i32,
     last_buttons: u8,
+    // Relative pointer motion queued by the frontend, merged into the device
+    // position at the next input poll.
+    pending_dx: i32,
+    pending_dy: i32,
 
     /// Latest audio-attenuation command payload for the CDIC, if pending.
     attenuation: Option<u32>,
@@ -109,11 +113,20 @@ impl SlaveHle {
             last_x: -1,
             last_y: -1,
             last_buttons: 0,
+            pending_dx: 0,
+            pending_dy: 0,
             attenuation: None,
             irq_asserted: false,
             irq_countdown: None,
             poll_countdown: POLL_INTERVAL,
         }
+    }
+
+    /// Select the player video standard reported by the firmware's `F6`
+    /// status query. Real Mono-I players were sold in both PAL and NTSC
+    /// configurations even when they shared the same main system ROM.
+    pub fn set_video_standard(&mut self, pal: bool) {
+        self.video_status = if pal { 2 } else { 1 };
     }
 
     pub fn reset(&mut self) {
@@ -147,6 +160,16 @@ impl SlaveHle {
         self.input_buttons = buttons;
     }
 
+    /// Frontend input: relative pointer motion + current button state. The
+    /// deltas are bounded only by the device clamp, so a host-side coordinate
+    /// wall can never pin the pointer short of the screen edge — even after a
+    /// title has reprogrammed the pointer position.
+    pub fn move_pointer(&mut self, dx: i32, dy: i32, buttons: u8) {
+        self.pending_dx += dx;
+        self.pending_dy += dy;
+        self.input_buttons = buttons;
+    }
+
     /// Place the emulated pointer at an absolute device coordinate and
     /// anchor subsequent relative host motion there.
     pub fn set_pointer_absolute(&mut self, x: i32, y: i32, buttons: u8) {
@@ -156,6 +179,8 @@ impl SlaveHle {
         self.last_x = x;
         self.last_y = y;
         self.last_buttons = buttons;
+        self.pending_dx = 0;
+        self.pending_dy = 0;
         self.device_x = x.clamp(0, 767);
         self.device_y = y.clamp(0, 559);
     }
@@ -204,7 +229,9 @@ impl SlaveHle {
             self.last_buttons = btn;
             return;
         }
-        if x == self.last_x && y == self.last_y && btn == self.last_buttons {
+        let delta_x = (x - self.last_x) + std::mem::take(&mut self.pending_dx);
+        let delta_y = (y - self.last_y) + std::mem::take(&mut self.pending_dy);
+        if delta_x == 0 && delta_y == 0 && btn == self.last_buttons {
             return;
         }
         let mut button_bits: u8 = 0x01;
@@ -217,8 +244,6 @@ impl SlaveHle {
         if btn & 4 != 0 {
             button_bits |= 0x06;
         }
-        let delta_x = x - self.last_x;
-        let delta_y = y - self.last_y;
         self.last_x = x;
         self.last_y = y;
         self.last_buttons = btn;
@@ -548,6 +573,17 @@ mod tests {
     }
 
     #[test]
+    fn video_standard_can_switch_to_ntsc_and_survives_reset() {
+        let mut s = SlaveHle::new("3231", true);
+        s.set_video_standard(false);
+        s.reset();
+        s.write(3, 0xF6);
+        s.tick(READBACK_DELAY);
+        assert_eq!(s.read(2), 0xF6);
+        assert_eq!(s.read(2), 1);
+    }
+
+    #[test]
     fn empty_channel_reads_ff() {
         let mut s = SlaveHle::new("3231", true);
         assert_eq!(s.read(0), 0xFF);
@@ -619,6 +655,27 @@ mod tests {
 
         s.write(0, 0x83);
         assert!(s.irq(), "re-enabling exposes the latest retained event");
+    }
+
+    #[test]
+    fn relative_motion_reaches_the_full_device_range_after_a_title_warp() {
+        let mut s = SlaveHle::new("3231", true);
+        s.write(3, 0xF7);
+        // Anchor the absolute host channel near the right edge, then have the
+        // title warp the pointer to the center: a host-side coordinate wall
+        // would now stop relative motion short of the device bounds.
+        s.set_pointer(700, 500, 0);
+        s.tick(POLL_INTERVAL);
+        s.device_x = 384;
+        s.device_y = 280;
+
+        s.move_pointer(500, 300, 0);
+        s.tick(POLL_INTERVAL);
+        assert_eq!((s.device_x, s.device_y), (767, 559));
+
+        s.move_pointer(-1000, -600, 0);
+        s.tick(POLL_INTERVAL);
+        assert_eq!((s.device_x, s.device_y), (0, 0));
     }
 
     #[test]

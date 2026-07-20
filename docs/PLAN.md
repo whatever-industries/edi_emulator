@@ -1,4 +1,4 @@
-# CD-i Emulator Foundation — Rust Workspace Plan
+# E-Di: Emulator Disc Interactive — Rust Workspace Plan
 
 ## Context
 
@@ -16,12 +16,15 @@ Greenfield open-source Philips CD-i emulator in `/Volumes/Projects/Coding/cdi_em
 - **CD-i Emulator v0.5.3b9** binary distribution at `references/cdiemu-v053b9/`: `sys/*.brd` board memory maps, `sys/*.mdl` (~30 models), `cditypes.rul` (LGPL-2.0+ — GPL-compatible, transliterate with attribution)
 - Specs: `/Volumes/Projects/Coding/disc specs/` — Green Book (`cdi_may94_r2.pdf`), ECMA TR-112 pts 1–2, ECMA-119, BRIDGE10.pdf
 - Test discs: `/Volumes/Projects/Coding/Disc Images/Philips CDi/` — CD Shoot (single `CDI/2352` track), Alien Gate EU (CDI + 2 audio tracks), Alien Gate USA (CD-i Ready: app data in track-1 pregap, `INDEX 00 00:00:00` / `INDEX 01 01:43:12`)
-- **BIOS ROMs on hand** at `cdi_emulator/bios/` (move under gitignored `roms/` during M0): MAME `cdimono1` set — `cdi200.rom`, `cdi220.rom`, `cdi220b.rom` (512KB Mono-I main ROMs) + real SLAVE/SERVO MC68HC705C8A dumps (8KB each); `cdimono2.zip` (CDI-220 PH3, Mono-II); `cdi910.zip` (Mono-I 910); `cdi490a.zip` incl. `impega.rom`/`vmpega.rom` (MPEG DVC — future use). Byte-identical to MAME's sets, so MAME trace-diff needs no ROM juggling; MCU dumps enable eventual SLAVE LLE (HLE remains the plan for M1).
+- **Firmware**: the supported Mono-I `cdi200.rom`, `cdi220.rom`, and
+  `cdi220b.rom` images plus VMPEG `vmpega.rom` are versioned in `firmware/`.
+  Additional unsupported model and MCU dumps remain local research inputs
+  until their devices are implemented.
 
 ### Ground truth from references (verified against files)
 `mono1.brd` (Mono-I) memory map: `$00000000` 512KB RAM planea · `$00200000` 512KB RAM planeb · `$00300000` CDIC (IRQ level 4) · `$00310000` SLAVE (level 2, vec 26) · `$00318000` null 32KB · `$00320000` NVRAM · `$00400000` sysrom 512KB · `$004FFFE0` MCD212 registers (overlays top of ROM window) · `$80000000` 68070 on-chip peripherals.
 
-**M1 target models (Mono-I): `cdi220b` (CD-i 220 F2, slave.ver=3231, nvr 32KB) and `cdi200a` — both ROMs are on disk in `bios/`; `cdi210a` supported by the same board.** Note: CD-i 205 is *Mini-MMC* (SCC66470 video, different map) — not an M1 target.
+**M1 target models (Mono-I): `cdi220b` (CD-i 220 F2, slave.ver=3231, nvr 32KB) and `cdi200a`; the supported firmware is versioned in `firmware/`, and `cdi210a` uses the same board.** Note: CD-i 205 is *Mini-MMC* (SCC66470 video, different map) — not an M1 target.
 
 ### Reference gathering: Discord channel archive (pre-M0 side task)
 Archive the CD-i emulation Discord channel with **DiscordChatExporter.Cli v2.47.3** (github.com/Tyrrrz/DiscordChatExporter):
@@ -46,7 +49,8 @@ cdi_emulator/
 │   ├── cdi-os9/        # OS-9 module parsing (ROM detect + debugger); pure
 │   ├── cdi-frontend/   # eframe app, cpal, gilrs, rfd
 │   └── cdi-cli/        # headless harness (clap, png, sha2) — what CI runs
-├── roms/ (.gitignored) · tests-data/ (fixtures, hashes.toml)
+├── firmware/ (supported system/DVC firmware) · roms/ (local scratch)
+└── tests-data/ (fixtures, hashes.toml)
 ```
 
 Every file: `// SPDX-License-Identifier: GPL-2.0-or-later`. Ported-from-MAME files carry an attribution comment naming the MAME source + authors.
@@ -98,14 +102,14 @@ Every file: `// SPDX-License-Identifier: GPL-2.0-or-later`. Ported-from-MAME fil
 
 ## 8. Testing & CI
 
-- **CI, no ROMs**: fmt, clippy `-D warnings`, workspace unit tests, Harte 68000 suite (cached download), savestate round-trip on synthetic machine.
+- **CI, no external firmware**: fmt, clippy `-D warnings`, workspace unit tests, Harte 68000 suite (cached download), savestate round-trip on synthetic machine.
 - **ROM-gated** (`#[ignore]` unless `CDI_ROM_DIR` set): `cdi-cli boot --model cdi210a --frames N --screenshot-hash` vs `tests-data/hashes.toml`; determinism check (two identical trace runs); M2 adds disc-boot + ADPCM stream hashes.
 - Early debugging aids: `--trace-file` flight recorder (ring buffer dumped on panic), UART console echoed to stdout.
 
 ## 9. Milestones & acceptance
 
 **M0 — Scaffolding**: workspace+CI+licenses → cdi-os9 parser → board tables+bus+scheduler → CPU skeleton passing first Harte categories → `cdi-cli boot` executes from reset vector with trace.
-*Accept*: CI green on clean clone without ROMs; `cdi-cli info <rom>` lists OS-9 modules and detects cdi210a; ≥100k instructions without panic; savestate round-trips.
+*Accept*: CI green on a clean clone; `cdi-cli info <rom>` lists OS-9 modules and detects cdi210a; ≥100k instructions without panic; savestate round-trips.
 
 **M1 — Boot to shell**: CPU Harte-complete (skip-list documented) → exceptions/IRQ/timers/UART → NVRAM/timekeeper → SLAVE HLE → MCD212 ICA → CLUT7/DYUV/compose → DCA+IRQs → pointer input.
 *Accept*: `cdi220b.rom` (and `cdi200.rom`) reach the animated player shell; mouse drives shell pointer; PAL and NTSC modes boot; screenshot-hash test recorded; no per-frame allocations in render path.
@@ -116,10 +120,10 @@ Every file: `// SPDX-License-Identifier: GPL-2.0-or-later`. Ported-from-MAME fil
 ## 10. Licensing files
 
 - `LICENSE` GPL-2.0-or-later; `license` field in every crate.
-- `NOTICE.md`: MAME BSD-3 attribution (files + authors) for ported logic; CD-i Fan credit for `.brd`/`.mdl`/`cditypes.rul` transliteration (LGPL-2.0+); explicit statement that CeDImu is study-only/not copied (policy repeated in CONTRIBUTING.md); note that BIOS ROMs/discs are not distributed.
+- `NOTICE.md`: MAME BSD-3 attribution (files + authors) for ported logic; CD-i Fan credit for `.brd`/`.mdl`/`cditypes.rul` transliteration (LGPL-2.0+); explicit statement that CeDImu is study-only/not copied (policy repeated in CONTRIBUTING.md); game disc images are never bundled.
 
 ## Verification (end of each milestone)
 
-- M0: fresh `git clone` + `cargo test --workspace` green without ROMs; run `cdi-cli info` on a user-supplied ROM.
+- M0: fresh `git clone` + `cargo test --workspace` green; run `cdi-cli info` on a supported firmware image.
 - M1: run `cdi-frontend`, load cdi210a ROM, visually reach player shell, move pointer; run headless hash test.
 - M2: load `CD Shoot (Europe).cue` via frontend, play with audio; run all three disc images; run ROM-gated CI suite locally.

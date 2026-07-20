@@ -16,6 +16,7 @@ serde = { workspace = true, optional = true }
 cdi-scc68070 = { path = "../cdi-scc68070" }
 cdi-disc = { path = "../cdi-disc" }
 cdi-os9 = { path = "../cdi-os9" }
+oxideav-mp2.workspace = true
 
 [lints]
 workspace = true

@@ -37,9 +37,14 @@ not only from filenames.
 |---|---|
 | `docs/pointing_devices.pdf` | Relative devices identify as `M`, emit a three-byte signed-delta packet only on motion or button change, and must not emit stationary repeats. This supports keeping frontend motion relative and edge-driving buttons. |
 | `techdocs/tech_training_cdi910.pdf`, pp. 13–14 | The 68070 controls the drive MCU through SPI via the SLAVE; disc data also returns over X-bus through DSP/CDIC. The SLAVE therefore owns drive-control/status behavior that CDIC commands alone cannot replace. |
-| `docs/mcd212rev0.pdf` | Register, CLUT, transparency, region and display-control behavior used by the MCD212 implementation. |
+| `docs/mcd212rev0.pdf` | Register, CLUT, transparency, region and display-control behavior used by the MCD212 implementation. Section 5.2.2 defines noninterlace as one complete image per field and interlace as distinct odd/even fields forming one image; the mix diagrams preserve digital black at 16. This requires duplicated host rows only for noninterlace, retained alternating rows for interlace, and output-boundary CCIR range expansion. |
 | `docs/mcd221tsrev0.pdf` | CD interface, ADPCM/audio mixing and host-interface division of responsibility. Its memory map exposes two 2304-byte ADPCM buffers, reinforcing that transfer and audible playback are separate states on integrated later hardware. |
-| `docs/cdi_may94_r2.pdf` | The later Green Book authority for display-control, sector selection, audio scheduling and CD-RTOS calls. In particular, a memory sound map overrides real-time-file ADPCM, while starting one during CD-DA aborts CD-DA. |
+| `docs/cdi_may94_r2.pdf` | The later Green Book authority for display-control, sector selection, audio scheduling and CD-RTOS calls. It defines internal RGB as `(C-16)/219` with black 16 and nominal white 235, and distinguishes normal doubled-field images from high-resolution odd/even field images. A memory sound map overrides real-time-file ADPCM, while starting one during CD-DA aborts CD-DA. |
+| `docs/fmv_extension.pdf`, `docs/cdi_fmv_rec.pdf`, `authoring/fmv_features.pdf` | VMPEG cartridge function, external-plane presentation, title recommendations, and the division between disc transport, MPEG drivers, and decoder hardware. |
+| TN 098 | `/mv` and `/ma` use distinct PCL chains. Both decoders must be aborted before another play, even after normal completion; normal video completion is EOI immediately after Last Picture Displayed. The end-of-play page was rendered and visually verified. |
+| `sw_disc/fmvdemo/fmvdemo.bin` | Embedded Philips source `fmv_tools.c` and `sequence.c` shows independent disc, video, and audio completion: video EOI arms completion on a later video-buffer event, while audio EOI arms completion on a later audio-underflow event. |
+| `sw_disc/fpd805/fpd805.bin` | Embedded `fmav.c` clears separate video/audio PCL rings, arms separate asynchronous status blocks, starts `/mv` and `/ma` independently, and aborts both before release. Its `fmav_center_image()` also centers in 768x560/720x480 display coordinates before `mv_pos`, which corroborates the MCD251 half-rate X-display conversion. |
+| `sw_disc/fpd804/fpd804.bin` | Contains a broad Philips CD-i application source tree and CD-RTOS/PCL/display examples. It is useful for base-player behavior, but FPD805 contains the more directly relevant VMPEG application source. |
 | `docs/cdi_ready.zip` | The 1991 tentative CD-i Ready application note: track 1 is audio; CD-i data begins at absolute time 00:00:00 inside INDEX 00; data is followed by at least 30 seconds of message sectors and at least 120 seconds of digital silence before INDEX 01. A player may distinguish the format by reading the sector whose header is 00:02:16 and validating its Disc Label. |
 | `authoring/cdi_standards.pdf`, `discbuild.pdf` | Confirm the 75-sector/s stream, Mode-2 Form 1/Form 2 sizes and subheader roles. The supplied normal-disc emulator trace jumps to header 00:02:16 at absolute sector 166, independently matching the standard-disc mapping in `cdi-disc`. |
 | `svcmanuals/cdi220.pdf` | The MMC block diagram separates the SLAVE CPU from the host reset domain. Its signal list defines SLAVE `RSTOUT` as starting the reset sequence high, `RESETN` as the active-low reset for the other ICs, `NRESET` as the video/VSR reset, and `HALTN` plus reset as placing the 68070 in reset. This validates a full host-device reset that preserves SLAVE state. |
@@ -87,6 +92,11 @@ and visually checked; text extraction was not treated as sufficient evidence.
 - CD-RTOS 1.1 audio priority is not last-writer-wins: memory sound maps retain
   priority over incoming real-time-file ADPCM, which continues streaming and
   resumes afterward. Starting a sound map during CD-DA aborts the CD-DA play.
+- Desktop presentation must not reinterpret MCD212's internal RGB as full
+  range. Preserve 16..235 through CLUT/DYUV/VMPEG mixing and expand once at the
+  frontend or screenshot boundary. Likewise, SM=1 must weave PA odd/even field
+  rows; replacing the whole host image every field causes the observed 50 Hz
+  vertical bump and can make within-clip mode transitions look unevenly boxed.
 
 ## Disc and CDIC findings
 
@@ -111,8 +121,11 @@ disassembly rules that out:
 Therefore the HLE design—live register writes, a no-op `0x2E`, CDIC event
 sectors bypassing the channel mask but not the file mask, BIOS-level EOR
 masking, and no autonomous CDIC time-register advance—is intentional. Unit
-tests lock the low-level selection semantics down. Seek latency should be
-modeled separately from the 75-sector/s delivery clock: TN 076 gives a Green
+tests lock the low-level selection semantics down. Clearing CDIC DBUF bit 14
+stops Mode-2 delivery; the emulator must not keep scanning later sectors only
+to discover an EOR. That discarded heuristic contradicted the documented
+transport and caused The 7th Guest to stall between VMPEG plays. Seek latency
+should be modeled separately from the 75-sector/s delivery clock: TN 076 gives a Green
 Book worst-case allowance ranging from about one second locally to three
 seconds across a disc, while TN 095 reports poorly laid-out authored projects
 taking even longer.
@@ -173,6 +186,29 @@ aborts CD-DA. Focused CDIC tests protect both cases. Applications should still
 derive A/V synchronization from disc position or triggers rather than sound-map
 status.
 
+TN 069/079's distinction between transfer completion and audible completion is
+also required for basic double buffering. Earth Command fills sound-map halves
+at `$2800/$3200`; completion of each half must raise the CDIC audio-buffer IRQ
+while the map remains active. Reporting completion only at the final `$FF`
+sentinel prevents CD-RTOS from refilling or terminating either half and loops
+the sound indefinitely. The implementation and a focused test now signal each
+consumed half; a captured run then lets Earth Command write `$FF` and stop.
+
+## SCC68070 timing findings
+
+`docs/scc68070.zip` contains Philips' April 1993 product specification. Its
+section 6.2 (PDF pages 31-38) provides SCC68070-specific instruction timing,
+not generic 68000 estimates: effective-address costs and bus transaction
+counts, full MOVE/MOVEM matrices, 13/14-clock branches, `13 + 3n` shifts,
+76-clock multiplication, 130/169-clock division, and 55/65-clock
+exception/interrupt paths. This exposed the old core's four-clock universal
+placeholder and zero-cost normal bus transfers as a direct cause of software
+running too quickly relative to video/CDIC clocks. The CPU now charges the
+documented four-clock bus transfers, three-clock minimum internal work,
+effective-address overhead, and instruction-specific additions. CD Shoot still
+boots to its language screen; frontend observation is required to confirm its
+hovered flag and skeets now match intended cadence.
+
 The 605/615 hardware documents and TN 076 describe how connected devices turn
 into `/ptr` and `/pt2` CSD entries. A port-1 device is handled through SLAVE;
 port 2 uses the 68070 UART, and the remote can be the default when no external
@@ -180,6 +216,41 @@ device is present. The present frontend-to-SLAVE pointer path is correct for the
 consumer-player default, but full multi-device compatibility eventually needs
 the UART path and machine-specific CSD enumeration rather than a second copy of
 the same HLE pointer.
+
+## Digital Video / FMV findings
+
+The local developer discs are a higher-value behavioral reference than the
+marketing summaries. The Philips source on them is used directly as a
+reference; the discs and unrelated assets remain local and are not
+redistributed. The decisive implementation consequences are:
+
+- `/mv` and `/ma` are independent decoder devices with independent PCL rings,
+  parser state, asynchronous completion, and abort paths.
+- An MPEG program-end in a video sector is not the audio decoder's end. Real
+  7th Guest media places the video program-end 76 physical sectors before the
+  later audio program-end.
+- PCLs must be emptied before a play. FPD805 warns that an accidentally full
+  PCL starts decoding immediately, which is directly relevant to unexpected
+  auto-start and stale-play bugs.
+- Video EOI follows Last Picture Displayed; a later buffer-empty indication is
+  distinct. Audio EOI and later audio underflow are likewise distinct.
+- Both decoders are aborted before another play, even after normal completion.
+  Treating a single coupled end flag as sufficient leaves application state
+  busy and blocks the next clip.
+
+The emulator now follows those rules, maintains independent video/audio MPEG
+system parsers, retains timestamps across PTS-less PES packets, compares 33-bit
+timestamps across wrap, and uses stable SCR-to-DCLK anchors. A clean The 7th
+Guest run reached the interactive mansion staircase after five VMPEG play
+requests with 2,106 displayed frames and zero demux/video/audio decode errors.
+Its authored MPEG size is 368x176; native firmware programs X=8, Y=52 and the
+same window dimensions. FPD805 centering source plus the MCD251 C2PIX contract
+show that X=8 means framebuffer X=16, not X=32. Repeated same-geometry sequence
+headers must preserve delayed/reference pictures: a real stream with 22 headers
+and one sequence end otherwise loses exactly 21 displayed pictures and can show
+transient reference-block corruption.
+Long-run A/V-drift, stream switching, pause/continue, repeated transitions,
+and the cake-puzzle edge case remain explicit regressions.
 
 ## Compatibility roadmap derived from the archive
 
@@ -224,7 +295,8 @@ The next compatibility investigations should route through these sources:
    half-line/interlaced scheduling and the remaining ICA entry-address cleanup.
 3. `docs/mcd221tsrev0.pdf`, TN 069, TN 079 and the CDIC-facing driver behavior
    for a separately timed, machine-profiled audio transfer/playback FIFO.
-4. TN 088 and the Digital Video service material only when the base Mono-I
-   timing path is stable enough to begin FMV work.
+4. FMVDemo/FPD805 source plus TN 098 for VMPEG pause/continue, independent
+   completion and repeated-play regressions; TN 101/102/103/105 for stream
+   switching and seamless-branch edge cases.
 5. `techdocs/cdi605_techdoc.pdf` and `cdi615_techdoc.pdf` when adding later
    boards, keeping Mono-I assumptions out of common device code.

@@ -9,4 +9,4 @@ pub mod module;
 pub mod rules;
 
 pub use module::{scan_modules, Module, ModuleType};
-pub use rules::{identify_board, identify_rom, BoardType, RomType};
+pub use rules::{identify_board, identify_dvc_rom, identify_rom, BoardType, DvcRomType, RomType};

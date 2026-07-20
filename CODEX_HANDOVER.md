@@ -1,9 +1,122 @@
-# Handover: CD-i Emulator (Rust) — state as of 2026-07-19
+# Handover: E-Di: Emulator Disc Interactive (Rust) — state as of 2026-07-19
 
 You are picking up an open-source Philips CD-i emulator, written in Rust, at
 `/Volumes/Projects/Coding/cdi_emulator`. Read `docs/PLAN.md` first — it is the
 approved architecture plan (crate layout, timing model, milestones, acceptance
 criteria). This file tells you what is already done and what to do next.
+
+## M3 update: VMPEG reaches The 7th Guest gameplay
+
+Root `AGENTS.md` defines the current mandatory read order and verification
+commands. For M3 details, source provenance, exact firmware hashes, and the
+live checklist, use `docs/mpeg-dvc-plan.md`; the M1/M2 sections below remain
+historical context.
+
+The optional 22ER9141 VMPEG cartridge is now attached to the Mono-I/CD-i 220
+model with its extension/decode RAM, firmware map, MCD251/FMA/VCD registers,
+IRQ5, and SCC68070 DMA channel 1. MPEG-1 systems/PES, safe-Rust MPEG-1 video,
+and Layer-II audio decoding feed the MCD212 external plane and the existing
+44.1 kHz audio mix. CLI `--dvc-rom` and frontend Settings insertion/removal
+support are present; IMPEG is recognized but deliberately deferred to M4.
+
+The supported `cdi220b.rom`, `cdi220.rom`, `cdi200.rom`, and `vmpega.rom`
+images are versioned in `firmware/`.
+The frontend uses the bundled CD-i 220 F2 and VMPEG images by default.
+Settings presents explicit Insert/Remove DVC Cartridge and PAL/NTSC controls
+and retains the disc across the required reset. macOS captured input also
+keeps cursor lock asserted, normalizes the hidden host cursor at capture, and
+uses native NSEvent deltas as logical points so available CD-i pointer travel
+does not depend on the original click position.
+
+A 1.1-billion-instruction The 7th Guest run reached the interactive
+mansion staircase after five VMPEG plays: 2,106 frames presented, 6,319,645
+audio sample frames produced, and independent video/audio program ends 3/1.
+Cumulative counters now correctly retain five rejected video pictures across
+transport resets (demux/audio errors remain zero); the previous zero described
+only the final reset segment. After the interlace/range corrections the final
+raw framebuffer hash is
+`635ef72607c16f75c892e30f59ebca2e8e26d330da9f6cea9a6a643eef1b839e`.
+The repeatable opt-in command is `scripts/test-vmpeg-local.sh`, using the three
+environment variables documented in `docs/mpeg-dvc-plan.md`.
+
+The 7th Guest's MPEG pictures are authored at 368x176. Native `fmvdrv` writes
+X=8, Y=52, W=368, H=176: the vertical letterbox is authored, while X=8 centers
+the 736-pixel output at framebuffer X=16. The MCD251 C2PIX documentation and
+FPD805 `fmav_center_image()` confirm that one X-display unit becomes two 30 MHz
+framebuffer pixels; an old x4 conversion shifted every clip right.
+
+Later Philips-logo evidence from The 7th Guest and Mutant Rampage showed that
+uneven framing can correct itself inside one clip, so it is a live display
+mode/field transition rather than two separately authored bumpers. MCD212 now
+duplicates rows only in noninterlace and weaves PA odd/even fields into
+alternating framebuffer rows in interlace. PAL Standard's 20-line border rule
+is gated to noninterlace, matching the datasheet. Internal digital black/white
+remain 16/235 through base/VMPEG mixing; the frontend and CLI PNG path expand
+once to desktop 0/255. This addresses the 50 Hz bump and gray blacks without
+double-expanding MPEG video.
+
+The 7th Guest's animated hand is the MCD212 hardware cursor
+(`CURCNT=$08000F` at the staircase), not an MPEG or base-plane sprite. It is
+now excluded from the retained odd/even base fields and composited as a live
+overlay across both host rows after field weaving. This preserves true
+interlace for the scene in the renderer, but the user still observed the
+finger combing after this change. Treat that as an unresolved, low-priority
+cursor/display-timing issue rather than claiming the visible defect fixed.
+
+MAME issue #1170's `cdi_loader` lead was also followed through. The title's
+entry at `$27FCE4` does not probe a DVC register directly: it searches
+`/nvr/csd` for decimal descriptor IDs 91 and 90, forks `cdi_t7g` only when
+both exist, and otherwise forks `cdi_nodv`. The attached commercial module
+was studied only in a temporary directory and is not tracked or fetched.
+This validates firmware/CSD enumeration but adds no VMPEG transport or decoder
+register information; full notes and its hash are in `docs/mpeg-dvc-plan.md`.
+
+The MPEG decoder must also retain its delayed/reference frames across repeated
+same-geometry sequence headers. A real 79-second stream has 22 sequence headers
+but only one sequence end: resetting at every header dropped 21 pictures and
+caused transient reference corruption. The corrected decoder produces all
+1,982 pictures from that stream, matching FFmpeg's count with zero errors.
+
+Rare residual 7th Guest macroblocks are now isolated from decoder arithmetic.
+CLI `--dump-vmpeg-es PATH` captures the current play without host I/O in the
+deterministic core. A 700-million-instruction run matches a contiguous disc
+extraction for its first 1,017,394 elementary bytes, then follows the title's
+branched CDIC read order and reports two rejected B pictures in sequence/GOP
+4; the complete five-play run accumulates five. Error totals now survive
+transport resets instead of being overwritten by the final play. Continue by
+mapping that branch boundary against Philips
+seamless-branch behavior and reference-picture rules, not by postprocessing
+the visible blocks.
+
+The compatibility fix came from Philips source embedded in the local FMVDemo,
+FPD804, and FPD805 developer discs plus TN 098. `/mv` and `/ma` have separate
+PCL chains, parser state, EOI/completion signals, and abort paths; a video
+program-end must not finish audio. PTS-less packets retain the last timestamp,
+SCR/PTS arithmetic wraps at 33 bits, and each decoder uses a stable play-clock
+anchor. Clearing CDIC DBUF bit 14 stops sector delivery; a discarded
+event-only scan heuristic contradicted that behavior and stalled the title.
+
+The Naked Gun 2 1/2 exposed a separate native-driver release contract. Its
+copyright sequence is a two-frame MPEG still followed by MPEG audio; after
+stopping both decoders, the VMPEG ROM release path at `$E529F8` polls FMV ISR
+for VSYNC. FMV ISR bit `$0800` must therefore latch at every MCD212 frame
+boundary even while FMV IER masks its external IRQ. The bit remains readable
+and read-clear. Wiring this status event to the real MCD212 frame transition
+eliminates the black-screen poll loop and reaches the Disc 1 chapter menu in a
+500-million-instruction headless run. A focused unit test covers masked status,
+IRQ gating, and read-clear behavior.
+
+NTSC player timing is now selectable in the CLI and frontend. This fixes BMB
+Karaoke 1: the Japanese title renders correctly at 60 Hz; the earlier
+scrambled base planes were caused by forcing PAL/50 Hz, while its separately
+composited MCD212 cursor remained clean.
+
+Next work is seamless-branch B-picture recovery, then compatibility hardening:
+quantitative long-run A/V drift,
+pause/continue, stream switching, repeated transitions, dimension changes,
+underflow recovery, and the known 7th Guest cake-puzzle edge case. Do not
+commit game discs/private references, and ask the user before creating a
+commit.
 
 ## ⭐ M1 CORE ACHIEVED: the player shell renders
 
@@ -95,10 +208,31 @@ parity are modeled as one timing change.
 Audio scheduling has one new Green-Book/TN-driven correction. Memory sound
 maps now retain priority over incoming real-time-file ADPCM instead of being
 canceled by the next disc-audio sector, and starting a sound map aborts CD-DA.
-Focused CDIC tests cover both. Sound-map completion is still too coarse: TN 069
-and TN 079 say it reports RAM-to-audio-processor transfer rather than audible
-completion, so a later change must split transfer and playback cursors and give
-each machine profile an internal buffer depth.
+Focused CDIC tests cover both. Earth Command exposed a second sound-map bug:
+after starting at Z-buffer `$2800`, the two halves `$2800/$3200` both contained
+coding `$04`, but CDIC only raised completion on a `$FF` terminator. CD-RTOS
+therefore never learned that a half was free and the same sound looped forever.
+CDIC now raises the audio-buffer completion IRQ after every consumed half, as
+MAME's low-level behavior and TN 069/079's transfer semantics require. A
+headless Earth Command trace then refilled the halves, wrote `$FF` to `$3200`,
+and ended normally. A focused regression locks this down; it should also fix
+Alien Gate gunshots. Audible completion remains coarser than real hardware, so
+a later change must still split transfer and playback cursors and model buffer
+depth per machine.
+
+The SCC68070 timing placeholder was also a real compatibility defect behind
+CD Shoot's extremely fast flag and skeet animation. Nearly every instruction
+previously cost four clocks and all normal bus accesses cost zero. Philips
+SCC68070 April 1993 section 6.2 instead specifies a seven-clock minimum,
+four-clock bus transfers, effective-address internal costs, 13/14-clock
+branches, `13 + 3n` shifts, 76-clock multiply, 130/169-clock division, and
+55/65-clock exception/interrupt paths. The core now accounts for those tables,
+including MOVE/MOVEM, immediate/bit/control/BCD cases and bus wait states.
+Spot tests lock representative table values; the Harte semantic corpus remains
+cycle-agnostic and must still report 118,187/0. CD Shoot reaches its language
+screen headlessly with the new timing. Have the user judge flag/skeet cadence
+and sound behavior in the frontend before considering the compatibility issue
+closed.
 
 Both title regressions still boot after the first-LCT timing correction
 (350,000,000 instructions, scripted shell click). Their expected final frames
@@ -273,7 +407,7 @@ uart-loopback region).
 
 ## Commands
 
-- `cargo test --workspace` — all green, no ROMs needed.
+- `cargo test --workspace` — all green, no external firmware needed.
 - `scripts/fetch-harte.sh` then
   `cargo test -p cdi-scc68070 --test harte --release -- --nocapture`
   — CPU conformance (vectors land in gitignored `tests-data/harte-68000/`).
@@ -282,12 +416,14 @@ uart-loopback region).
 - Git: repo initialized, everything staged, **no initial commit yet** — ask
   the user before committing.
 
-## Resources on disk (never commit ROMs/discs/references)
+## Resources on disk
 
-- `roms/` (gitignored): cdi200.rom / cdi220.rom / cdi220b.rom (Mono-I,
-  byte-identical to MAME's cdimono1 set — trace-diff against MAME needs no ROM
-  juggling), cdimono2/cdi910/cdi490a zips (490a contains MPEG DVC ROMs),
-  SLAVE/SERVO MC68HC705C8A dumps.
+- `firmware/` (tracked): supported Mono-I `cdi200.rom`, `cdi220.rom`, and
+  `cdi220b.rom` system firmware plus the supported VMPEG `vmpega.rom` image.
+
+- `roms/` (gitignored scratch area): additional unsupported model firmware,
+  archives, and SLAVE/SERVO dumps. Promote only firmware useful to an
+  implemented device/model into tracked `firmware/`.
 - `references/cdiemu-v053b9/` (gitignored): CD-i Emulator binary dist by
   "CD-i Fan". `sys/*.brd` + `sys/*.mdl` are the hardware ground truth
   (memory maps, slave versions); `cditypes.rul` is LGPL (attribution already
@@ -311,7 +447,9 @@ uart-loopback region).
   the source file (cdi.cpp, cdicdic.cpp, cdislavehle.cpp, mcd212.cpp,
   scc68070.cpp — Ryan Holtz et al.) and keep NOTICE.md current.
 - CeDImu (github.com/Stovent/CeDImu) has NO license: study-only, never copy.
-- Never commit ROMs, disc images, or excerpts (synthetic test fixtures only).
+- Supported system/DVC firmware may be incorporated in `firmware/`. Never
+  commit game disc images or excerpts from commercial titles (synthetic test
+  fixtures only).
 
 ## Next: Milestone M1 — boot cdi220b.rom to the animated player shell
 

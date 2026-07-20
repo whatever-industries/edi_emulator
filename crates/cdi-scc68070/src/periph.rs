@@ -102,6 +102,7 @@ impl Peripherals {
         self.ucr = 0;
         self.tx_fifo.clear();
         self.rx_queue.clear();
+        self.dma_regs.fill(0);
     }
 
     /// Assert/negate the INT1 pin (MCD212 on Mono-I): latches into LIR.
@@ -144,6 +145,53 @@ impl Peripherals {
         self.dma_regs[0x05]
     }
 
+    // The SCC68070 calls the external request used by VMPEG DMAREQ2, while
+    // its programming model exposes it as the second register block at
+    // $80004040. Keep the API named `dma1` to match the zero-based register
+    // block numbering used elsewhere in this core.
+
+    pub fn dma1_memory_address(&self) -> u32 {
+        u32::from_be_bytes(self.dma_regs[0x4C..0x50].try_into().unwrap())
+    }
+
+    pub fn dma1_transfer_count(&self) -> u16 {
+        u16::from_be_bytes(self.dma_regs[0x4A..0x4C].try_into().unwrap())
+    }
+
+    pub fn dma1_operation_control(&self) -> u8 {
+        self.dma_regs[0x45]
+    }
+
+    pub fn dma1_active(&self) -> bool {
+        self.dma_regs[0x47] & 0x80 != 0 && self.dma1_transfer_count() != 0
+    }
+
+    /// Complete one 16-bit channel-1 transfer and advance its counters.
+    pub fn advance_dma1_word(&mut self) {
+        let address = self.dma1_memory_address().wrapping_add(2);
+        self.dma_regs[0x4C..0x50].copy_from_slice(&address.to_be_bytes());
+        let remaining = self.dma1_transfer_count().saturating_sub(1);
+        self.dma_regs[0x4A..0x4C].copy_from_slice(&remaining.to_be_bytes());
+        if remaining == 0 {
+            self.complete_dma1();
+        }
+    }
+
+    pub fn complete_dma1(&mut self) {
+        self.dma_regs[0x47] &= 0x7F;
+        self.dma_regs[0x40] |= 0x80;
+    }
+
+    fn dma_interrupt_level(&self, base: usize) -> u8 {
+        let status = self.dma_regs[base];
+        let control = self.dma_regs[base + 7];
+        if status & 0x80 != 0 && control & 0x08 != 0 {
+            control & 7
+        } else {
+            0
+        }
+    }
+
     /// Highest pending interrupt level (0 = none).
     pub fn pending_ipl(&self) -> u8 {
         let external = if self.nmi_line {
@@ -174,12 +222,16 @@ impl Peripherals {
             0
         };
         let uart_tx = if self.uart_tx_int { self.picr2 & 7 } else { 0 };
+        let dma0 = self.dma_interrupt_level(0x00);
+        let dma1 = self.dma_interrupt_level(0x40);
         external
             .max(int1)
             .max(int2)
             .max(timer)
             .max(uart_rx)
             .max(uart_tx)
+            .max(dma0)
+            .max(dma1)
     }
 
     /// Interrupt acknowledge for `level`: clears the matching latched
@@ -194,6 +246,13 @@ impl Peripherals {
             4 if self.in4_line => return 24 + 4,
             2 if self.in2_line => return 24 + 2,
             _ => {}
+        }
+        // DMA channels use 68000 autovectors and remain asserted until the
+        // channel's COC status bit is cleared by software.
+        if level != 0
+            && (level == self.dma_interrupt_level(0x00) || level == self.dma_interrupt_level(0x40))
+        {
+            return 24 + level;
         }
         if self.lir & 0x80 != 0 && level == (self.lir >> 4) & 7 {
             self.lir &= 0x7F;
@@ -337,11 +396,20 @@ impl Peripherals {
             // Channel-control SO (bit 7) completes the skeleton DMA
             // operation synchronously and raises COC in the status byte,
             // matching the SCC68070 model used by the CD-i BIOS.
-            0x4007 | 0x4047 => {
+            0x4007 => {
                 let index = (offset - 0x4000) as usize;
                 self.dma_regs[index] = val & 0x7F;
                 if val & 0x80 != 0 {
                     self.dma_regs[index - 7] |= 0x80;
+                }
+            }
+            // Channel 1 is handshake-paced by the optional VMPEG device.
+            // Preserve SO until MachineBus has transferred every requested
+            // word, then `complete_dma1` raises COC in the status byte.
+            0x4047 => {
+                self.dma_regs[0x47] = val;
+                if val & 0x80 != 0 && self.dma1_transfer_count() == 0 {
+                    self.complete_dma1();
                 }
             }
             0x4000..=0x406F => self.dma_regs[(offset - 0x4000) as usize] = val,
@@ -374,6 +442,53 @@ mod tests {
         assert_eq!(p.pending_ipl(), 0);
         // Counter reloaded.
         assert_eq!(p.read8(0x2024), 0xFF);
+    }
+
+    #[test]
+    fn dma1_waits_for_external_handshake_and_counts_words() {
+        let mut p = Peripherals::new();
+        for (offset, value) in [
+            (0x404A, 0x00),
+            (0x404B, 0x02),
+            (0x404C, 0x00),
+            (0x404D, 0x00),
+            (0x404E, 0x30),
+            (0x404F, 0x00),
+        ] {
+            p.write8(offset, value);
+        }
+        p.write8(0x4047, 0x80);
+        assert!(p.dma1_active());
+        assert_eq!(p.read8(0x4040) & 0x80, 0);
+
+        p.advance_dma1_word();
+        assert_eq!(p.dma1_memory_address(), 0x3002);
+        assert_eq!(p.dma1_transfer_count(), 1);
+        assert!(p.dma1_active());
+
+        p.advance_dma1_word();
+        assert_eq!(p.dma1_memory_address(), 0x3004);
+        assert_eq!(p.dma1_transfer_count(), 0);
+        assert!(!p.dma1_active());
+        assert_eq!(p.read8(0x4040) & 0x80, 0x80);
+        p.write8(0x4040, 0x80);
+        assert_eq!(p.read8(0x4040) & 0x80, 0);
+    }
+
+    #[test]
+    fn dma_completion_interrupt_is_autovectored_until_coc_is_cleared() {
+        let mut p = Peripherals::new();
+        p.write8(0x404A, 0);
+        p.write8(0x404B, 1);
+        p.write8(0x4047, 0x80 | 0x08 | 5);
+        p.advance_dma1_word();
+
+        assert_eq!(p.pending_ipl(), 5);
+        assert_eq!(p.iack(5), 29);
+        assert_eq!(p.pending_ipl(), 5);
+
+        p.write8(0x4040, 0x80);
+        assert_eq!(p.pending_ipl(), 0);
     }
 
     #[test]

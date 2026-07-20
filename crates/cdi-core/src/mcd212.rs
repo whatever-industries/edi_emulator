@@ -12,6 +12,8 @@
 
 use std::sync::OnceLock;
 
+use crate::dvc::ExternalVideo;
+
 /// CSR1R status bits.
 pub const CSR1R_DA: u8 = 0x80; // Display Active
 pub const CSR1R_PA: u8 = 0x20; // Parity (odd/even field)
@@ -84,13 +86,33 @@ pub struct Mcd212 {
     /// Frames completed (diagnostics).
     pub frame_count: u64,
 
-    /// Output framebuffer, `FB_WIDTH` × `FB_HEIGHT` 0RGB pixels.
+    /// Output framebuffer, `FB_WIDTH` × `FB_HEIGHT` 0RGB pixels. The hardware
+    /// cursor is composited here after both display fields have been woven so
+    /// an animated cursor does not contain pixels from two different moments.
     #[cfg_attr(feature = "savestate", serde(skip, default = "default_fb"))]
     framebuffer: Vec<u32>,
+    /// Woven base-video fields before the hardware cursor is overlaid.
+    #[cfg_attr(feature = "savestate", serde(skip, default = "default_fb"))]
+    field_framebuffer: Vec<u32>,
 }
 
 pub const FB_WIDTH: usize = 768;
 pub const FB_HEIGHT: usize = 560;
+
+/// Expand one CD-i/CCIR-601 internal RGB pixel for presentation on a desktop
+/// display. The MCD212 performs its pixel pipeline with nominal black at 16
+/// and white at 235; keep that range internally so mattes and external-video
+/// mixing remain hardware-faithful, and expand only at the output boundary.
+pub fn presentation_rgb(pixel: u32) -> u32 {
+    fn component(value: u32) -> u32 {
+        let studio = value.clamp(16, 235) - 16;
+        (studio * 255 + 109) / 219
+    }
+
+    (component((pixel >> 16) & 0xFF) << 16)
+        | (component((pixel >> 8) & 0xFF) << 8)
+        | component(pixel & 0xFF)
+}
 
 #[cfg(feature = "savestate")]
 fn default_fb() -> Vec<u32> {
@@ -264,6 +286,7 @@ impl Mcd212 {
             int_asserted: false,
             frame_count: 0,
             framebuffer: vec![0; FB_WIDTH * FB_HEIGHT],
+            field_framebuffer: vec![0; FB_WIDTH * FB_HEIGHT],
         }
     }
 
@@ -287,7 +310,7 @@ impl Mcd212 {
         self.int_asserted
     }
 
-    fn get_dcp(&self, path: usize) -> u32 {
+    pub fn get_dcp(&self, path: usize) -> u32 {
         ((u32::from(self.ddr[path]) & 0x3F) << 16) | u32::from(self.dcp[path])
     }
 
@@ -459,10 +482,10 @@ impl Mcd212 {
         ((self.image_coding_method >> (path * 8)) & 0xF) as u8
     }
 
-    fn backdrop(&self) -> u32 {
+    fn backdrop(&self, external: Option<u32>) -> u32 {
         const ICM_EV: u32 = 0x04_0000;
         if self.image_coding_method & ICM_EV != 0 {
-            0 // external video: black without a DVC
+            external.unwrap_or(0)
         } else {
             COLOR_4BPP[self.backdrop_color as usize]
         }
@@ -715,9 +738,13 @@ impl Mcd212 {
         plane_b: &[u32],
         transparent_b: &[bool],
         out: &mut [u32],
+        active_line: usize,
+        external: Option<ExternalVideo<'_>>,
     ) {
+        const ICM_EV: u32 = 0x04_0000;
         let width = self.screen_width();
         let border = self.border_width();
+        let external_selected = self.image_coding_method & ICM_EV != 0;
         let order_ab = self.plane_order & 1 == 0;
         let mosaic_a = self.mosaic_hold[0] & 0x80_0000 != 0;
         let mosaic_b = self.mosaic_hold[1] & 0x80_0000 != 0;
@@ -735,8 +762,10 @@ impl Mcd212 {
         }
         let out_line = &mut out[border..];
         for x in 0..width {
+            let external_color = external.map(|video| video.pixel(x + border, active_line));
+            let backdrop = self.backdrop(external_color);
             if transparent_a[x] && transparent_b[x] {
-                out_line[x] = self.backdrop();
+                out_line[x] = backdrop;
                 continue;
             }
             let mut a = if mosaic_a && mosaic_count_a != 0 {
@@ -750,15 +779,21 @@ impl Mcd212 {
                 plane_b[x]
             };
 
+            let mut weight_a = self.weight_factor[0][x];
+            let mut weight_b = self.weight_factor[1][x];
             if transparent_a[x] {
                 a = 0;
+                weight_a = 0;
             } else if order_ab && self.transparency_control & TCR_DISABLE_MX != 0 {
                 b = 0;
+                weight_b = 0;
             }
             if transparent_b[x] {
                 b = 0;
+                weight_b = 0;
             } else if !order_ab && self.transparency_control & TCR_DISABLE_MX != 0 {
                 a = 0;
+                weight_a = 0;
             }
 
             let weigh = |c: u32, w: u8| -> (i32, i32, i32) {
@@ -769,11 +804,17 @@ impl Mcd212 {
                     f(c as i32 & 0xFF).clamp(0, 255),
                 )
             };
-            let (ar, ag, ab) = weigh(a, self.weight_factor[0][x]);
-            let (br, bg, bb) = weigh(b, self.weight_factor[1][x]);
-            let r = (ar + br + 16).clamp(0, 255) as u32;
-            let g = (ag + bg + 16).clamp(0, 255) as u32;
-            let bl = (ab + bb + 16).clamp(0, 255) as u32;
+            let (ar, ag, ab) = weigh(a, weight_a);
+            let (br, bg, bb) = weigh(b, weight_b);
+            let external_weight = if external_selected {
+                64u8.saturating_sub(weight_a.saturating_add(weight_b))
+            } else {
+                0
+            };
+            let (er, eg, eb) = weigh(backdrop, external_weight);
+            let r = (ar + br + er + 16).clamp(0, 255) as u32;
+            let g = (ag + bg + eg + 16).clamp(0, 255) as u32;
+            let bl = (ab + bb + eb + 16).clamp(0, 255) as u32;
             out_line[x] = (r << 16) | (g << 8) | bl;
         }
         for px in out[border + width..FB_WIDTH.min(border + width + border)].iter_mut() {
@@ -818,22 +859,83 @@ impl Mcd212 {
         }
     }
 
-    /// Render the current line into the framebuffer (both field rows).
-    fn render_line(&mut self, planea: &[u8], planeb: &[u8]) {
-        let (ica_height, total_height) = geometry(self.pal);
-        let scanline = self.line;
-        let row = ((scanline - ica_height) * 2) as usize;
-        if row + 1 >= FB_HEIGHT {
+    /// Publish the completed field pair and draw the current hardware cursor
+    /// over both host rows. Base video remains field-woven, but the cursor is
+    /// a live MCD212 overlay; leaving it baked into alternating fields makes
+    /// animated cursor patterns visibly comb between their old and new shapes.
+    fn compose_framebuffer(&mut self) {
+        self.framebuffer.copy_from_slice(&self.field_framebuffer);
+        if self.cursor_control & CURCNT_EN == 0 {
             return;
         }
 
-        // PAL 'Standard' mode: 20-line top/bottom borders.
-        if self.dcr[0] & DCR_FD == 0
+        let (ica_height, total_height) = geometry(self.pal);
+        let cursor_y = ((self.cursor_position >> 12) & 0x3FF) + ica_height;
+        let border = self.border_width();
+        let mut line = [0u32; FB_WIDTH];
+        for pattern_y in 0..16u32 {
+            let scanline = cursor_y + pattern_y;
+            if !(ica_height..total_height).contains(&scanline) {
+                continue;
+            }
+            let first_row = ((scanline - ica_height) as usize) * 2;
+            for row in [first_row, first_row + 1] {
+                let start = row * FB_WIDTH;
+                line.copy_from_slice(&self.framebuffer[start..start + FB_WIDTH]);
+                self.draw_cursor(&mut line[border..], scanline);
+                self.framebuffer[start..start + FB_WIDTH].copy_from_slice(&line);
+            }
+        }
+    }
+
+    /// Return the destination row(s) for one active source line. In
+    /// non-interlaced mode one field is a complete picture and is doubled for
+    /// the progressive host framebuffer. In interlaced mode consecutive
+    /// fields supply alternating rows and the other field must be retained.
+    fn output_rows(&self, active_line: usize) -> (usize, Option<usize>) {
+        let first = active_line * 2;
+        if self.dcr[0] & DCR_SM != 0 {
+            // PA=1 is the odd field (lines 1,3,5...), which maps to zero-based
+            // even rows. PA=0 is the even field (lines 2,4,6...).
+            (first + usize::from(self.csrr[0] & CSR1R_PA == 0), None)
+        } else {
+            (first, Some(first + 1))
+        }
+    }
+
+    /// Whether this physical active line consumes bitmap data and a DCA
+    /// control slot. PAL Standard mode masks 20 lines at both ends of the
+    /// 280-line raster, leaving a 240-line display file (MCD212 section 5.6).
+    fn display_file_line(&self, scanline: u32) -> bool {
+        let (ica_height, total_height) = geometry(self.pal);
+        if !(ica_height..total_height).contains(&scanline) {
+            return false;
+        }
+        !(self.dcr[0] & DCR_SM == 0
+            && self.dcr[0] & DCR_FD == 0
             && self.csrw[0] & 0x0002 != 0
-            && (scanline - ica_height < 20 || scanline >= total_height - 20)
-        {
+            && (scanline - ica_height < 20 || scanline >= total_height - 20))
+    }
+
+    /// Render the current field line into the progressive host framebuffer.
+    fn render_line(&mut self, planea: &[u8], planeb: &[u8], external: Option<ExternalVideo<'_>>) {
+        let (ica_height, _) = geometry(self.pal);
+        let scanline = self.line;
+        let active_line = (scanline - ica_height) as usize;
+        let (row, duplicate_row) = self.output_rows(active_line);
+        if row >= FB_HEIGHT {
+            return;
+        }
+
+        // PAL 'Standard' mode: 20-line top/bottom borders. FD and ST define
+        // the non-interlaced standard format; they do not crop interlace.
+        if !self.display_file_line(scanline) {
             let start = row * FB_WIDTH;
-            self.framebuffer[start..start + FB_WIDTH * 2].fill(COLOR_4BPP[0]);
+            self.field_framebuffer[start..start + FB_WIDTH].fill(COLOR_4BPP[0]);
+            if let Some(other) = duplicate_row {
+                let start = other * FB_WIDTH;
+                self.field_framebuffer[start..start + FB_WIDTH].fill(COLOR_4BPP[0]);
+            }
             return;
         }
 
@@ -845,12 +947,21 @@ impl Mcd212 {
         self.process_vsr(1, planeb, planea, &mut plane_b, &mut tb);
 
         let mut line = [0u32; FB_WIDTH];
-        self.mix_line(&plane_a, &ta, &plane_b, &tb, &mut line);
-        self.draw_cursor(&mut line[self.border_width()..], scanline);
-
+        self.mix_line(
+            &plane_a,
+            &ta,
+            &plane_b,
+            &tb,
+            &mut line,
+            active_line,
+            external,
+        );
         let start = row * FB_WIDTH;
-        self.framebuffer[start..start + FB_WIDTH].copy_from_slice(&line);
-        self.framebuffer[start + FB_WIDTH..start + FB_WIDTH * 2].copy_from_slice(&line);
+        self.field_framebuffer[start..start + FB_WIDTH].copy_from_slice(&line);
+        if let Some(other) = duplicate_row {
+            let start = other * FB_WIDTH;
+            self.field_framebuffer[start..start + FB_WIDTH].copy_from_slice(&line);
+        }
     }
 
     fn plane_word(plane: &[u8], word_addr: u32) -> u32 {
@@ -931,6 +1042,18 @@ impl Mcd212 {
 
     /// Advance by `cycles` CPU cycles; runs per-line and per-frame work.
     pub fn tick(&mut self, cycles: u64, planea: &[u8], planeb: &[u8]) {
+        self.tick_with_external(cycles, planea, planeb, None);
+    }
+
+    /// Advance the display while sampling the optional Digital Video
+    /// Cartridge plane behind the two base-case graphics planes.
+    pub(crate) fn tick_with_external(
+        &mut self,
+        cycles: u64,
+        planea: &[u8],
+        planeb: &[u8],
+        external: Option<ExternalVideo<'_>>,
+    ) {
         let (ica_height, total_height) = geometry(self.pal);
         self.line_accum += cycles;
         let per_line = cycles_per_line(self.pal);
@@ -979,20 +1102,24 @@ impl Mcd212 {
                 // Active display region.
                 self.csrr[0] |= CSR1R_DA;
                 if self.dcr[0] & DCR_DE != 0 {
-                    self.render_line(planea, planeb);
+                    self.render_line(planea, planeb, external);
                 }
-                // The first DCA slot was fetched after ICA. Fetch the next
-                // slot after each visible line except the final one so the
-                // frame still consumes exactly one slot per displayed line.
-                if self.line + 1 < total_height && self.dca_enabled(0) {
+                // The first DCA slot was fetched after ICA. PAL Standard's
+                // masked top/bottom lines do not consume display-file data or
+                // DCA slots; hold the first slot through the top mask and
+                // fetch successors only between its 240 content lines.
+                let advance_dca =
+                    self.display_file_line(self.line) && self.display_file_line(self.line + 1);
+                if advance_dca && self.dca_enabled(0) {
                     self.process_dca(0, planea);
                 }
-                if self.line + 1 < total_height && self.dca_enabled(1) {
+                if advance_dca && self.dca_enabled(1) {
                     self.process_dca(1, planeb);
                 }
             }
 
             if self.line == total_height - 1 {
+                self.compose_framebuffer();
                 self.csrr[0] ^= CSR1R_PA;
             }
         }
@@ -1096,6 +1223,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn presentation_expands_ccir_levels_once() {
+        assert_eq!(presentation_rgb(0x0010_1010), 0x0000_0000);
+        assert_eq!(presentation_rgb(0x00EB_EBEB), 0x00FF_FFFF);
+        assert_eq!(presentation_rgb(0x0000_10FF), 0x0000_00FF);
+        assert_eq!(presentation_rgb(0x007E_7E7E), 0x0080_8080);
+    }
+
+    #[test]
+    fn output_rows_duplicate_progressive_and_weave_interlace() {
+        let mut m = Mcd212::new(true);
+        assert_eq!(m.output_rows(7), (14, Some(15)));
+
+        m.dcr[0] |= DCR_SM;
+        m.csrr[0] |= CSR1R_PA;
+        assert_eq!(m.output_rows(7), (14, None), "odd field supplies odd lines");
+        m.csrr[0] &= !CSR1R_PA;
+        assert_eq!(
+            m.output_rows(7),
+            (15, None),
+            "even field supplies even lines"
+        );
+    }
+
+    #[test]
+    fn animated_hardware_cursor_is_overlaid_after_field_weave() {
+        let mut m = Mcd212::new(true);
+        let background = 0x0012_3456;
+        m.field_framebuffer.fill(background);
+        m.cursor_position = 5 << 12;
+        m.cursor_control = CURCNT_EN | 15;
+        m.cursor_pattern[0] = 0x8000;
+
+        m.compose_framebuffer();
+        let border = m.border_width();
+        let first_row = 5 * 2;
+        assert_eq!(m.framebuffer[first_row * FB_WIDTH + border], COLOR_4BPP[15]);
+        assert_eq!(
+            m.framebuffer[(first_row + 1) * FB_WIDTH + border],
+            COLOR_4BPP[15],
+            "the current cursor shape is applied to both field rows"
+        );
+
+        m.cursor_position = (5 << 12) | 4;
+        m.compose_framebuffer();
+        assert_eq!(
+            m.framebuffer[first_row * FB_WIDTH + border],
+            background,
+            "the previous field must not retain the old cursor shape"
+        );
+        assert_eq!(
+            m.framebuffer[first_row * FB_WIDTH + border + 4],
+            COLOR_4BPP[15]
+        );
+    }
+
+    #[test]
     fn plane_b_clut_register_selects_only_banks_two_and_three() {
         let mut m = Mcd212::new(true);
 
@@ -1165,6 +1348,38 @@ mod tests {
         // consume exactly 280 64-byte slots, not an extra slot at frame end.
         m.tick(cycles_per_line(true) * 311, &plane, &plane);
         assert_eq!(m.dca[0], 280 * 64);
+    }
+
+    #[test]
+    fn pal_standard_masks_do_not_consume_dca_slots() {
+        let mut m = Mcd212::new(true);
+        let mut plane = vec![0u8; 0x80000];
+        const DCP: usize = 0x1000;
+
+        // Field program: link the DCA table and stop.
+        plane[0x400..0x404].copy_from_slice(&[0x30, 0x00, 0x10, 0x00]);
+        // Exactly 240 valid line-control slots, all NOPs.
+        for slot in 0..240 {
+            for command in 0..16 {
+                plane[DCP + slot * 64 + command * 4] = 0x10;
+            }
+        }
+        // If either 20-line mask consumes slots, this bitmap data would be
+        // misexecuted as a control command and alter the backdrop.
+        plane[DCP + 240 * 64..DCP + 240 * 64 + 4].copy_from_slice(&[0xD8, 0, 0, 5]);
+
+        m.dcr[0] = DCR_DE | DCR_CF | DCR_ICA | DCR_DCA;
+        m.csrw[0] = 0x0002; // PAL Standard: 20 masked lines above and below.
+        m.line = geometry(true).1 - 1;
+        m.tick(cycles_per_line(true), &plane, &plane); // ICA + first DCA slot.
+        m.tick(
+            cycles_per_line(true) * u64::from(geometry(true).1 - 1),
+            &plane,
+            &plane,
+        );
+
+        assert_eq!(m.dca[0], (DCP + 240 * 64) as u32);
+        assert_eq!(m.backdrop_color, 0);
     }
 
     #[test]

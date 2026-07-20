@@ -13,6 +13,7 @@ use cdi_disc::DiscImage;
 
 use crate::board::{DeviceKind, ModelDef, VideoStandard};
 use crate::cdic::Cdic;
+use crate::dvc::{DvcConfig, DvcKind, DvcStats, Vmpeg};
 use crate::mcd212::Mcd212;
 use crate::slave::SlaveHle;
 
@@ -117,6 +118,8 @@ pub struct MachineBus {
     pub cdic: Cdic,
     /// The loaded disc image, if any.
     pub disc: Option<DiscImage>,
+    /// Optional Digital Video Cartridge. M3 supports the VMPEG variant.
+    pub dvc: Option<Vmpeg>,
 }
 
 impl MachineBus {
@@ -199,6 +202,7 @@ impl MachineBus {
             mcd212: Mcd212::new(model.video == VideoStandard::Pal),
             cdic: Cdic::new(),
             disc: None,
+            dvc: None,
         };
         bus.build_page_table();
         Ok(bus)
@@ -243,6 +247,19 @@ impl MachineBus {
         if let (Some(ram0), true) = (self.ram.first_mut(), self.rom.len() >= 8) {
             ram0[..8].copy_from_slice(&self.rom[..8]);
         }
+        if let Some(dvc) = &mut self.dvc {
+            dvc.reset();
+        }
+    }
+
+    pub fn attach_dvc(&mut self, config: DvcConfig) -> Result<(), String> {
+        self.dvc = Some(Vmpeg::new(config)?);
+        Ok(())
+    }
+
+    pub fn detach_dvc(&mut self) {
+        self.dvc = None;
+        self.periph.in5_line = false;
     }
 
     fn dev_read8(&mut self, slot: DevSlot, addr: u32) -> u8 {
@@ -406,11 +423,48 @@ impl MachineBus {
             .set_dma0_memory_address(start.wrapping_add(count * 2));
     }
 
+    /// Service one handshake-paced word on SCC68070 DMA channel 1
+    /// (external DMAREQ2/DMAACK2) when VMPEG requests it.
+    fn service_dvc_dma(&mut self) {
+        let requested = self.dvc.as_ref().is_some_and(Vmpeg::dma_requested);
+        if !requested || !self.periph.dma1_active() {
+            return;
+        }
+        if self.periph.dma1_operation_control() & 0x80 != 0 {
+            log::warn!("vmpeg: unsupported device-to-memory DMA channel-1 transfer");
+            self.periph.complete_dma1();
+            if let Some(dvc) = &mut self.dvc {
+                dvc.finish_dma();
+            }
+            return;
+        }
+
+        let address = self.periph.dma1_memory_address();
+        let word = u16::from_be_bytes([
+            self.raw_read8(address),
+            self.raw_read8(address.wrapping_add(1)),
+        ]);
+        if let Some(dvc) = &mut self.dvc {
+            dvc.push_dma_word(word);
+        }
+        self.periph.advance_dma1_word();
+        if !self.periph.dma1_active() {
+            if let Some(dvc) = &mut self.dvc {
+                dvc.finish_dma();
+            }
+        }
+    }
+
     fn raw_read8(&mut self, addr: u32) -> u8 {
         if addr >= ONCHIP_BASE {
             return self.dev_read8(DevSlot::OnChip, addr - ONCHIP_BASE);
         }
         let a24 = addr & 0x00FF_FFFF;
+        if let Some(dvc) = &mut self.dvc {
+            if let Some(value) = dvc.read8(a24) {
+                return value;
+            }
+        }
         match self.pages[(a24 >> PAGE_SHIFT) as usize] {
             Page::Ram { block, page_base } => self.ram[block][(page_base + (a24 & 0xFFF)) as usize],
             Page::Rom { page_base } => self.rom[(page_base + (a24 & 0xFFF)) as usize],
@@ -427,6 +481,9 @@ impl MachineBus {
             return self.dev_write8(DevSlot::OnChip, addr - ONCHIP_BASE, val);
         }
         let a24 = addr & 0x00FF_FFFF;
+        if self.dvc.as_mut().is_some_and(|dvc| dvc.write8(a24, val)) {
+            return;
+        }
         match self.pages[(a24 >> PAGE_SHIFT) as usize] {
             Page::Ram { block, page_base } => {
                 self.ram[block][(page_base + (a24 & 0xFFF)) as usize] = val;
@@ -446,12 +503,54 @@ pub struct Machine {
 
 impl Machine {
     pub fn new(model: &ModelDef, rom: Vec<u8>) -> Result<Self, String> {
+        Self::with_dvc(model, rom, None)
+    }
+
+    pub fn with_dvc(
+        model: &ModelDef,
+        rom: Vec<u8>,
+        dvc: Option<DvcConfig>,
+    ) -> Result<Self, String> {
+        let mut bus = MachineBus::new(model, rom)?;
+        if let Some(config) = dvc {
+            bus.attach_dvc(config)?;
+        }
         let mut m = Self {
             cpu: cdi_scc68070::Cpu::new(),
-            bus: MachineBus::new(model, rom)?,
+            bus,
         };
         m.reset();
         Ok(m)
+    }
+
+    /// Attach a DVC and reset the host. The inserted disc is retained.
+    pub fn attach_dvc(&mut self, config: DvcConfig) -> Result<(), String> {
+        self.bus.attach_dvc(config)?;
+        self.reset();
+        Ok(())
+    }
+
+    /// Detach the optional DVC and reset the host, retaining the disc.
+    pub fn detach_dvc(&mut self) {
+        self.bus.detach_dvc();
+        self.reset();
+    }
+
+    pub fn dvc_kind(&self) -> Option<DvcKind> {
+        self.bus.dvc.as_ref().map(|_| DvcKind::Vmpeg)
+    }
+
+    pub fn dvc_stats(&self) -> Option<DvcStats> {
+        self.bus.dvc.as_ref().map(Vmpeg::stats)
+    }
+
+    /// Change the emulated player's PAL/NTSC configuration and perform a
+    /// full reset. The inserted disc and DVC remain attached.
+    pub fn set_video_standard(&mut self, standard: VideoStandard) {
+        let pal = standard == VideoStandard::Pal;
+        self.bus.slave.set_video_standard(pal);
+        self.bus.mcd212.pal = pal;
+        self.reset();
     }
 
     pub fn reset(&mut self) {
@@ -493,11 +592,24 @@ impl Machine {
             bus.cdic.set_attenuation(atten);
         }
         bus.cdic.tick(cycles, bus.disc.as_ref());
+        bus.service_dvc_dma();
+        if let Some(dvc) = &mut bus.dvc {
+            dvc.tick(cycles);
+        }
         let planea = bus.ram.first().map(Vec::as_slice).unwrap_or(&[]);
         let planeb = bus.ram.get(1).map(Vec::as_slice).unwrap_or(planea);
-        bus.mcd212.tick(cycles, planea, planeb);
+        let external = bus.dvc.as_ref().and_then(Vmpeg::external_video);
+        let frame_count = bus.mcd212.frame_count;
+        bus.mcd212
+            .tick_with_external(cycles, planea, planeb, external);
+        if bus.mcd212.frame_count != frame_count {
+            if let Some(dvc) = &mut bus.dvc {
+                dvc.notify_vsync();
+            }
+        }
         bus.periph.in2_line = bus.slave.irq();
         bus.periph.in4_line = bus.cdic.int_line();
+        bus.periph.in5_line = bus.dvc.as_ref().is_some_and(Vmpeg::irq);
         bus.periph.set_int1(bus.mcd212.int_line());
         cycles
     }
@@ -515,7 +627,23 @@ impl Machine {
 
     /// Drain decoded audio (44.1 kHz interleaved stereo).
     pub fn take_audio(&mut self) -> Vec<i16> {
-        std::mem::take(&mut self.bus.cdic.audio_out)
+        let mut mixed = std::mem::take(&mut self.bus.cdic.audio_out);
+        let dvc_audio = self
+            .bus
+            .dvc
+            .as_mut()
+            .map(Vmpeg::take_audio)
+            .unwrap_or_default();
+        if mixed.is_empty() {
+            return dvc_audio;
+        }
+        if mixed.len() < dvc_audio.len() {
+            mixed.resize(dvc_audio.len(), 0);
+        }
+        for (dst, src) in mixed.iter_mut().zip(dvc_audio) {
+            *dst = dst.saturating_add(src);
+        }
+        mixed
     }
 }
 
@@ -546,6 +674,11 @@ impl Bus68k for MachineBus {
         // The CDIC on IN4 supplies its own programmed vector.
         if level == 4 && self.periph.in4_line {
             return self.cdic.intack();
+        }
+        if level == 5 && self.periph.in5_line {
+            if let Some(dvc) = &mut self.dvc {
+                return dvc.intack();
+            }
         }
         self.periph.iack(level)
     }
@@ -632,5 +765,52 @@ mod tests {
         assert_eq!(m.bus.slave.read(3), 0x00);
         assert_eq!(m.bus.slave.read(3), 0x42);
         assert_eq!(m.bus.slave.read(3), 0x15);
+    }
+
+    #[test]
+    fn vmpeg_overlay_maps_rom_and_extension_ram() {
+        let mut m = machine();
+        let mut dvc_rom = vec![0; 128 * 1024];
+        dvc_rom[0] = 0x12;
+        dvc_rom[0x1FFFF] = 0x34;
+        m.attach_dvc(DvcConfig::new(DvcKind::Vmpeg, dvc_rom).unwrap())
+            .unwrap();
+        assert_eq!(m.read8(0x00E4_0000, FnCode::SupervisorData).0, 0x12);
+        assert_eq!(m.read8(0x00E6_0000, FnCode::SupervisorData).0, 0x12);
+        assert_eq!(m.read8(0x00E7_FFFF, FnCode::SupervisorData).0, 0x34);
+        m.write8(0x00D0_1234, 0xA5, FnCode::SupervisorData);
+        assert_eq!(m.read8(0x00D0_1234, FnCode::SupervisorData).0, 0xA5);
+    }
+
+    #[test]
+    fn vmpeg_dma_channel_one_transfers_memory_words() {
+        let mut m = machine();
+        m.attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
+            .unwrap();
+        let packet = [0x00, 0x00, 0x01, 0xE0, 0x00, 0x04, 0x0F, b'a', b'b', b'c'];
+        for (i, byte) in packet.iter().copied().enumerate() {
+            m.raw_write8(0x3000 + i as u32, byte);
+        }
+        for (offset, value) in [
+            (0x404A, 0x00),
+            (0x404B, 0x05),
+            (0x404C, 0x00),
+            (0x404D, 0x00),
+            (0x404E, 0x30),
+            (0x404F, 0x00),
+            (0x4045, 0x12),
+            (0x4047, 0x80),
+        ] {
+            m.periph.write8(offset, value);
+        }
+        m.raw_write8(0xE0_40C0, 0x80);
+        m.raw_write8(0xE0_40C1, 0x00);
+        while m.periph.dma1_active() {
+            m.service_dvc_dma();
+        }
+        let stats = m.dvc.as_ref().unwrap().stats();
+        assert_eq!(stats.dma_words, 5);
+        assert_eq!(stats.video_pes_packets, 1);
+        assert_eq!(m.periph.read8(0x4040) & 0x80, 0x80);
     }
 }

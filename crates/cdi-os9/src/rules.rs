@@ -58,6 +58,30 @@ pub struct RomType {
     pub board: BoardType,
 }
 
+/// Digital Video Cartridge firmware family.
+///
+/// This is deliberately separate from [`RomType`]: DVC firmware is an
+/// optional expansion ROM executed by the player's 68070, not a replacement
+/// player system ROM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DvcRomType {
+    /// MCD251 video decoder plus external DSP56001 audio subsystem.
+    Vmpeg,
+    /// Later integrated MCD270 audio/video decoder.
+    Impeg,
+    Unknown,
+}
+
+impl DvcRomType {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Vmpeg => "VMPEG",
+            Self::Impeg => "IMPEG",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 fn has(mods: &[Module], name: &str) -> bool {
     mods.iter().any(|m| m.name.eq_ignore_ascii_case(name))
 }
@@ -163,6 +187,20 @@ pub fn identify_rom(mods: &[Module]) -> RomType {
     }
 }
 
+/// Identify an optional DVC firmware ROM from its CSD/module signatures.
+///
+/// VMPEG and IMPEG expose mostly identical high-level `/mv` and `/ma`
+/// drivers, so the chipset-specific CSD modules are the reliable boundary.
+pub fn identify_dvc_rom(mods: &[Module]) -> DvcRomType {
+    if has(mods, "csd_fmvvm") || has(mods, "vmpeg") {
+        DvcRomType::Vmpeg
+    } else if has(mods, "csd_fmvimpeg") || (has(mods, "impeg_video") && has(mods, "impeg_audio")) {
+        DvcRomType::Impeg
+    } else {
+        DvcRomType::Unknown
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +247,18 @@ mod tests {
         let mut with_mag = base();
         with_mag.push(m("magnavox", 1));
         assert_eq!(identify_rom(&with_mag).id, "cdi200a");
+    }
+
+    #[test]
+    fn dvc_firmware_is_classified_separately() {
+        assert_eq!(
+            identify_dvc_rom(&[m("csd_fmvvm", 1), m("fmvdrv", 1)]),
+            DvcRomType::Vmpeg
+        );
+        assert_eq!(
+            identify_dvc_rom(&[m("csd_fmvimpeg", 1), m("fmvdrv", 1)]),
+            DvcRomType::Impeg
+        );
+        assert_eq!(identify_dvc_rom(&[m("kernel", 1)]), DvcRomType::Unknown);
     }
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Desktop frontend: renders the MCD212 framebuffer in an eframe window and
-//! feeds mouse input to the SLAVE pointer device.
+//! feeds mouse and gamepad input to the SLAVE pointer device.
 //!
 //! The emulator core runs on its own thread, paced to real time by frame
 //! count; the UI thread copies the latest completed frame into a texture.
@@ -10,29 +10,119 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cdi_core::mcd212::{FB_HEIGHT, FB_WIDTH};
-use clap::Parser;
+use cdi_core::mcd212::{presentation_rgb, FB_HEIGHT, FB_WIDTH};
+use clap::{Parser, ValueEnum};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 const AUDIO_RATE: u32 = 44_100;
 const AUDIO_RING_SAMPLES: usize = AUDIO_RATE as usize * 2;
+const APP_NAME: &str = "E-Di: Emulator Disc Interactive";
+const BUNDLED_CDI220B: &[u8] = include_bytes!("../../../firmware/cdi220b.rom");
+const BUNDLED_VMPEGA: &[u8] = include_bytes!("../../../firmware/vmpega.rom");
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum VideoStandardArg {
+    Pal,
+    Ntsc,
+}
+
+impl From<VideoStandardArg> for cdi_core::VideoStandard {
+    fn from(value: VideoStandardArg) -> Self {
+        match value {
+            VideoStandardArg::Pal => Self::Pal,
+            VideoStandardArg::Ntsc => Self::Ntsc,
+        }
+    }
+}
 
 #[derive(Parser)]
-#[command(name = "cdi-frontend", about = "CD-i emulator desktop frontend")]
+#[command(
+    name = "cdi-frontend",
+    about = "E-Di: Emulator Disc Interactive desktop frontend"
+)]
 struct Args {
-    /// CD-i system ROM; opens a file picker when omitted.
+    /// CD-i system ROM override; uses the bundled CD-i 220 F2 when omitted.
     rom: Option<PathBuf>,
     /// CUE sheet of a disc image to insert.
     #[arg(long)]
     disc: Option<PathBuf>,
+    /// Optional VMPEG/IMPEG Digital Video Cartridge firmware ROM.
+    #[arg(long)]
+    dvc_rom: Option<PathBuf>,
+    /// Initial player video standard (default: PAL).
+    #[arg(long, value_enum)]
+    video_standard: Option<VideoStandardArg>,
 }
 
 #[derive(Default, Clone, Copy)]
 struct InputState {
+    /// Absolute pointer position for the direct mouse mapping; the SLAVE
+    /// tracks it by deltas.
     x: i32,
     y: i32,
+    /// Pending relative motion from the captured mouse, arrow keys, and
+    /// gamepad; consumed once per emulated frame. Relative motion is bounded
+    /// only by the SLAVE's device clamp, so it can always reach the screen
+    /// edges even after a title reprograms the pointer position.
+    dx: i32,
+    dy: i32,
     buttons: u8,
+}
+
+/// User preferences persisted across runs via eframe storage.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct Prefs {
+    show_fps: bool,
+    smooth_scaling: bool,
+    capture_mouse_enabled: bool,
+    pad_speed: f32,
+    pad_deadzone: f32,
+    pad_button1: gilrs::Button,
+    pad_button2: gilrs::Button,
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Self {
+            show_fps: true,
+            smooth_scaling: false,
+            capture_mouse_enabled: true,
+            pad_speed: 8.0,
+            pad_deadzone: 0.15,
+            pad_button1: gilrs::Button::South,
+            pad_button2: gilrs::Button::East,
+        }
+    }
+}
+
+const PREFS_KEY: &str = "prefs";
+
+fn button_name(button: gilrs::Button) -> &'static str {
+    use gilrs::Button as B;
+    match button {
+        B::South => "South (A / Cross)",
+        B::East => "East (B / Circle)",
+        B::North => "North (Y / Triangle)",
+        B::West => "West (X / Square)",
+        B::C => "C",
+        B::Z => "Z",
+        B::LeftTrigger => "Left bumper",
+        B::LeftTrigger2 => "Left trigger",
+        B::RightTrigger => "Right bumper",
+        B::RightTrigger2 => "Right trigger",
+        B::Select => "Select",
+        B::Start => "Start",
+        B::Mode => "Mode / Guide",
+        B::LeftThumb => "Left stick click",
+        B::RightThumb => "Right stick click",
+        B::DPadUp => "D-pad up",
+        B::DPadDown => "D-pad down",
+        B::DPadLeft => "D-pad left",
+        B::DPadRight => "D-pad right",
+        B::Unknown => "Unknown",
+    }
 }
 
 struct SharedFrame {
@@ -51,6 +141,10 @@ struct Shared {
     input: Mutex<InputState>,
     command: Mutex<Option<MachineCommand>>,
     status: Mutex<String>,
+    dvc_status: Mutex<String>,
+    dvc_path: Mutex<Option<PathBuf>>,
+    dvc_inserted: AtomicBool,
+    pal: AtomicBool,
     muted: Arc<AtomicBool>,
     running: AtomicBool,
     /// Emulated frames per second (diagnostics).
@@ -60,6 +154,10 @@ struct Shared {
 enum MachineCommand {
     LoadDisc(PathBuf),
     EjectDisc,
+    AttachDvc(PathBuf),
+    AttachBundledDvc,
+    DetachDvc,
+    SetVideoStandard(cdi_core::VideoStandard),
     Reset,
 }
 
@@ -93,10 +191,10 @@ impl NativeMenu {
             Some(Accelerator::new(Some(CMD_OR_CTRL), Code::Comma)),
         );
         let app_menu = Submenu::with_items(
-            "CD-i Emulator",
+            APP_NAME,
             true,
             &[
-                &PredefinedMenuItem::about(Some("About CD-i Emulator"), None),
+                &PredefinedMenuItem::about(Some("About E-Di: Emulator Disc Interactive"), None),
                 &app_settings,
                 &PredefinedMenuItem::separator(),
                 &PredefinedMenuItem::services(None),
@@ -105,7 +203,7 @@ impl NativeMenu {
                 &PredefinedMenuItem::hide_others(None),
                 &PredefinedMenuItem::show_all(None),
                 &PredefinedMenuItem::separator(),
-                &PredefinedMenuItem::quit(Some("Quit CD-i Emulator")),
+                &PredefinedMenuItem::quit(Some("Quit E-Di: Emulator Disc Interactive")),
             ],
         )
         .map_err(|error| error.to_string())?;
@@ -174,28 +272,47 @@ impl NativeMenu {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
-    let args = Args::parse();
-    let rom_path = args.rom.or_else(|| {
-        rfd::FileDialog::new()
-            .set_title("Select a CD-i system ROM")
-            .add_filter("ROM images", &["rom", "bin"])
-            .pick_file()
-    });
-    let Some(rom_path) = rom_path else {
-        eprintln!("usage: cdi-frontend <system-rom> [--disc <cue>]");
-        std::process::exit(2);
+    let Args {
+        rom,
+        disc,
+        dvc_rom,
+        video_standard,
+    } = Args::parse();
+    let image = if let Some(path) = &rom {
+        std::fs::read(path)?
+    } else {
+        BUNDLED_CDI220B.to_vec()
     };
-
-    let image = std::fs::read(&rom_path)?;
     let modules = cdi_os9::scan_modules(&image);
     let rom_type = cdi_os9::identify_rom(&modules);
-    let model = cdi_core::boards::model_by_id(rom_type.id)
+    let detected_model = cdi_core::boards::model_by_id(rom_type.id)
         .ok_or_else(|| format!("no emulation model for ROM type {}", rom_type.id))?;
-    let title = format!("CD-i Emulator — {}", model.title);
+    let mut model = detected_model.clone();
+    if let Some(standard) = video_standard {
+        model.video = standard.into();
+    }
+    let title = format!("{APP_NAME} — {}", model.title);
 
-    let mut machine = cdi_core::Machine::new(model, image)?;
+    let dvc_path = dvc_rom;
+    let (dvc, dvc_status) = if let Some(path) = &dvc_path {
+        let firmware = std::fs::read(path)?;
+        let config = cdi_core::DvcConfig::from_rom(firmware)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        let status = format!(
+            "DVC inserted — {}: {}",
+            config.kind.name(),
+            display_name(path)
+        );
+        (Some(config), status)
+    } else {
+        let config = cdi_core::DvcConfig::from_rom(BUNDLED_VMPEGA.to_vec())?;
+        let status = format!("DVC inserted — {}: bundled vmpega.rom", config.kind.name());
+        (Some(config), status)
+    };
+    let dvc_inserted = dvc.is_some();
+    let mut machine = cdi_core::Machine::with_dvc(&model, image, dvc)?;
     let mut disc_status = "No disc inserted".to_owned();
-    if let Some(cue) = args.disc {
+    if let Some(cue) = disc {
         let disc = cdi_disc::DiscImage::load(&cue)?;
         log::info!(
             "disc inserted: {} track(s), lead-out {}",
@@ -219,6 +336,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         input: Mutex::new(InputState::default()),
         command: Mutex::new(None),
         status: Mutex::new(disc_status),
+        dvc_status: Mutex::new(dvc_status),
+        dvc_path: Mutex::new(dvc_path),
+        dvc_inserted: AtomicBool::new(dvc_inserted),
+        pal: AtomicBool::new(model.video == cdi_core::VideoStandard::Pal),
         muted: Arc::new(AtomicBool::new(false)),
         running: AtomicBool::new(true),
         fps: Mutex::new(0.0),
@@ -234,13 +355,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let emu_shared = Arc::clone(&shared);
-    let pal = model.video == cdi_core::VideoStandard::Pal;
     let emu_thread = std::thread::Builder::new()
         .name("emu".into())
-        .spawn(move || emu_loop(machine, emu_shared, pal, audio_producer))?;
+        .spawn(move || emu_loop(machine, emu_shared, audio_producer))?;
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            // Stable id for the eframe preferences store regardless of the
+            // ROM-dependent window title.
+            .with_app_id("cdi-frontend")
             .with_inner_size([
                 fb_w as f32,
                 fb_h as f32
@@ -258,7 +381,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = eframe::run_native(
         &title,
         options,
-        Box::new(move |_cc| Ok(Box::new(App::new(app_shared)))),
+        Box::new(move |cc| Ok(Box::new(App::new(app_shared, cc)))),
     );
 
     shared.running.store(false, Ordering::Relaxed);
@@ -372,17 +495,7 @@ fn fill_audio<T: Copy>(
     }
 }
 
-fn emu_loop(
-    mut machine: cdi_core::Machine,
-    shared: Arc<Shared>,
-    pal: bool,
-    mut audio: Option<Producer<i16>>,
-) {
-    let frame_duration = if pal {
-        Duration::from_micros(20_000)
-    } else {
-        Duration::from_micros(16_667)
-    };
+fn emu_loop(mut machine: cdi_core::Machine, shared: Arc<Shared>, mut audio: Option<Producer<i16>>) {
     let mut next_frame_deadline = Instant::now();
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u32;
@@ -407,6 +520,62 @@ fn emu_loop(
                     machine.reset();
                     *shared.status.lock().unwrap() = "No disc inserted".to_owned();
                 }
+                MachineCommand::AttachDvc(path) => {
+                    let result = std::fs::read(&path)
+                        .map_err(|error| error.to_string())
+                        .and_then(cdi_core::DvcConfig::from_rom)
+                        .and_then(|config| {
+                            let kind = config.kind;
+                            machine.attach_dvc(config)?;
+                            Ok(kind)
+                        });
+                    match result {
+                        Ok(kind) => {
+                            *shared.dvc_path.lock().unwrap() = Some(path.clone());
+                            shared.dvc_inserted.store(true, Ordering::Relaxed);
+                            *shared.dvc_status.lock().unwrap() =
+                                format!("DVC inserted — {}: {}", kind.name(), display_name(&path));
+                        }
+                        Err(error) => {
+                            *shared.dvc_status.lock().unwrap() =
+                                format!("DVC attach failed: {error}");
+                        }
+                    }
+                }
+                MachineCommand::AttachBundledDvc => {
+                    let result =
+                        cdi_core::DvcConfig::from_rom(BUNDLED_VMPEGA.to_vec()).and_then(|config| {
+                            let kind = config.kind;
+                            machine.attach_dvc(config)?;
+                            Ok(kind)
+                        });
+                    match result {
+                        Ok(kind) => {
+                            *shared.dvc_path.lock().unwrap() = None;
+                            shared.dvc_inserted.store(true, Ordering::Relaxed);
+                            *shared.dvc_status.lock().unwrap() =
+                                format!("DVC inserted — {}: bundled vmpega.rom", kind.name());
+                        }
+                        Err(error) => {
+                            *shared.dvc_status.lock().unwrap() =
+                                format!("DVC attach failed: {error}");
+                        }
+                    }
+                }
+                MachineCommand::DetachDvc => {
+                    machine.detach_dvc();
+                    shared.dvc_inserted.store(false, Ordering::Relaxed);
+                    *shared.dvc_status.lock().unwrap() = "DVC removed".to_owned();
+                }
+                MachineCommand::SetVideoStandard(standard) => {
+                    machine.set_video_standard(standard);
+                    let pal = standard == cdi_core::VideoStandard::Pal;
+                    shared.pal.store(pal, Ordering::Relaxed);
+                    *shared.status.lock().unwrap() = format!(
+                        "Machine reset — {}",
+                        if pal { "PAL (50 Hz)" } else { "NTSC (60 Hz)" }
+                    );
+                }
                 MachineCommand::Reset => {
                     machine.reset();
                     *shared.status.lock().unwrap() = "Machine reset".to_owned();
@@ -416,11 +585,23 @@ fn emu_loop(
 
         // Apply the latest pointer state.
         {
-            let input = *shared.input.lock().unwrap();
+            let input = {
+                let mut input = shared.input.lock().unwrap();
+                let snapshot = *input;
+                input.dx = 0;
+                input.dy = 0;
+                snapshot
+            };
             machine
                 .bus
                 .slave
                 .set_pointer(input.x, input.y, input.buttons);
+            if input.dx != 0 || input.dy != 0 {
+                machine
+                    .bus
+                    .slave
+                    .move_pointer(input.dx, input.dy, input.buttons);
+            }
         }
 
         // Run until the MCD212 completes the next frame.
@@ -461,6 +642,11 @@ fn emu_loop(
         }
 
         // Pace to real time (skip ahead if we fell behind).
+        let frame_duration = if shared.pal.load(Ordering::Relaxed) {
+            Duration::from_micros(20_000)
+        } else {
+            Duration::from_micros(16_667)
+        };
         next_frame_deadline += frame_duration;
         let now = Instant::now();
         if next_frame_deadline > now {
@@ -482,27 +668,60 @@ struct App {
     mouse_captured: bool,
     suppress_capture_click: bool,
     game_buttons: u8,
-    captured_x: f32,
-    captured_y: f32,
+    gamepad: Option<gilrs::Gilrs>,
+    pad_buttons: u8,
+    /// Sub-pixel remainder of gamepad pointer motion, carried across frames
+    /// so slow stick deflections still move the pointer.
+    pad_frac: egui::Vec2,
+    pad_speed: f32,
+    pad_deadzone: f32,
+    pad_button1: gilrs::Button,
+    pad_button2: gilrs::Button,
+    /// CD-i button (0 or 1) awaiting a controller press to rebind.
+    pad_rebind: Option<u8>,
+    /// Sub-pixel remainder of captured-mouse motion carried across frames.
+    capture_frac: egui::Vec2,
+    capture_origin: Option<egui::Pos2>,
+    capture_motion_grace: u8,
     #[cfg(target_os = "macos")]
     native_menu: NativeMenu,
 }
 
 impl App {
-    fn new(shared: Arc<Shared>) -> Self {
+    fn new(shared: Arc<Shared>, cc: &eframe::CreationContext<'_>) -> Self {
+        let prefs: Prefs = cc
+            .storage
+            .and_then(|storage| storage.get_string(PREFS_KEY))
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
         Self {
             shared,
             texture: None,
             last_frame_no: 0,
             settings_open: false,
-            show_fps: true,
-            smooth_scaling: false,
-            capture_mouse_enabled: true,
+            show_fps: prefs.show_fps,
+            smooth_scaling: prefs.smooth_scaling,
+            capture_mouse_enabled: prefs.capture_mouse_enabled,
             mouse_captured: false,
             suppress_capture_click: false,
             game_buttons: 0,
-            captured_x: 0.0,
-            captured_y: 0.0,
+            gamepad: match gilrs::Gilrs::new() {
+                Ok(gilrs) => Some(gilrs),
+                Err(err) => {
+                    log::warn!("gamepad support unavailable: {err}");
+                    None
+                }
+            },
+            pad_buttons: 0,
+            pad_frac: egui::Vec2::ZERO,
+            pad_speed: prefs.pad_speed,
+            pad_deadzone: prefs.pad_deadzone,
+            pad_button1: prefs.pad_button1,
+            pad_button2: prefs.pad_button2,
+            pad_rebind: None,
+            capture_frac: egui::Vec2::ZERO,
+            capture_origin: None,
+            capture_motion_grace: 0,
             #[cfg(target_os = "macos")]
             native_menu: NativeMenu::new().expect("initialize native macOS menu"),
         }
@@ -535,31 +754,265 @@ impl App {
         *self.shared.command.lock().unwrap() = Some(MachineCommand::Reset);
     }
 
+    fn choose_dvc(&self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("Select DVC cartridge firmware")
+            .add_filter("ROM images", &["rom", "bin"])
+            .pick_file()
+        {
+            *self.shared.dvc_status.lock().unwrap() = format!("Inserting {}…", display_name(&path));
+            *self.shared.command.lock().unwrap() = Some(MachineCommand::AttachDvc(path));
+        }
+    }
+
+    fn insert_dvc(&self) {
+        let path = self.shared.dvc_path.lock().unwrap().clone();
+        if let Some(path) = path {
+            *self.shared.dvc_status.lock().unwrap() = format!("Inserting {}…", display_name(&path));
+            *self.shared.command.lock().unwrap() = Some(MachineCommand::AttachDvc(path));
+        } else {
+            *self.shared.dvc_status.lock().unwrap() = "Inserting bundled vmpega.rom…".to_owned();
+            *self.shared.command.lock().unwrap() = Some(MachineCommand::AttachBundledDvc);
+        }
+    }
+
+    fn remove_dvc(&self) {
+        *self.shared.command.lock().unwrap() = Some(MachineCommand::DetachDvc);
+    }
+
     fn set_mouse_capture(&mut self, ctx: &egui::Context, captured: bool) {
         if self.mouse_captured == captured {
             return;
         }
         self.mouse_captured = captured;
-        if !captured {
-            self.suppress_capture_click = false;
-            self.game_buttons = 0;
-            self.shared.input.lock().unwrap().buttons = 0;
-        }
-        ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(if captured {
-            egui::viewport::CursorGrab::Locked
-        } else {
-            egui::viewport::CursorGrab::None
-        }));
-        ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(!captured));
         if captured {
-            let mut input = self.shared.input.lock().unwrap();
+            self.capture_origin = ctx.input(|input| input.pointer.latest_pos());
+            self.capture_motion_grace = 2;
+            if let Some(center) = ctx.input(|input| {
+                input
+                    .viewport()
+                    .inner_rect
+                    .map(|rect| egui::pos2(rect.width() * 0.5, rect.height() * 0.5))
+            }) {
+                // Normalize the hidden host cursor before locking it so raw
+                // relative travel never depends on where capture began.
+                ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(center));
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(
+                egui::viewport::CursorGrab::Locked,
+            ));
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
             // Capturing is a frontend action, not a CD-i click. Clear any
             // button held over from the shell launch/capture gesture so a
             // newly booted title cannot consume it as its first selection.
-            input.buttons = 0;
-            self.captured_x = input.x as f32;
-            self.captured_y = input.y as f32;
+            self.shared.input.lock().unwrap().buttons = 0;
+            self.capture_frac = egui::Vec2::ZERO;
+        } else {
+            self.suppress_capture_click = false;
+            self.game_buttons = 0;
+            self.capture_motion_grace = 0;
+            self.shared.input.lock().unwrap().buttons = 0;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(
+                egui::viewport::CursorGrab::None,
+            ));
+            if let Some(origin) = self.capture_origin.take() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(origin));
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(true));
         }
+    }
+
+    fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Audio");
+        let mut muted = self.shared.muted.load(Ordering::Relaxed);
+        if ui.checkbox(&mut muted, "Mute audio").changed() {
+            self.shared.muted.store(muted, Ordering::Relaxed);
+        }
+        ui.label("44.1 kHz stereo output");
+        ui.separator();
+        ui.heading("DVC Cartridge");
+        ui.label(self.shared.dvc_status.lock().unwrap().as_str());
+        ui.horizontal(|ui| {
+            if self.shared.dvc_inserted.load(Ordering::Relaxed) {
+                if ui.button("Remove DVC Cartridge").clicked() {
+                    self.remove_dvc();
+                }
+            } else if ui.button("Insert DVC Cartridge").clicked() {
+                self.insert_dvc();
+            }
+            if ui.button("Choose Firmware…").clicked() {
+                self.choose_dvc();
+            }
+        });
+        ui.label(
+            "The bundled VMPEG cartridge is inserted by default. Inserting or removing it resets the machine and retains the disc.",
+        );
+        ui.separator();
+        ui.heading("Display");
+        let mut pal = self.shared.pal.load(Ordering::Relaxed);
+        ui.horizontal(|ui| {
+            ui.label("Video standard:");
+            ui.radio_value(&mut pal, true, "PAL (50 Hz)");
+            ui.radio_value(&mut pal, false, "NTSC (60 Hz)");
+        });
+        if pal != self.shared.pal.load(Ordering::Relaxed) {
+            let standard = if pal {
+                cdi_core::VideoStandard::Pal
+            } else {
+                cdi_core::VideoStandard::Ntsc
+            };
+            *self.shared.command.lock().unwrap() =
+                Some(MachineCommand::SetVideoStandard(standard));
+        }
+        ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
+        ui.checkbox(&mut self.show_fps, "Show frame rate");
+        ui.separator();
+        ui.heading("Input");
+        ui.checkbox(&mut self.capture_mouse_enabled, "Capture mouse on click");
+        ui.separator();
+        ui.heading("Controller");
+        match &self.gamepad {
+            Some(gilrs) => {
+                let names: Vec<String> = gilrs
+                    .gamepads()
+                    .map(|(_, pad)| pad.name().to_owned())
+                    .collect();
+                if names.is_empty() {
+                    ui.label("No controller connected");
+                } else {
+                    ui.label(format!("Connected: {}", names.join(", ")));
+                }
+                ui.add(
+                    egui::Slider::new(&mut self.pad_speed, 1.0..=20.0).text("Pointer speed"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut self.pad_deadzone, 0.0..=0.5).text("Stick deadzone"),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("CD-i button 1:");
+                    let text = if self.pad_rebind == Some(0) {
+                        "Press a controller button…"
+                    } else {
+                        button_name(self.pad_button1)
+                    };
+                    if ui.button(text).clicked() {
+                        self.pad_rebind = if self.pad_rebind == Some(0) {
+                            None
+                        } else {
+                            Some(0)
+                        };
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("CD-i button 2:");
+                    let text = if self.pad_rebind == Some(1) {
+                        "Press a controller button…"
+                    } else {
+                        button_name(self.pad_button2)
+                    };
+                    if ui.button(text).clicked() {
+                        self.pad_rebind = if self.pad_rebind == Some(1) {
+                            None
+                        } else {
+                            Some(1)
+                        };
+                    }
+                });
+                if ui.button("Reset controller defaults").clicked() {
+                    let defaults = Prefs::default();
+                    self.pad_speed = defaults.pad_speed;
+                    self.pad_deadzone = defaults.pad_deadzone;
+                    self.pad_button1 = defaults.pad_button1;
+                    self.pad_button2 = defaults.pad_button2;
+                    self.pad_rebind = None;
+                }
+                ui.label(
+                    "Left stick and d-pad move the pointer. Layouts are auto-detected via the open-source SDL_GameControllerDB mappings bundled with gilrs.",
+                );
+            }
+            None => {
+                ui.label("Controller support unavailable on this system");
+            }
+        }
+    }
+
+    /// Poll connected gamepads and translate them onto the CD-i pointer:
+    /// left stick and d-pad move, two configurable buttons map to CD-i
+    /// buttons 1/2.
+    fn poll_gamepad(&mut self) {
+        let Some(gilrs) = self.gamepad.as_mut() else {
+            return;
+        };
+        // Drain the event queue so cached gamepad state stays current; a
+        // pending rebind captures the first button press seen here.
+        while let Some(event) = gilrs.next_event() {
+            if let gilrs::EventType::ButtonPressed(button, _) = event.event {
+                match self.pad_rebind {
+                    Some(0) => {
+                        self.pad_button1 = button;
+                        self.pad_rebind = None;
+                    }
+                    Some(1) => {
+                        self.pad_button2 = button;
+                        self.pad_rebind = None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let deadzone = self.pad_deadzone;
+        let mut deflection = egui::Vec2::ZERO;
+        let mut buttons = 0u8;
+        for (_id, pad) in gilrs.gamepads() {
+            let x = pad.value(gilrs::Axis::LeftStickX);
+            let y = pad.value(gilrs::Axis::LeftStickY);
+            if x.abs() > deadzone {
+                deflection.x += x;
+            }
+            if y.abs() > deadzone {
+                // Stick up moves the pointer up (screen Y grows downward).
+                deflection.y -= y;
+            }
+            if pad.is_pressed(gilrs::Button::DPadLeft) {
+                deflection.x -= 1.0;
+            }
+            if pad.is_pressed(gilrs::Button::DPadRight) {
+                deflection.x += 1.0;
+            }
+            if pad.is_pressed(gilrs::Button::DPadUp) {
+                deflection.y -= 1.0;
+            }
+            if pad.is_pressed(gilrs::Button::DPadDown) {
+                deflection.y += 1.0;
+            }
+            if pad.is_pressed(self.pad_button1) {
+                buttons |= 1;
+            }
+            if pad.is_pressed(self.pad_button2) {
+                buttons |= 2;
+            }
+        }
+        // Don't feed the press being captured for a rebind into the game.
+        if self.pad_rebind.is_some() {
+            buttons = 0;
+        }
+
+        let delta = deflection.clamp(egui::vec2(-1.0, -1.0), egui::vec2(1.0, 1.0)) * self.pad_speed
+            + self.pad_frac;
+        let step = egui::vec2(delta.x.trunc(), delta.y.trunc());
+        self.pad_frac = delta - step;
+
+        let buttons_changed = buttons != self.pad_buttons;
+        self.pad_buttons = buttons;
+        if step == egui::Vec2::ZERO && !buttons_changed {
+            return;
+        }
+
+        let mut input = self.shared.input.lock().unwrap();
+        input.dx += step.x as i32;
+        input.dy += step.y as i32;
+        input.buttons = self.game_buttons | self.pad_buttons;
     }
 
     #[cfg(target_os = "macos")]
@@ -576,6 +1029,21 @@ impl App {
 }
 
 impl eframe::App for App {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let prefs = Prefs {
+            show_fps: self.show_fps,
+            smooth_scaling: self.smooth_scaling,
+            capture_mouse_enabled: self.capture_mouse_enabled,
+            pad_speed: self.pad_speed,
+            pad_deadzone: self.pad_deadzone,
+            pad_button1: self.pad_button1,
+            pad_button2: self.pad_button2,
+        };
+        if let Ok(json) = serde_json::to_string(&prefs) {
+            storage.set_string(PREFS_KEY, json);
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let escape_pressed =
             ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
@@ -583,6 +1051,16 @@ impl eframe::App for App {
             escape_pressed || ctx.input(|input| input.viewport().focused == Some(false));
         if self.mouse_captured && release_capture {
             self.set_mouse_capture(ctx, false);
+        }
+        if self.mouse_captured {
+            // Reassert this while captured. On macOS the locked mode
+            // disconnects hardware motion from the hidden system cursor;
+            // keeping it active prevents motion from stopping at a screen
+            // edge even if another viewport command re-associated it.
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(
+                egui::viewport::CursorGrab::Locked,
+            ));
+            ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
         }
 
         #[cfg(target_os = "macos")]
@@ -618,26 +1096,38 @@ impl eframe::App for App {
             });
         });
 
-        let mut settings_open = self.settings_open;
-        egui::Window::new("Settings")
-            .open(&mut settings_open)
-            .resizable(false)
-            .show(ctx, |ui| {
-                ui.heading("Audio");
-                let mut muted = self.shared.muted.load(Ordering::Relaxed);
-                if ui.checkbox(&mut muted, "Mute audio").changed() {
-                    self.shared.muted.store(muted, Ordering::Relaxed);
-                }
-                ui.label("44.1 kHz stereo output");
-                ui.separator();
-                ui.heading("Display");
-                ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
-                ui.checkbox(&mut self.show_fps, "Show frame rate");
-                ui.separator();
-                ui.heading("Input");
-                ui.checkbox(&mut self.capture_mouse_enabled, "Capture mouse on click");
-            });
-        self.settings_open = settings_open;
+        if self.settings_open {
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("settings"),
+                egui::ViewportBuilder::default()
+                    .with_title("Settings")
+                    .with_inner_size([400.0, 480.0])
+                    .with_min_inner_size([320.0, 240.0]),
+                |ctx, class| {
+                    if class == egui::ViewportClass::Embedded {
+                        // Backend without multi-viewport support: fall back to
+                        // the overlay window.
+                        let mut open = true;
+                        egui::Window::new("Settings")
+                            .open(&mut open)
+                            .resizable(false)
+                            .show(ctx, |ui| self.settings_ui(ui));
+                        if !open {
+                            self.settings_open = false;
+                        }
+                    } else {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false; 2])
+                                .show(ui, |ui| self.settings_ui(ui));
+                        });
+                        if ctx.input(|input| input.viewport().close_requested()) {
+                            self.settings_open = false;
+                        }
+                    }
+                },
+            );
+        }
         if !self.capture_mouse_enabled && self.mouse_captured {
             self.set_mouse_capture(ctx, false);
         }
@@ -650,7 +1140,10 @@ impl eframe::App for App {
                 let (w, h) = (frame.width, frame.height);
                 let pixels: Vec<egui::Color32> = frame.pixels[..w * h]
                     .iter()
-                    .map(|&px| egui::Color32::from_rgb((px >> 16) as u8, (px >> 8) as u8, px as u8))
+                    .map(|&px| {
+                        let px = presentation_rgb(px);
+                        egui::Color32::from_rgb((px >> 16) as u8, (px >> 8) as u8, px as u8)
+                    })
                     .collect();
                 let image = egui::ColorImage {
                     size: [w, h],
@@ -672,12 +1165,9 @@ impl eframe::App for App {
                     ui.label(format!("{:.1} fps", *self.shared.fps.lock().unwrap()));
                 }
                 ui.label(self.shared.status.lock().unwrap().as_str());
+                ui.label(self.shared.dvc_status.lock().unwrap().as_str());
                 if self.mouse_captured {
-                    let input = *self.shared.input.lock().unwrap();
-                    ui.label(format!(
-                        "Mouse captured — {},{} — arrows move — Esc releases",
-                        input.x, input.y
-                    ));
+                    ui.label("Mouse captured — arrows move — Esc releases");
                 } else if self.capture_mouse_enabled {
                     ui.label("Mouse: click screen to capture — arrows move when captured");
                 } else {
@@ -757,30 +1247,40 @@ impl eframe::App for App {
                     // Raw motion is in physical pixels. Convert through egui
                     // points and the displayed active-picture size into the
                     // CD-i pointer's 768x560 coordinate space.
-                    let motion =
-                        ctx.input(|input| input.pointer.motion().unwrap_or(input.pointer.delta()));
-                    let points_per_physical_pixel = 1.0 / ctx.pixels_per_point();
+                    let motion = if self.capture_motion_grace == 0 {
+                        ctx.input(|input| input.pointer.motion().unwrap_or(input.pointer.delta()))
+                    } else {
+                        self.capture_motion_grace -= 1;
+                        egui::Vec2::ZERO
+                    };
+                    // macOS NSEvent deltas are already logical points. Other
+                    // winit backends report physical/raw units here.
+                    let motion_points = if cfg!(target_os = "macos") {
+                        motion
+                    } else {
+                        motion / ctx.pixels_per_point()
+                    };
                     let x_scale = tex_size.x * 768.0 / (size.x * active_w);
                     let y_scale = 560.0 / size.y;
-                    self.captured_x = (self.captured_x
-                        + motion.x * points_per_physical_pixel * x_scale)
-                        .clamp(0.0, 767.0);
-                    self.captured_y = (self.captured_y
-                        + motion.y * points_per_physical_pixel * y_scale)
-                        .clamp(0.0, 559.0);
+                    let scaled = egui::vec2(
+                        motion_points.x * x_scale,
+                        motion_points.y * y_scale,
+                    ) + self.capture_frac;
+                    let step = egui::vec2(scaled.x.trunc(), scaled.y.trunc());
+                    self.capture_frac = scaled - step;
                     if motion != egui::Vec2::ZERO {
                         log::trace!(
-                            "captured mouse raw=({:.2},{:.2}) cdi=({:.2},{:.2})",
+                            "captured mouse raw=({:.2},{:.2}) cdi delta=({:.0},{:.0})",
                             motion.x,
                             motion.y,
-                            self.captured_x,
-                            self.captured_y
+                            step.x,
+                            step.y
                         );
                     }
                     let mut input = self.shared.input.lock().unwrap();
-                    input.x = self.captured_x.round() as i32;
-                    input.y = self.captured_y.round() as i32;
-                    input.buttons = self.game_buttons;
+                    input.dx += step.x as i32;
+                    input.dy += step.y as i32;
+                    input.buttons = self.game_buttons | self.pad_buttons;
                 } else if !self.capture_mouse_enabled
                     && ctx.input(|input| input.pointer.delta() != egui::Vec2::ZERO)
                 {
@@ -796,7 +1296,7 @@ impl eframe::App for App {
                         let mut input = self.shared.input.lock().unwrap();
                         input.x = x;
                         input.y = y;
-                        input.buttons = self.game_buttons;
+                        input.buttons = self.game_buttons | self.pad_buttons;
                     }
                 }
             });
@@ -812,13 +1312,13 @@ impl eframe::App for App {
                 ) * KEYBOARD_STEP
             });
             if keyboard_delta != egui::Vec2::ZERO {
-                self.captured_x = (self.captured_x + keyboard_delta.x).clamp(0.0, 767.0);
-                self.captured_y = (self.captured_y + keyboard_delta.y).clamp(0.0, 559.0);
                 let mut input = self.shared.input.lock().unwrap();
-                input.x = self.captured_x.round() as i32;
-                input.y = self.captured_y.round() as i32;
+                input.dx += keyboard_delta.x as i32;
+                input.dy += keyboard_delta.y as i32;
             }
         }
+
+        self.poll_gamepad();
 
         ctx.request_repaint_after(Duration::from_millis(10));
     }

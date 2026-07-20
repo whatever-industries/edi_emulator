@@ -1,10 +1,10 @@
 # Build artifacts
 /target
 
-# Copyrighted material — never commit
+# Local firmware scratch directory (supported distributable images live in
+# tracked firmware/ instead)
 /roms/
 /references/
-*.rom
 *.nvr
 
 # Private chat archives (other people's messages)

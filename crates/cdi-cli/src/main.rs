@@ -138,6 +138,9 @@ enum Command {
     Disc {
         /// Path to a .cue file.
         cue: PathBuf,
+        /// Also walk the ISO 9660 tree and list files with their extents.
+        #[arg(long)]
+        files: bool,
     },
 }
 
@@ -176,11 +179,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dump_video_ram.as_deref(),
             hash,
         ),
-        Command::Disc { cue } => disc_info(&cue),
+        Command::Disc { cue, files } => disc_info(&cue, files),
     }
 }
 
-fn disc_info(cue: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+fn disc_info(cue: &std::path::Path, files: bool) -> Result<(), Box<dyn std::error::Error>> {
     use cdi_disc::sector::{has_sync, Mode2Subheader, SectorHeader};
 
     let disc = cdi_disc::DiscImage::load(cue)?;
@@ -222,6 +225,85 @@ fn disc_info(cue: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
                 sub.submode
             );
             println!("  album: {album:?}");
+        }
+    }
+
+    if files {
+        list_iso_files(&disc)?;
+    }
+    Ok(())
+}
+
+/// Walk the ISO 9660 tree and print each entry with its extent, so a file's
+/// on-disc location can be compared against what the emulated player reads.
+/// Directories are followed one level at a time, breadth-first.
+fn list_iso_files(disc: &cdi_disc::DiscImage) -> Result<(), Box<dyn std::error::Error>> {
+    // User data of a Mode 1/2 Form 1 sector; ISO LBA 0 is absolute frame 150.
+    let user_data = |lba: u32| -> Option<Vec<u8>> {
+        let sector = disc.read_sector_data(lba + 150)?;
+        let mode2 = sector[15] == 2;
+        let start = if mode2 { 24 } else { 16 };
+        Some(sector[start..start + 2048].to_vec())
+    };
+
+    let Some(pvd) = user_data(16) else {
+        println!("no ISO 9660 volume descriptor at LBA 16");
+        return Ok(());
+    };
+    if &pvd[1..6] != b"CD001" {
+        println!("no ISO 9660 volume descriptor at LBA 16");
+        return Ok(());
+    }
+    // Root directory record lives at offset 156 of the PVD.
+    let root = &pvd[156..156 + 34];
+    let root_lba = u32::from_le_bytes([root[2], root[3], root[4], root[5]]);
+    let root_size = u32::from_le_bytes([root[10], root[11], root[12], root[13]]);
+    println!("ISO 9660: root at LBA {root_lba} ({root_size} bytes)");
+
+    let mut queue = vec![(String::new(), root_lba, root_size)];
+    while let Some((prefix, lba, size)) = queue.pop() {
+        let mut data = Vec::new();
+        for i in 0..size.div_ceil(2048) {
+            match user_data(lba + i) {
+                Some(chunk) => data.extend_from_slice(&chunk),
+                None => break,
+            }
+        }
+        let mut off = 0usize;
+        while off + 33 <= data.len() {
+            let len = data[off] as usize;
+            if len == 0 {
+                // Records do not straddle sectors; skip to the next one.
+                off = (off / 2048 + 1) * 2048;
+                continue;
+            }
+            let rec = &data[off..(off + len).min(data.len())];
+            if rec.len() < 33 {
+                break;
+            }
+            let e_lba = u32::from_le_bytes([rec[2], rec[3], rec[4], rec[5]]);
+            let e_size = u32::from_le_bytes([rec[10], rec[11], rec[12], rec[13]]);
+            let is_dir = rec[25] & 0x02 != 0;
+            let name_len = rec[32] as usize;
+            let name_bytes = &rec[33..(33 + name_len).min(rec.len())];
+            let name = String::from_utf8_lossy(name_bytes).to_string();
+            // Skip the "." and ".." records (names 0x00 and 0x01).
+            if name_len > 1 || (name_bytes.first() > Some(&1)) {
+                let shown = name.trim_end_matches(";1");
+                println!(
+                    "  {}{:<20} lba={:<8} abs={:<8} size={:<11}{}",
+                    prefix,
+                    shown,
+                    e_lba,
+                    e_lba + 150,
+                    e_size,
+                    if is_dir { " [dir]" } else { "" }
+                );
+                if is_dir {
+                    queue.push((format!("{prefix}{shown}/"), e_lba, e_size));
+                }
+            }
+            off += len;
         }
     }
     Ok(())

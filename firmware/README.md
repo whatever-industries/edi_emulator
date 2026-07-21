@@ -14,7 +14,7 @@ Supported today (Mono-I system + VMPEG cartridge):
 Retained for future work: `cdi490a.rom` + `impega.rom` (Mono-IV with
 integrated IMPEG digital video, deferred to M4), `cdi910.rom` and its
 board-level chip dumps (`mcu/`, `pal/`, TC574200), and unidentified items
-under `aux/` pending research.
+under `misc/` pending research.
 
 Unsupported Mono-IV/IMPEG behavior and the HLE'd SLAVE/SERVO MCUs do not load
 these dumps yet. Game discs and their assets are not part of this directory.

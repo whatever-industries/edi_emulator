@@ -699,10 +699,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dvc_inserted = dvc.is_some();
     let mut machine = cdi_core::Machine::with_dvc(&model, image, dvc)?;
 
-    // Restore this model's battery-backed SRAM (saved games and player
+    // Restore the player's battery-backed SRAM (saved games and player
     // settings). The timekeeper registers are separate fields, not part of
     // this buffer, so a stale clock cannot be restored over a fresh one.
-    let nvram_path = app_data_dir().map(|dir| dir.join(format!("{}.nvr", model.id)));
+    //
+    // Keyed by board rather than model: every model on a board shares the
+    // same NVRAM chip and CD-RTOS layout, so switching between, say, the
+    // CD-i 200 and 220 keeps your saves, while a different board gets its
+    // own file instead of being handed a layout it cannot read.
+    let nvram_path = app_data_dir().map(|dir| dir.join(format!("{}.nvr", model.board.name)));
     if let Some(path) = &nvram_path {
         match std::fs::read(path) {
             Ok(saved) if saved.len() == machine.bus.nvram.len() => {

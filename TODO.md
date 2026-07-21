@@ -1,5 +1,21 @@
 # E-Di: Emulator Disc Interactive TODO
 
+## Disc insertion without a machine reset
+
+- [ ] Load a disc the way real hardware does, instead of cold-booting. The
+  emulator starts booting as soon as the app launches, but `LoadDisc` in the
+  frontend's emu thread calls `machine.reset()` so the BIOS sees the disc at
+  power-on, which throws that boot away and makes the user sit through a
+  second ~25-second boot after picking a disc from the library.
+  - [ ] Signal media change through the SLAVE drive status so the already
+    running player shell detects the insertion and launches the disc's
+    application, rather than restarting from the reset vector.
+  - [ ] Keep an explicit reset path for the cases that need it (eject, DVC
+    insert/remove, system ROM change) and for discs that misbehave.
+  - [ ] Verify against CD-i, VCD, and Photo CD discs that the shell picks up
+    the disc reliably, including swapping one disc for another without an
+    intervening eject.
+
 ## Input peripherals
 
 - [ ] Emulate the CD-i keyboard peripheral (used by authoring/industrial

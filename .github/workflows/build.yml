@@ -8,11 +8,40 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
-  VERSION: "0.1.0"
 
 jobs:
+  # Next version comes from the git tags, never from a file: committing a
+  # bumped Cargo.toml back to main would retrigger this workflow forever.
+  # A commit message containing [minor] bumps the minor and zeroes the patch;
+  # anything else bumps the patch.
+  version:
+    name: Next version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: next
+        run: |
+          set -euo pipefail
+          latest=$(git tag -l 'v*' | sed 's/^v//' \
+                   | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          latest=${latest:-0.0.0}
+          IFS=. read -r major minor patch <<< "$latest"
+          if git log -1 --pretty=%B | grep -qiE '\[minor\]'; then
+            minor=$((minor + 1)); patch=0
+          else
+            patch=$((patch + 1))
+          fi
+          echo "version=${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
+          echo "previous tag: v${latest} -> new version: ${major}.${minor}.${patch}"
+
   build-macos-arm:
     name: macOS App (ARM)
+    needs: version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,8 +78,8 @@ jobs:
             <key>CFBundleName</key><string>E-Di</string>
             <key>CFBundleDisplayName</key><string>E-Di</string>
             <key>CFBundleIdentifier</key><string>industries.whatever.edi</string>
-            <key>CFBundleVersion</key><string>${VERSION}</string>
-            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${{ needs.version.outputs.version }}</string>
+            <key>CFBundleShortVersionString</key><string>${{ needs.version.outputs.version }}</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>CFBundleExecutable</key><string>E-Di</string>
             <key>CFBundleIconFile</key><string>E-Di</string>
@@ -66,17 +95,18 @@ jobs:
       - name: Zip .app
         run: |
           cd dist
-          zip -r "E-Di_macOS_ARM_${{ env.VERSION }}.zip" "E-Di.app"
+          zip -r "E-Di_macOS_ARM_${{ needs.version.outputs.version }}.zip" "E-Di.app"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: E-Di-macOS-ARM
-          path: "dist/E-Di_macOS_ARM_${{ env.VERSION }}.zip"
+          path: "dist/E-Di_macOS_ARM_${{ needs.version.outputs.version }}.zip"
           retention-days: 1
 
   build-windows-x64:
     name: Windows EXE (x64)
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,17 +129,18 @@ jobs:
       - name: Rename EXE
         shell: pwsh
         run: |
-          Copy-Item "target/release/cdi-frontend.exe" "E-Di_Windows_x64_${{ env.VERSION }}.exe"
+          Copy-Item "target/release/cdi-frontend.exe" "E-Di_Windows_x64_${{ needs.version.outputs.version }}.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: E-Di-Windows-x64
-          path: "E-Di_Windows_x64_${{ env.VERSION }}.exe"
+          path: "E-Di_Windows_x64_${{ needs.version.outputs.version }}.exe"
           retention-days: 1
 
   build-windows-arm:
     name: Windows EXE (ARM)
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -136,17 +167,18 @@ jobs:
       - name: Rename EXE
         shell: pwsh
         run: |
-          Copy-Item "target/aarch64-pc-windows-msvc/release/cdi-frontend.exe" "E-Di_Windows_ARM_${{ env.VERSION }}.exe"
+          Copy-Item "target/aarch64-pc-windows-msvc/release/cdi-frontend.exe" "E-Di_Windows_ARM_${{ needs.version.outputs.version }}.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: E-Di-Windows-ARM
-          path: "E-Di_Windows_ARM_${{ env.VERSION }}.exe"
+          path: "E-Di_Windows_ARM_${{ needs.version.outputs.version }}.exe"
           retention-days: 1
 
   build-linux-x64:
     name: Linux AppImage (x64)
+    needs: version
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -179,17 +211,18 @@ jobs:
           wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool
           chmod +x appimagetool
           ./scripts/make-appdir.sh target/release/cdi-frontend
-          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "E-Di_Linux_x64_${{ env.VERSION }}.AppImage"
+          ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "E-Di_Linux_x64_${{ needs.version.outputs.version }}.AppImage"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: E-Di-Linux-x64
-          path: "E-Di_Linux_x64_${{ env.VERSION }}.AppImage"
+          path: "E-Di_Linux_x64_${{ needs.version.outputs.version }}.AppImage"
           retention-days: 1
 
   build-linux-arm:
     name: Linux AppImage (ARM)
+    needs: version
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -223,18 +256,19 @@ jobs:
           chmod +x appimagetool
           ./scripts/make-appdir.sh target/release/cdi-frontend
           # appimagetool names 64-bit ARM "arm_aarch64", not "aarch64".
-          ARCH=arm_aarch64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "E-Di_Linux_ARM_${{ env.VERSION }}.AppImage"
+          ARCH=arm_aarch64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "E-Di_Linux_ARM_${{ needs.version.outputs.version }}.AppImage"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: E-Di-Linux-ARM
-          path: "E-Di_Linux_ARM_${{ env.VERSION }}.AppImage"
+          path: "E-Di_Linux_ARM_${{ needs.version.outputs.version }}.AppImage"
           retention-days: 1
 
   release:
     name: Publish Release
     needs:
+      - version
       - build-macos-arm
       - build-windows-x64
       - build-windows-arm
@@ -252,13 +286,13 @@ jobs:
       - name: Create or update release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION }}
-          name: E-Di v${{ env.VERSION }}
+          tag_name: v${{ needs.version.outputs.version }}
+          name: E-Di v${{ needs.version.outputs.version }}
           draft: false
           prerelease: false
           make_latest: true
           body: |
-            ## E-Di v${{ env.VERSION }}
+            ## E-Di v${{ needs.version.outputs.version }}
 
             E-Di: Emulator Disc Interactive — a Philips CD-i player emulator.
             System and VMPEG DVC firmware are bundled; open a `.cue` disc image
@@ -267,14 +301,34 @@ jobs:
             ### Downloads
             | Platform | File |
             |----------|------|
-            | macOS (Apple Silicon) | `E-Di_macOS_ARM_${{ env.VERSION }}.zip` |
-            | Windows (x64) | `E-Di_Windows_x64_${{ env.VERSION }}.exe` |
-            | Windows (ARM) | `E-Di_Windows_ARM_${{ env.VERSION }}.exe` |
-            | Linux (x64) | `E-Di_Linux_x64_${{ env.VERSION }}.AppImage` |
-            | Linux (ARM) | `E-Di_Linux_ARM_${{ env.VERSION }}.AppImage` |
+            | macOS (Apple Silicon) | `E-Di_macOS_ARM_${{ needs.version.outputs.version }}.zip` |
+            | Windows (x64) | `E-Di_Windows_x64_${{ needs.version.outputs.version }}.exe` |
+            | Windows (ARM) | `E-Di_Windows_ARM_${{ needs.version.outputs.version }}.exe` |
+            | Linux (x64) | `E-Di_Linux_x64_${{ needs.version.outputs.version }}.AppImage` |
+            | Linux (ARM) | `E-Di_Linux_ARM_${{ needs.version.outputs.version }}.AppImage` |
           files: |
-            artifacts/E-Di-macOS-ARM/E-Di_macOS_ARM_${{ env.VERSION }}.zip
-            artifacts/E-Di-Windows-x64/E-Di_Windows_x64_${{ env.VERSION }}.exe
-            artifacts/E-Di-Windows-ARM/E-Di_Windows_ARM_${{ env.VERSION }}.exe
-            artifacts/E-Di-Linux-x64/E-Di_Linux_x64_${{ env.VERSION }}.AppImage
-            artifacts/E-Di-Linux-ARM/E-Di_Linux_ARM_${{ env.VERSION }}.AppImage
+            artifacts/E-Di-macOS-ARM/E-Di_macOS_ARM_${{ needs.version.outputs.version }}.zip
+            artifacts/E-Di-Windows-x64/E-Di_Windows_x64_${{ needs.version.outputs.version }}.exe
+            artifacts/E-Di-Windows-ARM/E-Di_Windows_ARM_${{ needs.version.outputs.version }}.exe
+            artifacts/E-Di-Linux-x64/E-Di_Linux_x64_${{ needs.version.outputs.version }}.AppImage
+            artifacts/E-Di-Linux-ARM/E-Di_Linux_ARM_${{ needs.version.outputs.version }}.AppImage
+
+      # Keep only the three most recent releases. The tags are left in place,
+      # so an old version can still be checked out or its release recreated.
+      - name: Prune old releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName' > stale.txt
+          if [ ! -s stale.txt ]; then
+            echo "nothing to prune"
+            exit 0
+          fi
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "deleting release $tag (tag retained)"
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+          done < stale.txt

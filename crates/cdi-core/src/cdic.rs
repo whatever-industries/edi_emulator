@@ -536,14 +536,43 @@ impl Cdic {
         if self.disc_mode == DiscMode::Toc {
             self.build_toc_into_buffer(disc, &mut buffer, &mut q, msf);
         } else {
-            q[0] = if self.disc_mode == DiscMode::Cdda {
-                0x01
-            } else {
-                0x41
+            // Q reports the track the head is actually over, the index, and
+            // time relative to that track's INDEX 01 — not the absolute time.
+            // Multi-track discs (VCD MPEG tracks, mixed-mode audio) position
+            // themselves with this, and reporting track 1 for every sector
+            // makes a player treat correct reads as errors.
+            let bcd = |v: u32| (((v / 10) << 4) | (v % 10)) as u8;
+            let msf_bcd = |frames: u32| {
+                [
+                    bcd(frames / (60 * 75)),
+                    bcd((frames / 75) % 60),
+                    bcd(frames % 75),
+                ]
             };
-            q[1] = 0x01;
-            q[2] = 0x01;
-            q[3..6].copy_from_slice(&msf);
+            let (control, tno, index, relative) = match disc.track_at(abs) {
+                Some(track) => {
+                    let control = if track.mode.is_data() { 0x41 } else { 0x01 };
+                    // Inside a pregap the relative time counts down to INDEX 01.
+                    let (index, relative) = if abs >= track.start {
+                        (1, abs - track.start)
+                    } else {
+                        (0, track.start - abs)
+                    };
+                    (control, u32::from(track.number), index, relative)
+                }
+                None => {
+                    let control = if self.disc_mode == DiscMode::Cdda {
+                        0x01
+                    } else {
+                        0x41
+                    };
+                    (control, 1, 1, abs.saturating_sub(150))
+                }
+            };
+            q[0] = control;
+            q[1] = bcd(tno);
+            q[2] = bcd(index);
+            q[3..6].copy_from_slice(&msf_bcd(relative));
             q[6] = 0x00;
             q[7..10].copy_from_slice(&msf);
         }

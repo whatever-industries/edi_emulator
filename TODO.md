@@ -84,12 +84,60 @@
 
 ## Video CD CD-i menu and controls
 
-- [ ] Fix MPEG video presentation defects seen with the VCDs under
-  `/Volumes/Projects/Coding/Disc Images/VCD`: during playback of video
-  content there is a pillarbox on the right-hand side of the screen that
-  flashes to black, and intermittent macroblocking. The CD-i menus display
-  fine, so this looks specific to the DVC full-motion video path (decode or
-  MCD212 composition), not general rendering.
+- [ ] Fix two VCD faults seen with the discs under
+  `/Volumes/Projects/Coding/Disc Images/VCD`. They are probably one root
+  cause, in the CDIC-to-DVC stream path that VCD shares with CD-i Digital
+  Video. **CD-i Digital Video is otherwise mostly correct, so avoid
+  regressing it**; manual passes on both sides are needed for any change.
+  - Symptom A: multi-track discs report "Your disc may be damaged or dirty"
+    and never play — `CD-i See It Hear It Feel It (USA) (Kilby Predicts)
+    (Rev 1)` and `Addams Family Values (USA) (Disc 1)`, in both PAL and NTSC.
+    The dumps are good. Every disc that fails has more than two tracks, while
+    `Addams Family Values (UK)`, with one MPEG track, reaches playback.
+  - Symptom B: during playback the picture runs roughly two seconds clean,
+    two seconds macroblocking, then two seconds black, cycling. `The Accused`
+    is additionally off-centre with pillarboxing; the UK Addams disc shows
+    the cycle without the framing error. Menus render correctly throughout.
+  - Headless repro, about two minutes:
+    `cargo run -p cdi-cli --release -- boot firmware/cdi220b.rom --dvc-rom
+    firmware/vmpega.rom --disc <cue> --instructions 200000000 --click
+    588,265 --click-at 60000000 --screenshot out.png`
+  - Already ruled out, do not re-investigate:
+    - Multi-track addressing is correct. `AVSEQ01.DAT` at ISO LBA 81480 maps
+      to absolute frame 81630, whose sector header reads MSF 18:08:30 and
+      whose payload starts `00 00 01 BA`. Pregap and per-track offsets agree
+      with the Disc Xplorer model. Inspect with `cdi-cli disc <cue> --files`.
+    - MPEG audio is not mis-routed into the ADPCM decoder: coding `$7F` makes
+      `sector_count_for_coding` return 0 and `play_audio_data` reject it, and
+      the path is gated on `audio_channel`, which the player never enables.
+    - The read is not terminated by an EOF submode; there are no EOF sectors
+      in the first 3000 sectors of the MPEG track.
+    - Subcode Q reported a hardcoded track 1, index 1, and relative time equal
+      to absolute time. Fixed in commit 7766e38; it was wrong, but it was not
+      the trigger and both symptoms survive the fix.
+  - Spec anchors, from the White Book (`disc specs/CD-Rom/Video CD
+    Specification Version 2.0 (White Book).pdf`), Figure III.2: in
+    `AVSEQnn.DAT`, MPEG video is submode `%x11x001x` (0x62) coding `$0F` and
+    MPEG audio is submode `%x11x010x` (0x64) coding `$7F`, both on channel
+    `$01`, with **File Number = Sequence Number = Track Number minus one**, so
+    a disc with tracks 2, 3 and 4 carries file numbers 1, 2 and 3. Pause and
+    margin sectors are submode `%x11x000x` (0x60), are empty, and are
+    correctly filtered out today.
+  - Observed shape of symptom A: the player reads about 150 MPEG sectors from
+    track 2, re-seeks to the identical position, retries, then gives up — a
+    read-error retry pattern, even though the sectors it received are correct.
+  - Next steps:
+    - [ ] Script menu navigation with `--click-event` so a run reaches real
+      feature playback. Runs on the UK disc so far only reach the menu: every
+      delivered sector stayed inside track 1, so the 21 KB elementary stream
+      captured there was the menu clip rather than the feature.
+    - [ ] With playback genuinely running, capture `--dump-vmpeg-es` and diff
+      it against a contiguous extraction of the file from the disc image. This
+      is the technique that localised the 7th Guest defect; see
+      `docs/mpeg-dvc-plan.md`.
+    - [ ] Check whether the per-sequence File Number rule above is honoured
+      for discs with several MPEG tracks, since that is exactly what
+      distinguishes the failing discs from the working one.
 - [ ] Incorporate the CD-i menu functionality present on Video CDs under
   `/Volumes/Projects/Coding/Disc Images/VCD`.
   - [ ] Detect VCD media and its root-level `CDI` directory, which contains the

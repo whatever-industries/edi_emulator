@@ -222,7 +222,8 @@ jobs:
           wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-aarch64.AppImage" -O appimagetool
           chmod +x appimagetool
           ./scripts/make-appdir.sh target/release/cdi-frontend
-          ARCH=aarch64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "E-Di_Linux_ARM_${{ env.VERSION }}.AppImage"
+          # appimagetool names 64-bit ARM "arm_aarch64", not "aarch64".
+          ARCH=arm_aarch64 APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool AppDir "E-Di_Linux_ARM_${{ env.VERSION }}.AppImage"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

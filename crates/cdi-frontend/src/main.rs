@@ -99,9 +99,13 @@ struct InputState {
 }
 
 /// User preferences persisted across runs via eframe storage.
-#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct Prefs {
+    /// Disc library folders: Philips CD-i, Photo CD, Video CD.
+    libraries: [Option<String>; 3],
+    /// Folder screenshots/photos are saved to; `None` means Downloads.
+    save_dir: Option<String>,
     show_fps: bool,
     smooth_scaling: bool,
     capture_mouse_enabled: bool,
@@ -121,6 +125,8 @@ struct Prefs {
 impl Default for Prefs {
     fn default() -> Self {
         Self {
+            libraries: [None, None, None],
+            save_dir: None,
             show_fps: true,
             smooth_scaling: false,
             capture_mouse_enabled: true,
@@ -137,6 +143,17 @@ impl Default for Prefs {
             kb_button2: egui::Key::X,
         }
     }
+}
+
+/// Disc library slots, in UI order.
+const LIBRARY_SLOTS: [&str; 3] = ["Philips CD-i", "Photo CD", "Video CD"];
+
+/// Settings window tabs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsTab {
+    System,
+    Input,
+    Libraries,
 }
 
 /// The keyboard binding slots, in UI order.
@@ -209,6 +226,10 @@ struct PhotoCdUi {
     current: usize,
     tier: usize,
     max_tier: usize,
+    /// The disc carries its own CD-i application; the toggle between CD-i and
+    /// the high-fidelity host viewer is offered. When false the viewer is the
+    /// only mode and the panel shows a notice instead of the toggle.
+    has_cdi_app: bool,
     view_photo: bool,
     slideshow: bool,
     last_advance: Instant,
@@ -272,12 +293,33 @@ fn photocd_worker(rx: mpsc::Receiver<PcdCmd>, tx: mpsc::Sender<PcdEvent>, ctx: e
 }
 
 /// Write a decoded photo as PNG via a save dialog.
-fn save_photo_png(suggested_name: &str, image: &cdi_photocd::decode::DecodedImage) {
-    let Some(path) = rfd::FileDialog::new()
+/// The platform Downloads folder, used as the default screenshot location.
+fn downloads_dir() -> PathBuf {
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    home.join("Downloads")
+}
+
+fn save_photo_png(
+    suggested_name: &str,
+    save_dir: Option<&str>,
+    image: &cdi_photocd::decode::DecodedImage,
+) {
+    // Start in the configured save folder, else Downloads, else the first
+    // existing of the two.
+    let start_dir = save_dir
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(downloads_dir);
+    let mut dialog = rfd::FileDialog::new()
         .set_title("Save photo as PNG")
-        .set_file_name(suggested_name)
-        .save_file()
-    else {
+        .set_file_name(suggested_name);
+    if start_dir.is_dir() {
+        dialog = dialog.set_directory(start_dir);
+    }
+    let Some(path) = dialog.save_file() else {
         return;
     };
     let Ok(file) = std::fs::File::create(&path) else {
@@ -457,7 +499,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(standard) = video_standard {
         model.video = standard.into();
     }
-    let title = format!("{APP_NAME} — {}", model.title);
+    let title = APP_NAME.to_owned();
 
     let dvc_path = dvc_rom;
     let (dvc, dvc_status) = if let Some(path) = &dvc_path {
@@ -864,6 +906,9 @@ struct App {
     pcd_tx: mpsc::Sender<PcdCmd>,
     pcd_rx: mpsc::Receiver<PcdEvent>,
     photocd: Option<PhotoCdUi>,
+    libraries: [Option<String>; 3],
+    save_dir: Option<String>,
+    settings_tab: SettingsTab,
     #[cfg(target_os = "macos")]
     native_menu: NativeMenu,
 }
@@ -932,6 +977,9 @@ impl App {
             pcd_tx,
             pcd_rx,
             photocd: None,
+            libraries: prefs.libraries.clone(),
+            save_dir: prefs.save_dir.clone(),
+            settings_tab: SettingsTab::System,
             #[cfg(target_os = "macos")]
             native_menu: NativeMenu::new().expect("initialize native macOS menu"),
         }
@@ -946,11 +994,20 @@ impl App {
     }
 
     fn open_disc(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
+        let mut dialog = rfd::FileDialog::new()
             .set_title("Open a CD-i disc image")
-            .add_filter("CUE sheets", &["cue"])
-            .pick_file()
+            .add_filter("CUE sheets", &["cue"]);
+        // Start in the first configured library folder that exists.
+        if let Some(dir) = self
+            .libraries
+            .iter()
+            .flatten()
+            .map(PathBuf::from)
+            .find(|p| p.is_dir())
         {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(path) = dialog.pick_file() {
             *self.shared.status.lock().unwrap() = format!("Loading {}…", display_name(&path));
             self.photocd = None;
             let _ = self.pcd_tx.send(PcdCmd::Open(path.clone()));
@@ -1052,6 +1109,79 @@ impl App {
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::System, "System");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Input, "Input");
+            ui.selectable_value(&mut self.settings_tab, SettingsTab::Libraries, "Libraries");
+        });
+        ui.separator();
+        match self.settings_tab {
+            SettingsTab::System => self.settings_system_ui(ui),
+            SettingsTab::Input => self.settings_input_ui(ui),
+            SettingsTab::Libraries => self.settings_libraries_ui(ui),
+        }
+    }
+
+    fn settings_libraries_ui(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Disc Libraries");
+        ui.label(
+            "Folders where your disc images live. The Open dialog starts in the first configured library.",
+        );
+        ui.add_space(4.0);
+        for (slot, name) in LIBRARY_SLOTS.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.strong(format!("{name}:"));
+                if ui.button("Choose…").clicked() {
+                    if let Some(dir) = rfd::FileDialog::new()
+                        .set_title(format!("Choose the {name} library folder"))
+                        .pick_folder()
+                    {
+                        self.libraries[slot] = Some(dir.display().to_string());
+                    }
+                }
+                if self.libraries[slot].is_some() && ui.button("Clear").clicked() {
+                    self.libraries[slot] = None;
+                }
+            });
+            match &self.libraries[slot] {
+                Some(path) => {
+                    ui.monospace(path);
+                }
+                None => {
+                    ui.weak("not set");
+                }
+            }
+            ui.add_space(6.0);
+        }
+
+        ui.separator();
+        ui.heading("Screenshot Save Folder");
+        ui.label("Where saved photos and screenshots go. Defaults to Downloads.");
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button("Choose…").clicked() {
+                if let Some(dir) = rfd::FileDialog::new()
+                    .set_title("Choose the screenshot save folder")
+                    .pick_folder()
+                {
+                    self.save_dir = Some(dir.display().to_string());
+                }
+            }
+            if self.save_dir.is_some() && ui.button("Use Downloads").clicked() {
+                self.save_dir = None;
+            }
+        });
+        match &self.save_dir {
+            Some(path) => {
+                ui.monospace(path);
+            }
+            None => {
+                ui.weak(format!("Downloads ({})", downloads_dir().display()));
+            }
+        }
+    }
+
+    fn settings_system_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("Audio");
         let mut muted = self.shared.muted.load(Ordering::Relaxed);
         if ui.checkbox(&mut muted, "Mute audio").changed() {
@@ -1094,7 +1224,9 @@ impl App {
         }
         ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
         ui.checkbox(&mut self.show_fps, "Show frame rate");
-        ui.separator();
+    }
+
+    fn settings_input_ui(&mut self, ui: &mut egui::Ui) {
         ui.heading("CD-i Peripherals");
         ui.label("The emulated player exposes a relative pointing device; every input source below drives it.");
 
@@ -1242,6 +1374,11 @@ impl App {
         if ctx.wants_keyboard_input() {
             return;
         }
+        // While viewing photos the keyboard drives image navigation, not the
+        // CD-i pointer.
+        if self.photocd.as_ref().is_some_and(|p| p.view_photo) {
+            return;
+        }
         let (delta, buttons) = ctx.input(|input| {
             let held = |key: egui::Key| input.key_down(key);
             let delta = egui::vec2(
@@ -1368,6 +1505,8 @@ impl App {
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let prefs = Prefs {
+            libraries: self.libraries.clone(),
+            save_dir: self.save_dir.clone(),
             show_fps: self.show_fps,
             smooth_scaling: self.smooth_scaling,
             capture_mouse_enabled: self.capture_mouse_enabled,
@@ -1398,35 +1537,27 @@ impl eframe::App for App {
                     max_tier,
                     has_cdi_app,
                 } => {
-                    if has_cdi_app {
-                        // CD Bridge disc with a CD-i application: the emulated
-                        // player displays the photos natively; no host viewer.
-                        log::info!(
-                            "photo cd with CD-i application ({} images) — CD-i drives display",
-                            names.len()
-                        );
-                        self.photocd = None;
-                        let _ = self.pcd_tx.send(PcdCmd::Close);
-                    } else {
-                        // No CD-i application on the disc: the emulated player
-                        // cannot show these photos, so the host viewer takes
-                        // over immediately (same exception the Photo CD Player
-                        // app handles).
-                        self.photocd = Some(PhotoCdUi {
-                            names,
-                            current: 0,
-                            tier: 0,
-                            max_tier,
-                            view_photo: true,
-                            slideshow: false,
-                            last_advance: Instant::now(),
-                            decoding: false,
-                            decoded: None,
-                            texture: None,
-                            error: None,
-                        });
-                        request_first_decode = true;
-                    }
+                    // With a CD-i application the disc's own program drives
+                    // display by default and the host viewer is an opt-in
+                    // high-fidelity mode. Without one (e.g. Kodak USA High
+                    // Sierra discs, Aktuelles Berlin) the viewer is the only
+                    // mode and takes over immediately.
+                    let view_photo = !has_cdi_app;
+                    self.photocd = Some(PhotoCdUi {
+                        names,
+                        current: 0,
+                        tier: 0,
+                        max_tier,
+                        has_cdi_app,
+                        view_photo,
+                        slideshow: false,
+                        last_advance: Instant::now(),
+                        decoding: false,
+                        decoded: None,
+                        texture: None,
+                        error: None,
+                    });
+                    request_first_decode = view_photo;
                 }
                 PcdEvent::NotPhotoCd => self.photocd = None,
                 PcdEvent::Decoded { index, image } => {
@@ -1451,6 +1582,34 @@ impl eframe::App for App {
                 }
             }
         }
+        // Left/right arrows change the picture while viewing photos (unless a
+        // text field has focus). Consumed here so they don't also drive the
+        // CD-i pointer via poll_keyboard.
+        if self
+            .photocd
+            .as_ref()
+            .is_some_and(|p| p.view_photo && p.names.len() > 1)
+            && !ctx.wants_keyboard_input()
+        {
+            let (left, right) = ctx.input_mut(|input| {
+                (
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
+                    input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
+                )
+            });
+            if let Some(p) = &mut self.photocd {
+                if left {
+                    p.current = (p.current + p.names.len() - 1) % p.names.len();
+                    p.last_advance = Instant::now();
+                    request_first_decode = true;
+                } else if right {
+                    p.current = (p.current + 1) % p.names.len();
+                    p.last_advance = Instant::now();
+                    request_first_decode = true;
+                }
+            }
+        }
+
         // Slideshow auto-advance.
         if let Some(p) = &mut self.photocd {
             if p.slideshow
@@ -1585,9 +1744,10 @@ impl eframe::App for App {
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(self.shared.status.lock().unwrap().as_str());
+                let viewing_photos = self.photocd.as_ref().map(|p| p.view_photo).unwrap_or(false);
                 if self.mouse_captured {
                     ui.weak("Esc releases the mouse");
-                } else if self.capture_mouse_enabled {
+                } else if self.capture_mouse_enabled && !viewing_photos {
                     ui.weak("Click the screen to capture the mouse");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1605,25 +1765,27 @@ impl eframe::App for App {
         if let Some(p) = &mut self.photocd {
             egui::TopBottomPanel::bottom("photocd_panel").show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(format!(
-                        "Photo CD (no CD-i application) — {} images",
-                        p.names.len()
-                    ));
-                    let view_label = if p.view_photo {
-                        "Back to CD-i"
-                    } else {
-                        "View Photos"
-                    };
-                    if ui.button(view_label).clicked() {
-                        p.view_photo = !p.view_photo;
-                        if p.view_photo {
-                            photo_entered_view = true;
-                            if p.decoded.is_none() && !p.decoding {
-                                photo_decode = true;
-                            }
+                    ui.label("Photo CD");
+                    if p.has_cdi_app {
+                        let view_label = if p.view_photo {
+                            "Back to CD-i"
                         } else {
-                            p.slideshow = false;
+                            "View Raw Images"
+                        };
+                        if ui.button(view_label).clicked() {
+                            p.view_photo = !p.view_photo;
+                            if p.view_photo {
+                                photo_entered_view = true;
+                                if p.decoded.is_none() && !p.decoding {
+                                    photo_decode = true;
+                                }
+                            } else {
+                                p.slideshow = false;
+                            }
                         }
+                    } else {
+                        p.view_photo = true;
+                        ui.weak("No CD-i support on this disc");
                     }
                     if p.view_photo && !p.names.is_empty() {
                         ui.separator();
@@ -1636,7 +1798,6 @@ impl eframe::App for App {
                             photo_decode = true;
                         }
                         ui.label(format!("{} / {}", p.current + 1, p.names.len()));
-                        ui.weak(&p.names[p.current]);
                         ui.separator();
                         let prev_tier = p.tier;
                         egui::ComboBox::from_id_salt("pcd_tier")
@@ -1654,17 +1815,18 @@ impl eframe::App for App {
                             photo_decode = true;
                         }
                         if p.names.len() > 1 {
-                            let label = if p.slideshow {
-                                "■ Stop"
-                            } else {
-                                "▶ Slideshow"
-                            };
+                            let label = if p.slideshow { "■" } else { "▶" };
                             if ui.button(label).clicked() {
                                 p.slideshow = !p.slideshow;
                                 p.last_advance = Instant::now();
                             }
                         }
-                        if p.decoded.is_some() && ui.button("Save PNG…").clicked() {
+                        if p.decoded.is_some()
+                            && ui
+                                .button(egui::RichText::new("⬇").size(16.0))
+                                .on_hover_text("Save photo as PNG")
+                                .clicked()
+                        {
                             let stem = p.names[p.current]
                                 .rsplit_once('.')
                                 .map(|(s, _)| s.to_owned())
@@ -1690,7 +1852,7 @@ impl eframe::App for App {
             self.request_photo_decode();
         }
         if let Some((name, image)) = photo_save {
-            save_photo_png(&name, &image);
+            save_photo_png(&name, self.save_dir.as_deref(), &image);
         }
 
         egui::CentralPanel::default()

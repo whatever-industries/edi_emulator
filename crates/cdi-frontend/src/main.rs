@@ -1309,23 +1309,24 @@ impl App {
                 }
             }
         }
+        // Open on a format that actually has discs. Done here rather than per
+        // frame so a deliberate click onto an empty tab is not undone.
+        if !self.library.iter().any(|e| e.category == self.library_tab) {
+            if let Some(entry) = self.library.first() {
+                self.library_tab = entry.category;
+            }
+        }
     }
 
     /// Draw the disc-library browser and return a disc to load if clicked.
     fn paint_library(&mut self, ctx: &egui::Context) -> Option<PathBuf> {
-        // Per-format disc counts; a format tab is enabled only if it has discs.
+        // Per-format disc counts. Every tab stays clickable: selecting a
+        // format with no folder set is how the user reaches its prompt.
         let mut counts = [0usize; LIBRARY_SLOTS.len()];
         for entry in &self.library {
             counts[entry.category] += 1;
         }
-        // Keep the selection on a populated tab.
-        if counts[self.library_tab] == 0 {
-            if let Some(first) = counts.iter().position(|&c| c > 0) {
-                self.library_tab = first;
-            }
-        }
 
-        let all_empty = self.library.is_empty();
         let mut selected = self.library_tab;
         let mut load_path = None;
         let mut needs_open = false;
@@ -1358,21 +1359,15 @@ impl App {
                 let tabs = squircle().show(ui, |ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     for (slot, name) in LIBRARY_SLOTS.iter().enumerate() {
-                        // Enabled when the format has discs, or (when nothing is
-                        // configured yet) always, so the empty-state link can
-                        // target any format.
-                        let enabled = counts[slot] > 0 || all_empty;
-                        ui.add_enabled_ui(enabled, |ui| {
-                            if ui
-                                .selectable_label(
-                                    selected == slot,
-                                    egui::RichText::new(*name).size(15.0),
-                                )
-                                .clicked()
-                            {
-                                selected = slot;
-                            }
-                        });
+                        // Formats with no discs are dimmed but still
+                        // selectable, so their set-folder prompt is reachable.
+                        let mut text = egui::RichText::new(*name).size(15.0);
+                        if counts[slot] == 0 {
+                            text = text.weak();
+                        }
+                        if ui.selectable_label(selected == slot, text).clicked() {
+                            selected = slot;
+                        }
                     }
                 });
                 ui.add_space(GROUP_GAP);
@@ -1392,10 +1387,16 @@ impl App {
                 needs_open = true;
             }
 
-            if all_empty {
+            // Per-format empty state: prompt for the selected format's folder.
+            if counts[selected] == 0 {
                 ui.add_space(48.0);
                 ui.vertical_centered(|ui| {
-                    ui.weak("No discs found.");
+                    let configured = self.libraries[selected].is_some();
+                    ui.weak(if configured {
+                        "No discs found in this folder."
+                    } else {
+                        "No library folder set for this format."
+                    });
                     ui.add_space(4.0);
                     if ui
                         .link(format!(

@@ -230,6 +230,8 @@ struct Prefs {
     capture_mouse_enabled: bool,
     #[serde(default = "default_true")]
     auto_region: bool,
+    #[serde(default = "default_ff_key")]
+    ff_key: egui::Key,
     pad_speed: f32,
     pad_deadzone: f32,
     pad_button1: gilrs::Button,
@@ -252,6 +254,7 @@ impl Default for Prefs {
             smooth_scaling: false,
             capture_mouse_enabled: true,
             auto_region: true,
+            ff_key: default_ff_key(),
             pad_speed: 8.0,
             pad_deadzone: 0.15,
             pad_button1: gilrs::Button::South,
@@ -298,6 +301,10 @@ const KB_SLOTS: [&str; 6] = [
 ];
 
 const PREFS_KEY: &str = "prefs";
+
+fn default_ff_key() -> egui::Key {
+    egui::Key::Tab
+}
 
 fn default_true() -> bool {
     true
@@ -496,6 +503,8 @@ struct Shared {
     pal: AtomicBool,
     /// Match the player's video standard to the disc's region tag on load.
     auto_region: AtomicBool,
+    /// Host-side turbo: run the emulation unthrottled while held.
+    fast_forward: AtomicBool,
     muted: Arc<AtomicBool>,
     running: AtomicBool,
     /// Emulated frames per second (diagnostics).
@@ -706,6 +715,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dvc_inserted: AtomicBool::new(dvc_inserted),
         pal: AtomicBool::new(model.video == cdi_core::VideoStandard::Pal),
         auto_region: AtomicBool::new(true),
+        fast_forward: AtomicBool::new(false),
         muted: Arc::new(AtomicBool::new(false)),
         running: AtomicBool::new(true),
         fps: Mutex::new(0.0),
@@ -1053,8 +1063,12 @@ fn emu_loop(mut machine: cdi_core::Machine, shared: Arc<Shared>, mut audio: Opti
             steps += 1;
         }
 
+        let fast_forward = shared.fast_forward.load(Ordering::Relaxed);
         let samples = machine.take_audio();
-        if let Some(producer) = &mut audio {
+        // While fast-forwarding, samples are produced far faster than the
+        // 44.1 kHz device drains them; dropping them here keeps the output
+        // silent instead of a stutter, and costs nothing when idle.
+        if let (Some(producer), false) = (&mut audio, fast_forward) {
             for sample in samples {
                 if producer.push(sample).is_err() {
                     break;
@@ -1088,12 +1102,18 @@ fn emu_loop(mut machine: cdi_core::Machine, shared: Arc<Shared>, mut audio: Opti
         } else {
             Duration::from_micros(16_667)
         };
-        next_frame_deadline += frame_duration;
-        let now = Instant::now();
-        if next_frame_deadline > now {
-            std::thread::sleep(next_frame_deadline - now);
+        if fast_forward {
+            // Run flat out and keep the deadline anchored to now, so releasing
+            // the key does not try to "catch up" the skipped time.
+            next_frame_deadline = Instant::now();
         } else {
-            next_frame_deadline = now;
+            next_frame_deadline += frame_duration;
+            let now = Instant::now();
+            if next_frame_deadline > now {
+                std::thread::sleep(next_frame_deadline - now);
+            } else {
+                next_frame_deadline = now;
+            }
         }
     }
 }
@@ -1127,6 +1147,9 @@ struct App {
     kb_frac: egui::Vec2,
     /// Binding slot (index into KB_SLOTS) awaiting a key press to rebind.
     kb_rebind: Option<usize>,
+    /// Hold-to-fast-forward key, and whether it is awaiting a rebind press.
+    ff_key: egui::Key,
+    ff_rebind: bool,
     /// Sub-pixel remainder of captured-mouse motion carried across frames.
     capture_frac: egui::Vec2,
     capture_origin: Option<egui::Pos2>,
@@ -1206,6 +1229,8 @@ impl App {
             kb_buttons: 0,
             kb_frac: egui::Vec2::ZERO,
             kb_rebind: None,
+            ff_key: prefs.ff_key,
+            ff_rebind: false,
             capture_frac: egui::Vec2::ZERO,
             capture_origin: None,
             capture_motion_grace: 0,
@@ -1877,6 +1902,42 @@ impl App {
                 }
             });
 
+        ui.separator();
+        ui.heading("Emulator Controls");
+        // A pending fast-forward rebind captures the next key pressed.
+        if self.ff_rebind {
+            let captured = ui.ctx().input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::Key {
+                        key, pressed: true, ..
+                    } => Some(*key),
+                    _ => None,
+                })
+            });
+            if let Some(key) = captured {
+                if key != egui::Key::Escape {
+                    self.ff_key = key;
+                }
+                self.ff_rebind = false;
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.label("Fast-forward (hold):");
+            let text = if self.ff_rebind {
+                "Press a key… (Esc cancels)".to_owned()
+            } else {
+                self.ff_key.name().to_owned()
+            };
+            if ui.button(text).clicked() {
+                self.ff_rebind = !self.ff_rebind;
+            }
+            if self.ff_key != default_ff_key() && ui.button("Reset").clicked() {
+                self.ff_key = default_ff_key();
+                self.ff_rebind = false;
+            }
+        });
+        ui.label("Runs the emulation as fast as this machine allows while held; audio is silenced during it.");
+
         egui::CollapsingHeader::new("CD-i Keyboard (not yet emulated)")
             .default_open(false)
             .show(ui, |ui| {
@@ -2029,6 +2090,7 @@ impl eframe::App for App {
             smooth_scaling: self.smooth_scaling,
             capture_mouse_enabled: self.capture_mouse_enabled,
             auto_region: self.shared.auto_region.load(Ordering::Relaxed),
+            ff_key: self.ff_key,
             pad_speed: self.pad_speed,
             pad_deadzone: self.pad_deadzone,
             pad_button1: self.pad_button1,
@@ -2309,6 +2371,9 @@ impl eframe::App for App {
                         } else {
                             "NTSC"
                         });
+                        if self.shared.fast_forward.load(Ordering::Relaxed) {
+                            ui.label(egui::RichText::new("▶▶").strong());
+                        }
                     });
                 });
             });
@@ -2575,6 +2640,15 @@ impl eframe::App for App {
                     }
                 }
             });
+
+        // Hold-to-fast-forward. Ignored while a text field or a pending
+        // rebind wants the keyboard.
+        let fast_forward = !ctx.wants_keyboard_input()
+            && !self.ff_rebind
+            && ctx.input(|i| i.key_down(self.ff_key));
+        self.shared
+            .fast_forward
+            .store(fast_forward, Ordering::Relaxed);
 
         self.poll_keyboard(ctx);
         self.poll_gamepad();

@@ -5,26 +5,39 @@ Rust.
 
 ## Status
 
-Early foundation. Current milestone targets:
+Playable. A Mono-I player boots its BIOS to the shell, runs titles from
+CUE/BIN images, and drives the optional VMPEG Digital Video Cartridge through
+to full-motion video gameplay.
 
-- **M0** — workspace scaffolding, OS-9 ROM inspection, board/bus/scheduler core, SCC68070 CPU skeleton
-- **M1** — boot a Mono-I player BIOS (CD-i 220 F2 / 200) to the player shell
-- **M2** — CDIC + CUE/BIN disc playback (data sectors, XA-ADPCM, CD-DA, CD-i Ready)
-- **M3** — optional VMPEG Digital Video Cartridge with MPEG-1 video and Layer-II audio
+- **M0–M2 complete** — SCC68070 core and on-chip peripherals, MCD212 video,
+  SLAVE and CDIC, and CUE/BIN disc playback covering data sectors, XA-ADPCM,
+  CD-DA, and CD-i Ready.
+- **M3 complete** — VMPEG cartridge with safe-Rust MPEG-1 video and Layer-II
+  audio, reaching interactive gameplay in *The 7th Guest*.
 
-IMPEG and non-Mono-I boards remain future work; the architecture accommodates
-them through typed cartridge and data-driven board definitions.
+Current work is title compatibility. Video CD playback has known faults:
+discs with several MPEG tracks are rejected by the player application, and
+playback shows cyclic artefacts — both tracked in the project's TODO. IMPEG
+and non-Mono-I boards remain future work; the architecture accommodates them
+through typed cartridge and data-driven board definitions.
+
+Beyond emulation, the desktop app provides a disc library browser, mouse,
+keyboard and gamepad input with rebindable controls, a Photo CD viewer for
+discs that carry no CD-i application, persistent saved games, selectable
+system ROMs, PAL/NTSC switching with optional per-disc region matching, and
+hold-to-fast-forward.
 
 ## Workspace
 
 | Crate | Purpose |
 |---|---|
 | `cdi-scc68070` | SCC68070 CPU core + on-chip peripherals (standalone, bus via trait) |
-| `cdi-core` | Machine: bus, scheduler, boards, MCD212, SLAVE, NVRAM, CDIC |
+| `cdi-core` | Machine: bus, scheduler, boards, MCD212, SLAVE, NVRAM, CDIC, DVC |
 | `cdi-disc` | CUE/BIN disc images, sector/subheader model |
 | `cdi-os9` | OS-9 module parsing (ROM identification, debugger support) |
+| `cdi-photocd` | Kodak Photo CD image pack decoder (Base/4Base/16Base) |
 | `cdi-frontend` | egui/eframe desktop app, cpal audio, gilrs input |
-| `cdi-cli` | Headless harness: boot, trace, screenshot hashing (used by CI) |
+| `cdi-cli` | Headless harness: boot, trace, disc inspection, screenshot hashing (used by CI) |
 
 ## Building
 

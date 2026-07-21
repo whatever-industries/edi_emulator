@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CD-i Mono-I SLAVE MCU high-level emulation.
 //!
 //! Ported from MAME `src/mame/philips/cdislavehle.cpp` (BSD-3-Clause,

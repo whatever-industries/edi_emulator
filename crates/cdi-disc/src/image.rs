@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Loaded disc image: tracks laid out in absolute disc time, raw sector
 //! access, and transparent descrambling of data sectors found in
 //! audio-track regions (CD-i Ready).

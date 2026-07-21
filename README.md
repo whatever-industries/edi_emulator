@@ -46,5 +46,5 @@ Game disc images are not included and must be supplied by the user.
 
 ## License
 
-GPL-2.0-or-later. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for
+GPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for
 third-party attribution.

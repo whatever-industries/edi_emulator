@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CD-i ROM / board identification from OS-9 module signatures.
 //!
 //! Transliterated from `cditypes.rul` by "CD-i Fan" (www.cdiemu.org),

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CD-i disc image handling: CUE/BIN parsing, raw sector access in absolute
 //! disc time, Mode 2 subheaders, and ECMA-130 descrambling for CD-i Ready
 //! discs whose data hides in an audio track's pregap.

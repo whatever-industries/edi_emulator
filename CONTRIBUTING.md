@@ -2,8 +2,8 @@
 
 ## Licensing rules (read first)
 
-- All contributions are GPL-2.0-or-later. Every source file starts with
-  `// SPDX-License-Identifier: GPL-2.0-or-later`.
+- All contributions are GPL-3.0-or-later. Every source file starts with
+  `// SPDX-License-Identifier: GPL-3.0-or-later`.
 - Porting logic from **MAME's** CD-i files (BSD-3-Clause) is allowed; add an
   attribution comment naming the MAME source file and authors, preserve its
   copyright notice in `NOTICE.md`, and keep the applicable terms in

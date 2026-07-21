@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Desktop frontend: renders the MCD212 framebuffer in an eframe window and
 //! feeds mouse and gamepad input to the SLAVE pointer device.
 //!
@@ -102,8 +102,9 @@ struct InputState {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct Prefs {
-    /// Disc library folders: Philips CD-i, Photo CD, Video CD.
-    libraries: [Option<String>; 3],
+    /// Disc library folders, one per [`LIBRARY_SLOTS`] entry. Stored as a
+    /// growable list so adding categories doesn't invalidate saved prefs.
+    libraries: Vec<Option<String>>,
     /// Folder screenshots/photos are saved to; `None` means Downloads.
     save_dir: Option<String>,
     show_fps: bool,
@@ -125,7 +126,7 @@ struct Prefs {
 impl Default for Prefs {
     fn default() -> Self {
         Self {
-            libraries: [None, None, None],
+            libraries: Vec::new(),
             save_dir: None,
             show_fps: true,
             smooth_scaling: false,
@@ -145,8 +146,17 @@ impl Default for Prefs {
     }
 }
 
-/// Disc library slots, in UI order.
-const LIBRARY_SLOTS: [&str; 3] = ["Philips CD-i", "Photo CD", "Video CD"];
+/// Disc library slots, in UI order. CD-BGM is a CD-i-based background-music
+/// format the player handles like an ordinary CD-i disc.
+const LIBRARY_SLOTS: [&str; 4] = ["Philips CD-i", "Photo CD", "Video CD", "CD-BGM"];
+
+/// One disc found while scanning the configured library folders.
+struct LibraryEntry {
+    title: String,
+    /// Index into [`LIBRARY_SLOTS`] naming the category it was found under.
+    category: usize,
+    cue: PathBuf,
+}
 
 /// Settings window tabs.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -349,6 +359,8 @@ struct Shared {
     input: Mutex<InputState>,
     command: Mutex<Option<MachineCommand>>,
     status: Mutex<String>,
+    /// Name of the loaded disc, shown in the top bar; `None` when empty.
+    disc_name: Mutex<Option<String>>,
     dvc_status: Mutex<String>,
     dvc_path: Mutex<Option<PathBuf>>,
     dvc_inserted: AtomicBool,
@@ -519,7 +531,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let dvc_inserted = dvc.is_some();
     let mut machine = cdi_core::Machine::with_dvc(&model, image, dvc)?;
-    let mut disc_status = "No disc inserted".to_owned();
+    let mut disc_name: Option<String> = None;
     let initial_disc = disc.clone();
     if let Some(cue) = disc {
         let disc = cdi_disc::DiscImage::load(&cue)?;
@@ -529,7 +541,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             disc.leadout_msf()
         );
         machine.set_disc(Some(disc));
-        disc_status = format!("Disc: {}", display_name(&cue));
+        disc_name = Some(display_name(&cue));
     }
     let (fb_w, fb_h) = machine.bus.mcd212.visible_size();
 
@@ -544,7 +556,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
         input: Mutex::new(InputState::default()),
         command: Mutex::new(None),
-        status: Mutex::new(disc_status),
+        status: Mutex::new(String::new()),
+        disc_name: Mutex::new(disc_name),
         dvc_status: Mutex::new(dvc_status),
         dvc_path: Mutex::new(dvc_path),
         dvc_inserted: AtomicBool::new(dvc_inserted),
@@ -588,6 +601,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ])
             .with_title(&title),
         vsync: true,
+        // Keep preference storage, but always open at the framebuffer size
+        // above rather than a restored window size, so the launch/library
+        // view and the emulation view share one resolution.
+        persist_window: false,
         ..Default::default()
     };
     let app_shared = Arc::clone(&shared);
@@ -718,20 +735,21 @@ fn emu_loop(mut machine: cdi_core::Machine, shared: Arc<Shared>, mut audio: Opti
             match command {
                 MachineCommand::LoadDisc(path) => match cdi_disc::DiscImage::load(&path) {
                     Ok(disc) => {
-                        let tracks = disc.tracks().len();
                         machine.set_disc(Some(disc));
                         machine.reset();
-                        *shared.status.lock().unwrap() =
-                            format!("Disc: {} ({tracks} track(s))", display_name(&path));
+                        *shared.disc_name.lock().unwrap() = Some(display_name(&path));
+                        shared.status.lock().unwrap().clear();
                     }
                     Err(error) => {
+                        *shared.disc_name.lock().unwrap() = None;
                         *shared.status.lock().unwrap() = format!("Open failed: {error}");
                     }
                 },
                 MachineCommand::EjectDisc => {
                     machine.set_disc(None);
                     machine.reset();
-                    *shared.status.lock().unwrap() = "No disc inserted".to_owned();
+                    *shared.disc_name.lock().unwrap() = None;
+                    shared.status.lock().unwrap().clear();
                 }
                 MachineCommand::AttachDvc(path) => {
                     let result = std::fs::read(&path)
@@ -906,7 +924,13 @@ struct App {
     pcd_tx: mpsc::Sender<PcdCmd>,
     pcd_rx: mpsc::Receiver<PcdEvent>,
     photocd: Option<PhotoCdUi>,
-    libraries: [Option<String>; 3],
+    libraries: [Option<String>; LIBRARY_SLOTS.len()],
+    library: Vec<LibraryEntry>,
+    show_library: bool,
+    /// Selected format tab in the library view (index into [`LIBRARY_SLOTS`]).
+    library_tab: usize,
+    /// Measured width of the library tab strip, used to center it next frame.
+    library_strip_w: f32,
     save_dir: Option<String>,
     settings_tab: SettingsTab,
     #[cfg(target_os = "macos")]
@@ -926,6 +950,7 @@ impl App {
             .name("photocd".into())
             .spawn(move || photocd_worker(cmd_rx, event_tx, worker_ctx))
             .expect("spawn photocd worker");
+        let has_initial_disc = initial_disc.is_some();
         if let Some(path) = initial_disc {
             let _ = pcd_tx.send(PcdCmd::Open(path));
         }
@@ -934,7 +959,7 @@ impl App {
             .and_then(|storage| storage.get_string(PREFS_KEY))
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default();
-        Self {
+        let mut app = Self {
             shared,
             texture: None,
             last_frame_no: 0,
@@ -977,12 +1002,227 @@ impl App {
             pcd_tx,
             pcd_rx,
             photocd: None,
-            libraries: prefs.libraries.clone(),
+            libraries: {
+                // Normalize the stored list to the fixed slot count so an
+                // added category can't shift or drop existing folders.
+                let mut libs: [Option<String>; LIBRARY_SLOTS.len()] = Default::default();
+                for (slot, value) in prefs.libraries.iter().take(LIBRARY_SLOTS.len()).enumerate() {
+                    libs[slot] = value.clone();
+                }
+                libs
+            },
+            library: Vec::new(),
+            // Open into the library when folders are configured and no disc was
+            // passed on the command line.
+            show_library: !has_initial_disc && prefs.libraries.iter().flatten().next().is_some(),
+            library_tab: 0,
+            library_strip_w: 0.0,
             save_dir: prefs.save_dir.clone(),
             settings_tab: SettingsTab::System,
             #[cfg(target_os = "macos")]
             native_menu: NativeMenu::new().expect("initialize native macOS menu"),
+        };
+        app.scan_libraries();
+        app
+    }
+
+    /// Rebuild the library list from the configured folders. Each library is
+    /// a folder of per-disc subdirectories (each holding a `.cue`), matching
+    /// how the disc images are organized; loose `.cue` files are also picked
+    /// up.
+    fn scan_libraries(&mut self) {
+        self.library.clear();
+        for (category, dir) in self.libraries.iter().enumerate() {
+            let Some(dir) = dir.as_ref().map(PathBuf::from).filter(|p| p.is_dir()) else {
+                continue;
+            };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            let mut paths: Vec<PathBuf> =
+                entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
+            paths.sort_by_key(|p| p.file_name().map(|s| s.to_ascii_lowercase()));
+            for path in paths {
+                let cue = if path.is_dir() {
+                    std::fs::read_dir(&path).ok().and_then(|inner| {
+                        inner
+                            .filter_map(|e| e.ok().map(|e| e.path()))
+                            .find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("cue")))
+                    })
+                } else if path
+                    .extension()
+                    .is_some_and(|x| x.eq_ignore_ascii_case("cue"))
+                {
+                    Some(path.clone())
+                } else {
+                    None
+                };
+                if let Some(cue) = cue {
+                    let title = if path.is_dir() { &path } else { &cue }
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| cue.display().to_string());
+                    self.library.push(LibraryEntry {
+                        title,
+                        category,
+                        cue,
+                    });
+                }
+            }
         }
+    }
+
+    /// Draw the disc-library browser and return a disc to load if clicked.
+    fn paint_library(&mut self, ctx: &egui::Context) -> Option<PathBuf> {
+        // Per-format disc counts; a format tab is enabled only if it has discs.
+        let mut counts = [0usize; LIBRARY_SLOTS.len()];
+        for entry in &self.library {
+            counts[entry.category] += 1;
+        }
+        // Keep the selection on a populated tab.
+        if counts[self.library_tab] == 0 {
+            if let Some(first) = counts.iter().position(|&c| c > 0) {
+                self.library_tab = first;
+            }
+        }
+
+        let all_empty = self.library.is_empty();
+        let mut selected = self.library_tab;
+        let mut load_path = None;
+        let mut needs_open = false;
+        // Library folder to configure, set from the empty-state link.
+        let mut pick_slot: Option<usize> = None;
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let visuals = ui.visuals();
+            let hover_fill = visuals.widgets.hovered.weak_bg_fill;
+            let text_normal = visuals.text_color();
+            let text_strong = visuals.strong_text_color();
+
+            ui.add_space(18.0);
+
+            // Format tabs in a shared squircle container. The Frame expands to
+            // full width inside a centered layout, so center it manually with
+            // the strip width measured last frame.
+            let container_fill = ui.visuals().faint_bg_color;
+            const GROUP_GAP: f32 = 8.0;
+            let pad = ((ui.available_width() - self.library_strip_w) * 0.5).max(0.0);
+            let mut strip_w = self.library_strip_w;
+            let mut open_clicked = false;
+            let squircle = || {
+                egui::Frame::new()
+                    .fill(container_fill)
+                    .corner_radius(egui::CornerRadius::same(10))
+                    .inner_margin(egui::Margin::symmetric(4, 4))
+            };
+            ui.horizontal(|ui| {
+                ui.add_space(pad);
+                let tabs = squircle().show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (slot, name) in LIBRARY_SLOTS.iter().enumerate() {
+                        // Enabled when the format has discs, or (when nothing is
+                        // configured yet) always, so the empty-state link can
+                        // target any format.
+                        let enabled = counts[slot] > 0 || all_empty;
+                        ui.add_enabled_ui(enabled, |ui| {
+                            if ui
+                                .selectable_label(
+                                    selected == slot,
+                                    egui::RichText::new(*name).size(15.0),
+                                )
+                                .clicked()
+                            {
+                                selected = slot;
+                            }
+                        });
+                    }
+                });
+                ui.add_space(GROUP_GAP);
+                let open = squircle().show(ui, |ui| {
+                    if ui
+                        .selectable_label(false, egui::RichText::new("Open .cue").size(15.0))
+                        .clicked()
+                    {
+                        open_clicked = true;
+                    }
+                });
+                strip_w = tabs.response.rect.width() + GROUP_GAP + open.response.rect.width();
+            });
+            self.library_strip_w = strip_w;
+            ui.add_space(10.0);
+            if open_clicked {
+                needs_open = true;
+            }
+
+            if all_empty {
+                ui.add_space(48.0);
+                ui.vertical_centered(|ui| {
+                    ui.weak("No discs found.");
+                    ui.add_space(4.0);
+                    if ui
+                        .link(format!(
+                            "Click here to set {} library folder.",
+                            LIBRARY_SLOTS[selected]
+                        ))
+                        .clicked()
+                    {
+                        pick_slot = Some(selected);
+                    }
+                });
+                return;
+            }
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let col_w = ui.available_width().min(640.0);
+                    ui.vertical_centered(|ui| {
+                        ui.set_max_width(col_w);
+                        ui.add_space(4.0);
+                        for entry in self.library.iter().filter(|e| e.category == selected) {
+                            let row_h = 30.0;
+                            let (rect, resp) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), row_h),
+                                egui::Sense::click(),
+                            );
+                            let hovered = resp.hovered();
+                            if hovered {
+                                ui.painter().rect_filled(
+                                    rect,
+                                    egui::CornerRadius::same(5),
+                                    hover_fill,
+                                );
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                            ui.painter().text(
+                                egui::pos2(rect.left() + 12.0, rect.center().y),
+                                egui::Align2::LEFT_CENTER,
+                                &entry.title,
+                                egui::FontId::proportional(15.0),
+                                if hovered { text_strong } else { text_normal },
+                            );
+                            if resp.clicked() {
+                                load_path = Some(entry.cue.clone());
+                            }
+                        }
+                        ui.add_space(16.0);
+                    });
+                });
+        });
+        self.library_tab = selected;
+        if let Some(slot) = pick_slot {
+            if let Some(dir) = rfd::FileDialog::new()
+                .set_title(format!("Choose the {} library folder", LIBRARY_SLOTS[slot]))
+                .pick_folder()
+            {
+                self.libraries[slot] = Some(dir.display().to_string());
+                self.scan_libraries();
+            }
+        }
+        if needs_open {
+            self.open_disc();
+        }
+        ctx.request_repaint_after(Duration::from_millis(50));
+        load_path
     }
 
     fn texture_options(&self) -> egui::TextureOptions {
@@ -1008,11 +1248,19 @@ impl App {
             dialog = dialog.set_directory(dir);
         }
         if let Some(path) = dialog.pick_file() {
-            *self.shared.status.lock().unwrap() = format!("Loading {}…", display_name(&path));
-            self.photocd = None;
-            let _ = self.pcd_tx.send(PcdCmd::Open(path.clone()));
-            *self.shared.command.lock().unwrap() = Some(MachineCommand::LoadDisc(path));
+            self.load_disc_path(path);
         }
+    }
+
+    /// Load a disc from a known path (library click or file dialog): route it
+    /// to both the emulation core and the Photo CD detector, and leave the
+    /// library view.
+    fn load_disc_path(&mut self, path: PathBuf) {
+        *self.shared.status.lock().unwrap() = format!("Loading {}…", display_name(&path));
+        self.photocd = None;
+        self.show_library = false;
+        let _ = self.pcd_tx.send(PcdCmd::Open(path.clone()));
+        *self.shared.command.lock().unwrap() = Some(MachineCommand::LoadDisc(path));
     }
 
     fn eject_disc(&mut self) {
@@ -1128,6 +1376,7 @@ impl App {
             "Folders where your disc images live. The Open dialog starts in the first configured library.",
         );
         ui.add_space(4.0);
+        let mut libraries_changed = false;
         for (slot, name) in LIBRARY_SLOTS.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.strong(format!("{name}:"));
@@ -1137,10 +1386,12 @@ impl App {
                         .pick_folder()
                     {
                         self.libraries[slot] = Some(dir.display().to_string());
+                        libraries_changed = true;
                     }
                 }
                 if self.libraries[slot].is_some() && ui.button("Clear").clicked() {
                     self.libraries[slot] = None;
+                    libraries_changed = true;
                 }
             });
             match &self.libraries[slot] {
@@ -1152,6 +1403,9 @@ impl App {
                 }
             }
             ui.add_space(6.0);
+        }
+        if libraries_changed {
+            self.scan_libraries();
         }
 
         ui.separator();
@@ -1505,7 +1759,7 @@ impl App {
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let prefs = Prefs {
-            libraries: self.libraries.clone(),
+            libraries: self.libraries.to_vec(),
             save_dir: self.save_dir.clone(),
             show_fps: self.show_fps,
             smooth_scaling: self.smooth_scaling,
@@ -1645,6 +1899,10 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CursorVisible(false));
         }
 
+        // In fullscreen the top disc bar and bottom toolbars are hidden for an
+        // uncluttered view; keyboard shortcuts (Esc, photo arrows) still work.
+        let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+
         #[cfg(target_os = "macos")]
         self.handle_native_menu();
 
@@ -1677,6 +1935,18 @@ impl eframe::App for App {
                 });
             });
         });
+
+        // Top bar: the loaded disc's name.
+        if !fullscreen {
+            if let Some(name) = self.shared.disc_name.lock().unwrap().clone() {
+                egui::TopBottomPanel::top("disc_bar").show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new(name).strong());
+                    });
+                });
+            }
+        }
 
         if self.settings_open {
             ctx.show_viewport_immediate(
@@ -1741,28 +2011,51 @@ impl eframe::App for App {
             }
         }
 
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(self.shared.status.lock().unwrap().as_str());
-                let viewing_photos = self.photocd.as_ref().map(|p| p.view_photo).unwrap_or(false);
-                if self.mouse_captured {
-                    ui.weak("Esc releases the mouse");
-                } else if self.capture_mouse_enabled && !viewing_photos {
-                    ui.weak("Click the screen to capture the mouse");
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.show_fps {
-                        ui.weak(format!("{:.0} fps", *self.shared.fps.lock().unwrap()));
+        let mut toggle_library = false;
+        if !fullscreen {
+            egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    // Always offer a way between the library and the player.
+                    let label = if self.show_library {
+                        "Player"
+                    } else {
+                        "Library"
+                    };
+                    if ui.button(label).clicked() {
+                        toggle_library = true;
                     }
+                    ui.separator();
+                    ui.label(self.shared.status.lock().unwrap().as_str());
+                    let viewing_photos =
+                        self.photocd.as_ref().map(|p| p.view_photo).unwrap_or(false);
+                    if self.mouse_captured {
+                        ui.weak("Esc releases the mouse");
+                    } else if self.capture_mouse_enabled && !viewing_photos && !self.show_library {
+                        ui.weak("Click the screen to capture the mouse");
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.show_fps {
+                            ui.weak(format!("{:.0} fps", *self.shared.fps.lock().unwrap()));
+                        }
+                    });
                 });
             });
-        });
+        }
+        if toggle_library {
+            self.show_library = !self.show_library;
+            if self.show_library {
+                self.scan_libraries();
+                if self.mouse_captured {
+                    self.set_mouse_capture(ctx, false);
+                }
+            }
+        }
 
         // Photo CD control panel (stacks above the status bar).
         let mut photo_decode = false;
         let mut photo_save: Option<(String, cdi_photocd::decode::DecodedImage)> = None;
         let mut photo_entered_view = false;
-        if let Some(p) = &mut self.photocd {
+        if let (false, Some(p)) = (fullscreen, &mut self.photocd) {
             egui::TopBottomPanel::bottom("photocd_panel").show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Photo CD");
@@ -1853,6 +2146,16 @@ impl eframe::App for App {
         }
         if let Some((name, image)) = photo_save {
             save_photo_png(&name, self.save_dir.as_deref(), &image);
+        }
+
+        // Library browser replaces the central view while active; the
+        // emulation keeps running underneath.
+        if self.show_library {
+            let load_path = self.paint_library(ctx);
+            if let Some(path) = load_path {
+                self.load_disc_path(path);
+            }
+            return;
         }
 
         egui::CentralPanel::default()

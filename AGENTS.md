@@ -15,8 +15,9 @@ target; IMPEG and the CD-i 490/Mono-IV mainboard are M4 work.
 - Philips specifications and technical notes are the primary authority.
 - MiSTer `CDi_MiSTer` at commit
   `bbaf100b5b7ab02af3f5932492c4989d5f91323f` is study/test-reference only.
-  It is GPL-3.0; do not translate its HDL or software into this GPL-2.0-or-later
-  repository.
+  Reimplement behavior from the specifications; do not translate its HDL or
+  software into this repository (a clean-room policy, independent of license
+  compatibility).
 - The only planned direct MPEG decoder adaptation is the MIT-licensed
   `gen2brain/mpeg` video decoder at commit
   `27c6f084c6ca342380c99a59a6a130b3f716e9d7`, translated to safe Rust with

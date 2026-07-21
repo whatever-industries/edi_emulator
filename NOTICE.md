@@ -1,6 +1,6 @@
 # Third-party attribution
 
-This project is licensed GPL-2.0-or-later (see LICENSE). It builds on the work
+This project is licensed GPL-3.0-or-later (see LICENSE). It builds on the work
 of the CD-i preservation and emulation community:
 
 ## MAME (BSD-3-Clause)
@@ -15,7 +15,7 @@ project's CD-i driver, licensed BSD-3-Clause:
 - `src/devices/machine/scc68070.cpp` — SCC68070 (Ryan Holtz)
 
 Files containing ported logic carry an attribution header naming the MAME
-source file. BSD-3-Clause code may be incorporated into GPL-2.0-or-later works;
+source file. BSD-3-Clause code may be incorporated into GPL-3.0-or-later works;
 the complete BSD-3-Clause terms and preserved contributor notices are in
 [`LICENSES/BSD-3-Clause.txt`](LICENSES/BSD-3-Clause.txt).
 

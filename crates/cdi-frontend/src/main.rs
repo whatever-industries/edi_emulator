@@ -20,6 +20,124 @@ const AUDIO_RING_SAMPLES: usize = AUDIO_RATE as usize * 2;
 const APP_NAME: &str = "E-Di: Emulator Disc Interactive";
 const BUNDLED_CDI220B: &[u8] = include_bytes!("../../../firmware/cdi220b.rom");
 const BUNDLED_VMPEGA: &[u8] = include_bytes!("../../../firmware/vmpega.rom");
+
+/// A selectable bundled system ROM.
+///
+/// Region is a property of the *player*, not the ROM bytes: the same image
+/// shipped in 50 Hz and 60 Hz machines, with the standard set by hardware
+/// configuration and reported through the SLAVE `F6` query. The region here
+/// names the market the model was sold into and only supplies the *default*
+/// video standard, which stays user-overridable.
+struct SystemRom {
+    label: &'static str,
+    region: &'static str,
+    bytes: &'static [u8],
+    /// Default video standard implied by the market.
+    pal: bool,
+    /// Whether this ROM's board is emulated; unsupported ones are listed so
+    /// they can be tried, but report a clear message instead of booting.
+    emulated: bool,
+}
+
+const SYSTEM_ROMS: &[SystemRom] = &[
+    SystemRom {
+        label: "CD-i 220 F2",
+        region: "Europe",
+        bytes: BUNDLED_CDI220B,
+        pal: true,
+        emulated: true,
+    },
+    SystemRom {
+        label: "CD-i 220",
+        region: "Europe",
+        bytes: include_bytes!("../../../firmware/cdi220.rom"),
+        pal: true,
+        emulated: true,
+    },
+    SystemRom {
+        label: "CD-i 200 F1",
+        region: "Europe",
+        bytes: include_bytes!("../../../firmware/cdi200.rom"),
+        pal: true,
+        emulated: true,
+    },
+    SystemRom {
+        label: "CD-i 490",
+        region: "Europe",
+        bytes: include_bytes!("../../../firmware/cdi490a.rom"),
+        pal: true,
+        emulated: false,
+    },
+    SystemRom {
+        label: "CD-i 910",
+        region: "USA",
+        bytes: include_bytes!("../../../firmware/cdi910.rom"),
+        pal: false,
+        emulated: false,
+    },
+];
+
+/// Guess the player video standard from a disc's release-region tag, as used
+/// by the common `Title (Region)` dump naming.
+///
+/// This is a naming convention, not disc content: region is a property of the
+/// player, and cross-region pressings share one image across markets. It is a
+/// convenience default only, and always user-overridable.
+fn region_is_pal(disc_name: &str) -> Option<bool> {
+    const NTSC: &[&str] = &[
+        "usa", "u.s.a", "us", "japan", "jp", "canada", "korea", "taiwan", "mexico", "brazil",
+    ];
+    const PAL: &[&str] = &[
+        "europe",
+        "germany",
+        "uk",
+        "united kingdom",
+        "france",
+        "italy",
+        "spain",
+        "netherlands",
+        "belgium",
+        "sweden",
+        "australia",
+        "austria",
+        "switzerland",
+        "denmark",
+        "norway",
+        "finland",
+        "poland",
+        "portugal",
+        "ireland",
+    ];
+    let lower = disc_name.to_lowercase();
+    // Scan parenthesised tags, e.g. "Title (Europe) (Rev 2)".
+    for tag in lower.split('(').skip(1) {
+        let tag = tag.split(')').next().unwrap_or("");
+        for part in tag.split(',').map(str::trim) {
+            if NTSC.contains(&part) {
+                return Some(false);
+            }
+            if PAL.contains(&part) {
+                return Some(true);
+            }
+        }
+    }
+    None
+}
+
+impl SystemRom {
+    fn display(&self) -> String {
+        format!("{} ({})", self.label, self.region)
+    }
+
+    /// Menu text, flagging boards that cannot boot yet.
+    fn menu_text(&self) -> String {
+        if self.emulated {
+            self.display()
+        } else {
+            format!("{} — board not emulated", self.display())
+        }
+    }
+}
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../assets/icon_256.png");
 
 /// Decode the embedded application icon for the window/taskbar. The macOS
@@ -110,6 +228,8 @@ struct Prefs {
     show_fps: bool,
     smooth_scaling: bool,
     capture_mouse_enabled: bool,
+    #[serde(default = "default_true")]
+    auto_region: bool,
     pad_speed: f32,
     pad_deadzone: f32,
     pad_button1: gilrs::Button,
@@ -131,6 +251,7 @@ impl Default for Prefs {
             show_fps: true,
             smooth_scaling: false,
             capture_mouse_enabled: true,
+            auto_region: true,
             pad_speed: 8.0,
             pad_deadzone: 0.15,
             pad_button1: gilrs::Button::South,
@@ -177,6 +298,10 @@ const KB_SLOTS: [&str; 6] = [
 ];
 
 const PREFS_KEY: &str = "prefs";
+
+fn default_true() -> bool {
+    true
+}
 
 fn button_name(button: gilrs::Button) -> &'static str {
     use gilrs::Button as B;
@@ -361,10 +486,16 @@ struct Shared {
     status: Mutex<String>,
     /// Name of the loaded disc, shown in the top bar; `None` when empty.
     disc_name: Mutex<Option<String>>,
+    /// Path of the loaded disc, so it can be restored across a machine rebuild.
+    disc_path: Mutex<Option<PathBuf>>,
+    /// Human-readable current system ROM, shown in Settings.
+    rom_status: Mutex<String>,
     dvc_status: Mutex<String>,
     dvc_path: Mutex<Option<PathBuf>>,
     dvc_inserted: AtomicBool,
     pal: AtomicBool,
+    /// Match the player's video standard to the disc's region tag on load.
+    auto_region: AtomicBool,
     muted: Arc<AtomicBool>,
     running: AtomicBool,
     /// Emulated frames per second (diagnostics).
@@ -378,6 +509,11 @@ enum MachineCommand {
     AttachBundledDvc,
     DetachDvc,
     SetVideoStandard(cdi_core::VideoStandard),
+    /// Swap the system ROM: rebuilds the machine, restoring disc and DVC.
+    SetSystemRom {
+        image: Vec<u8>,
+        label: String,
+    },
     Reset,
 }
 
@@ -503,6 +639,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         BUNDLED_CDI220B.to_vec()
     };
+    let initial_rom_status = SYSTEM_ROMS
+        .iter()
+        .find(|r| r.bytes == image.as_slice())
+        .map(SystemRom::display)
+        .or_else(|| rom.as_ref().map(|p| display_name(p)));
     let modules = cdi_os9::scan_modules(&image);
     let rom_type = cdi_os9::identify_rom(&modules);
     let detected_model = cdi_core::boards::model_by_id(rom_type.id)
@@ -558,10 +699,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         command: Mutex::new(None),
         status: Mutex::new(String::new()),
         disc_name: Mutex::new(disc_name),
+        disc_path: Mutex::new(initial_disc.clone()),
+        rom_status: Mutex::new(initial_rom_status.unwrap_or_else(|| model.title.to_owned())),
         dvc_status: Mutex::new(dvc_status),
         dvc_path: Mutex::new(dvc_path),
         dvc_inserted: AtomicBool::new(dvc_inserted),
         pal: AtomicBool::new(model.video == cdi_core::VideoStandard::Pal),
+        auto_region: AtomicBool::new(true),
         muted: Arc::new(AtomicBool::new(false)),
         running: AtomicBool::new(true),
         fps: Mutex::new(0.0),
@@ -736,12 +880,28 @@ fn emu_loop(mut machine: cdi_core::Machine, shared: Arc<Shared>, mut audio: Opti
                 MachineCommand::LoadDisc(path) => match cdi_disc::DiscImage::load(&path) {
                     Ok(disc) => {
                         machine.set_disc(Some(disc));
+                        // Optionally match the player's standard to the disc's
+                        // region tag before the reset that boots it.
+                        if shared.auto_region.load(Ordering::Relaxed) {
+                            if let Some(pal) = region_is_pal(&display_name(&path)) {
+                                if pal != shared.pal.load(Ordering::Relaxed) {
+                                    machine.set_video_standard(if pal {
+                                        cdi_core::VideoStandard::Pal
+                                    } else {
+                                        cdi_core::VideoStandard::Ntsc
+                                    });
+                                    shared.pal.store(pal, Ordering::Relaxed);
+                                }
+                            }
+                        }
                         machine.reset();
                         *shared.disc_name.lock().unwrap() = Some(display_name(&path));
+                        *shared.disc_path.lock().unwrap() = Some(path);
                         shared.status.lock().unwrap().clear();
                     }
                     Err(error) => {
                         *shared.disc_name.lock().unwrap() = None;
+                        *shared.disc_path.lock().unwrap() = None;
                         *shared.status.lock().unwrap() = format!("Open failed: {error}");
                     }
                 },
@@ -749,7 +909,57 @@ fn emu_loop(mut machine: cdi_core::Machine, shared: Arc<Shared>, mut audio: Opti
                     machine.set_disc(None);
                     machine.reset();
                     *shared.disc_name.lock().unwrap() = None;
+                    *shared.disc_path.lock().unwrap() = None;
                     shared.status.lock().unwrap().clear();
+                }
+                MachineCommand::SetSystemRom { image, label } => {
+                    let modules = cdi_os9::scan_modules(&image);
+                    let rom_type = cdi_os9::identify_rom(&modules);
+                    match cdi_core::boards::model_by_id(rom_type.id) {
+                        Some(detected) => {
+                            let mut model = detected.clone();
+                            model.video = if shared.pal.load(Ordering::Relaxed) {
+                                cdi_core::VideoStandard::Pal
+                            } else {
+                                cdi_core::VideoStandard::Ntsc
+                            };
+                            // Rebuild with the DVC that is currently inserted.
+                            let dvc = if shared.dvc_inserted.load(Ordering::Relaxed) {
+                                let path = shared.dvc_path.lock().unwrap().clone();
+                                let firmware = match &path {
+                                    Some(p) => std::fs::read(p).ok(),
+                                    None => Some(BUNDLED_VMPEGA.to_vec()),
+                                };
+                                firmware.and_then(|f| cdi_core::DvcConfig::from_rom(f).ok())
+                            } else {
+                                None
+                            };
+                            match cdi_core::Machine::with_dvc(&model, image, dvc) {
+                                Ok(rebuilt) => {
+                                    machine = rebuilt;
+                                    // Restore the disc across the rebuild.
+                                    let disc_path = shared.disc_path.lock().unwrap().clone();
+                                    if let Some(path) = disc_path {
+                                        if let Ok(disc) = cdi_disc::DiscImage::load(&path) {
+                                            machine.set_disc(Some(disc));
+                                        }
+                                    }
+                                    machine.reset();
+                                    *shared.rom_status.lock().unwrap() = label;
+                                    shared.status.lock().unwrap().clear();
+                                }
+                                Err(error) => {
+                                    *shared.status.lock().unwrap() = format!("{label}: {error}");
+                                }
+                            }
+                        }
+                        None => {
+                            *shared.status.lock().unwrap() = format!(
+                                "{label}: board not emulated yet (ROM type {})",
+                                rom_type.id
+                            );
+                        }
+                    }
                 }
                 MachineCommand::AttachDvc(path) => {
                     let result = std::fs::read(&path)
@@ -1022,6 +1232,10 @@ impl App {
             #[cfg(target_os = "macos")]
             native_menu: NativeMenu::new().expect("initialize native macOS menu"),
         };
+        // Shared is built before prefs are loaded, so apply stored flags now.
+        app.shared
+            .auto_region
+            .store(prefs.auto_region, Ordering::Relaxed);
         app.scan_libraries();
         app
     }
@@ -1436,6 +1650,44 @@ impl App {
     }
 
     fn settings_system_ui(&mut self, ui: &mut egui::Ui) {
+        ui.heading("System ROM");
+        ui.label(self.shared.rom_status.lock().unwrap().as_str());
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("system_rom")
+                .selected_text("Select model…")
+                .show_ui(ui, |ui| {
+                    for entry in SYSTEM_ROMS {
+                        if ui.selectable_label(false, entry.menu_text()).clicked() {
+                            // Region only seeds the default video standard;
+                            // it stays overridable below.
+                            self.shared.pal.store(entry.pal, Ordering::Relaxed);
+                            *self.shared.command.lock().unwrap() =
+                                Some(MachineCommand::SetSystemRom {
+                                    image: entry.bytes.to_vec(),
+                                    label: entry.display(),
+                                });
+                        }
+                    }
+                });
+            if ui.button("Choose ROM…").clicked() {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Select a CD-i system ROM")
+                    .add_filter("ROM images", &["rom", "bin"])
+                    .pick_file()
+                {
+                    if let Ok(image) = std::fs::read(&path) {
+                        *self.shared.command.lock().unwrap() = Some(MachineCommand::SetSystemRom {
+                            image,
+                            label: display_name(&path),
+                        });
+                    }
+                }
+            }
+        });
+        ui.label(
+            "Region names the market a model was sold into and only sets the default video standard below — the same ROM shipped in 50 Hz and 60 Hz players. Changing the ROM resets the machine and keeps the disc.",
+        );
+        ui.separator();
         ui.heading("Audio");
         let mut muted = self.shared.muted.load(Ordering::Relaxed);
         if ui.checkbox(&mut muted, "Mute audio").changed() {
@@ -1476,6 +1728,18 @@ impl App {
             };
             *self.shared.command.lock().unwrap() = Some(MachineCommand::SetVideoStandard(standard));
         }
+        let mut auto_region = self.shared.auto_region.load(Ordering::Relaxed);
+        if ui
+            .checkbox(&mut auto_region, "Match region to disc on load")
+            .changed()
+        {
+            self.shared
+                .auto_region
+                .store(auto_region, Ordering::Relaxed);
+        }
+        ui.label(
+            "Reads the region tag in the disc's name (USA/Japan → 60 Hz, Europe → 50 Hz). Cross-region pressings play at either rate, so this is only a starting point you can change above.",
+        );
         ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
         ui.checkbox(&mut self.show_fps, "Show frame rate");
     }
@@ -1764,6 +2028,7 @@ impl eframe::App for App {
             show_fps: self.show_fps,
             smooth_scaling: self.smooth_scaling,
             capture_mouse_enabled: self.capture_mouse_enabled,
+            auto_region: self.shared.auto_region.load(Ordering::Relaxed),
             pad_speed: self.pad_speed,
             pad_deadzone: self.pad_deadzone,
             pad_button1: self.pad_button1,
@@ -2034,9 +2299,16 @@ impl eframe::App for App {
                         ui.weak("Click the screen to capture the mouse");
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Right-to-left: added first sits furthest right, so
+                        // the standard ends up left of the frame rate.
                         if self.show_fps {
                             ui.weak(format!("{:.0} fps", *self.shared.fps.lock().unwrap()));
                         }
+                        ui.weak(if self.shared.pal.load(Ordering::Relaxed) {
+                            "PAL"
+                        } else {
+                            "NTSC"
+                        });
                     });
                 });
             });
@@ -2308,5 +2580,31 @@ impl eframe::App for App {
         self.poll_gamepad();
 
         ctx.request_repaint_after(Duration::from_millis(10));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::region_is_pal;
+
+    #[test]
+    fn region_tag_selects_video_standard() {
+        assert_eq!(region_is_pal("Windsurfing (USA)"), Some(false));
+        assert_eq!(region_is_pal("Ghost in the Shell (Japan)"), Some(false));
+        assert_eq!(region_is_pal("Akt Aesthetik (Germany)"), Some(true));
+        assert_eq!(
+            region_is_pal("Vincent van Gogh Vol. 1, The (Europe)"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn later_tags_and_untagged_names_are_handled() {
+        // A revision tag after the region must not confuse the scan.
+        assert_eq!(region_is_pal("Alien Gate (Europe) (Rev 2)"), Some(true));
+        // No region tag: leave the current standard alone.
+        assert_eq!(region_is_pal("Some Untagged Disc"), None);
+        // Parentheses that are not regions.
+        assert_eq!(region_is_pal("Title (Demo)"), None);
     }
 }

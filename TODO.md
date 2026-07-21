@@ -16,6 +16,28 @@
     the disc reliably, including swapping one disc for another without an
     intervening eject.
 
+## Saved games (NVRAM persistence)
+
+- [x] Persist NVRAM so saved games and player settings survive a restart.
+  The frontend now restores the battery-backed SRAM at startup and writes it
+  back whenever the contents change (checked every five seconds, plus a final
+  flush on exit), one `<model>.nvr` file per model in the platform data
+  directory. Verified both directions: a seeded buffer is restored, and the
+  BIOS reinitialising it is written back.
+  - [x] The timekeeper turned out not to conflict. The MK48T08 clock
+    registers (`$1FF8`-`$1FFF`) are separate struct fields rather than part
+    of the saved buffer, so a stale clock cannot be restored over a fresh one.
+  - [x] The NVRAM window is not a discrepancy: 8 KB is the real MK48T08 size,
+    and the larger `nvram_size` window simply mirrors it.
+  - [ ] Decide what the clock should read. It is seeded to a fixed date
+    (1995-06-13 12:00) to keep the core deterministic for hashes and tests.
+    A title that timestamps saves will stamp every one identically, and "most
+    recent" ordering may misbehave. Host time in the frontend while the CLI
+    keeps the deterministic seed would fix it, but needs calendar conversion
+    and a timezone source.
+  - [ ] Test with titles that actually save, confirming a save survives quit
+    and relaunch, and that the MEMORY screen reports plausible free space.
+
 ## Input peripherals
 
 - [ ] Emulate the CD-i keyboard peripheral (used by authoring/industrial

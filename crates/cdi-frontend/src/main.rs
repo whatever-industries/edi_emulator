@@ -435,6 +435,23 @@ fn photocd_worker(rx: mpsc::Receiver<PcdCmd>, tx: mpsc::Sender<PcdEvent>, ctx: e
 }
 
 /// Write a decoded photo as PNG via a save dialog.
+/// Per-user data directory for files the app owns, such as saved NVRAM.
+fn app_data_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let dir = if cfg!(target_os = "macos") {
+        home?.join("Library/Application Support/cdi-frontend")
+    } else if cfg!(target_os = "windows") {
+        PathBuf::from(std::env::var_os("APPDATA")?).join("cdi-frontend")
+    } else {
+        match std::env::var_os("XDG_DATA_HOME") {
+            Some(base) => PathBuf::from(base).join("cdi-frontend"),
+            None => home?.join(".local/share/cdi-frontend"),
+        }
+    };
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
 /// The platform Downloads folder, used as the default screenshot location.
 fn downloads_dir() -> PathBuf {
     let home = std::env::var_os("HOME")
@@ -681,6 +698,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let dvc_inserted = dvc.is_some();
     let mut machine = cdi_core::Machine::with_dvc(&model, image, dvc)?;
+
+    // Restore this model's battery-backed SRAM (saved games and player
+    // settings). The timekeeper registers are separate fields, not part of
+    // this buffer, so a stale clock cannot be restored over a fresh one.
+    let nvram_path = app_data_dir().map(|dir| dir.join(format!("{}.nvr", model.id)));
+    if let Some(path) = &nvram_path {
+        match std::fs::read(path) {
+            Ok(saved) if saved.len() == machine.bus.nvram.len() => {
+                machine.bus.nvram.copy_from_slice(&saved);
+                log::info!("nvram restored from {}", path.display());
+            }
+            Ok(saved) => log::warn!(
+                "nvram {}: expected {} bytes, found {}; ignoring",
+                path.display(),
+                machine.bus.nvram.len(),
+                saved.len()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => log::warn!("nvram {}: {error}", path.display()),
+        }
+    }
     let mut disc_name: Option<String> = None;
     let initial_disc = disc.clone();
     if let Some(cue) = disc {
@@ -733,7 +771,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let emu_shared = Arc::clone(&shared);
     let emu_thread = std::thread::Builder::new()
         .name("emu".into())
-        .spawn(move || emu_loop(machine, emu_shared, audio_producer))?;
+        .spawn(move || emu_loop(machine, emu_shared, audio_producer, nvram_path))?;
 
     let mut viewport = egui::ViewportBuilder::default();
     if let Some(icon) = load_app_icon() {
@@ -879,10 +917,19 @@ fn fill_audio<T: Copy>(
     }
 }
 
-fn emu_loop(mut machine: cdi_core::Machine, shared: Arc<Shared>, mut audio: Option<Producer<i16>>) {
+fn emu_loop(
+    mut machine: cdi_core::Machine,
+    shared: Arc<Shared>,
+    mut audio: Option<Producer<i16>>,
+    nvram_path: Option<PathBuf>,
+) {
     let mut next_frame_deadline = Instant::now();
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u32;
+    // Mirror of the last NVRAM contents written, so saves only hit disk when
+    // the title actually changed something.
+    let mut nvram_mirror = machine.bus.nvram.clone();
+    let mut last_nvram_flush = Instant::now();
 
     while shared.running.load(Ordering::Relaxed) {
         if let Some(command) = shared.command.lock().unwrap().take() {
@@ -1115,6 +1162,31 @@ fn emu_loop(mut machine: cdi_core::Machine, shared: Arc<Shared>, mut audio: Opti
                 next_frame_deadline = now;
             }
         }
+
+        // Flush saves periodically so a crash or force-quit does not lose
+        // them; comparing 8 KB a few times a minute is free next to a frame.
+        if last_nvram_flush.elapsed() >= Duration::from_secs(5) {
+            last_nvram_flush = Instant::now();
+            if machine.bus.nvram != nvram_mirror {
+                nvram_mirror.copy_from_slice(&machine.bus.nvram);
+                write_nvram(nvram_path.as_deref(), &nvram_mirror);
+            }
+        }
+    }
+
+    if machine.bus.nvram != nvram_mirror {
+        write_nvram(nvram_path.as_deref(), &machine.bus.nvram);
+    }
+}
+
+/// Write battery-backed SRAM out, replacing any previous contents.
+fn write_nvram(path: Option<&std::path::Path>, data: &[u8]) {
+    let Some(path) = path else {
+        return;
+    };
+    match std::fs::write(path, data) {
+        Ok(()) => log::debug!("nvram saved to {}", path.display()),
+        Err(error) => log::warn!("nvram save to {}: {error}", path.display()),
     }
 }
 
@@ -1164,6 +1236,8 @@ struct App {
     library_tab: usize,
     /// Measured width of the library tab strip, used to center it next frame.
     library_strip_w: f32,
+    /// Current window title, so it is only pushed when the disc changes.
+    window_title: String,
     save_dir: Option<String>,
     settings_tab: SettingsTab,
     #[cfg(target_os = "macos")]
@@ -1252,6 +1326,7 @@ impl App {
             show_library: !has_initial_disc && prefs.libraries.iter().flatten().next().is_some(),
             library_tab: 0,
             library_strip_w: 0.0,
+            window_title: APP_NAME.to_owned(),
             save_dir: prefs.save_dir.clone(),
             settings_tab: SettingsTab::System,
             #[cfg(target_os = "macos")]
@@ -2264,15 +2339,19 @@ impl eframe::App for App {
             });
         });
 
-        // Top bar: the loaded disc's name.
-        if !fullscreen {
-            if let Some(name) = self.shared.disc_name.lock().unwrap().clone() {
-                egui::TopBottomPanel::top("disc_bar").show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add_space(4.0);
-                        ui.label(egui::RichText::new(name).strong());
-                    });
-                });
+        // The loaded disc names the window, like a document title, rather
+        // than costing a row of the picture area.
+        {
+            let wanted = self
+                .shared
+                .disc_name
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| APP_NAME.to_owned());
+            if wanted != self.window_title {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(wanted.clone()));
+                self.window_title = wanted;
             }
         }
 
@@ -2494,6 +2573,35 @@ impl eframe::App for App {
                 self.load_disc_path(path);
             }
             return;
+        }
+
+        // Keep the picture area at the framebuffer's aspect. Its height
+        // differs by standard (PAL 768x560, NTSC 768x480) and the chrome
+        // above/below changes as the disc bar appears, so a window sized once
+        // at startup ends up pillarboxed on PAL and letterboxed on NTSC.
+        if !fullscreen {
+            let (fb_w, fb_h) = {
+                let frame = self.shared.frame.lock().unwrap();
+                (frame.width as f32, frame.height as f32)
+            };
+            let picture = ctx.available_rect();
+            if let Some(inner) = ctx.input(|input| input.viewport().inner_rect) {
+                if fb_w > 0.0 && fb_h > 0.0 && picture.width() > 0.0 {
+                    let wanted = picture.width() * fb_h / fb_w;
+                    let delta = wanted - picture.height();
+                    // Ignore sub-pixel drift so this cannot oscillate.
+                    if delta.abs() > 1.0 {
+                        let max_h = ctx
+                            .input(|input| input.viewport().monitor_size)
+                            .map_or(f32::MAX, |size| size.y);
+                        let height = (inner.height() + delta).min(max_h);
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                            inner.width(),
+                            height,
+                        )));
+                    }
+                }
+            }
         }
 
         egui::CentralPanel::default()

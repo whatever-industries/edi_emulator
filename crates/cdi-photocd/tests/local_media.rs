@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Local, media-gated integration tests.
 //!
 //! These run only when the private Photo CD disc library exists on this

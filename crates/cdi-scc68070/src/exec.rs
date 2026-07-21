@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Instruction execution: full 68000 user ISA plus the 68070's 68010-style
 //! additions (MOVE from CCR, format/vector exception frames).
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! SCC68070 timing-table spot checks (Philips April 1993, section 6.2).
 
 use cdi_scc68070::{Bus68k, Cpu, FnCode};

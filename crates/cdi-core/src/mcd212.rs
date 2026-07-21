@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! MCD212 Video/Display System Controller: register file, frame and line
 //! timing (DA/PA status bits), ICA/DCA control-program execution, interrupt
 //! generation, and the pixel pipeline (display-file decoding, mattes,

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Probe a CUE file for Photo CD content and decode the first image.
 //! Usage: cargo run -p cdi-photocd --example probe -- <path.cue> [tier]
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! SCC68070 CPU state and execution loop.
 //!
 //! The 68070 executes the 68000 user-mode instruction set with 68010-style

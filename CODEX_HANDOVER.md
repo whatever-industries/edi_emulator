@@ -370,7 +370,7 @@ uart-loopback region).
 - Cargo workspace, 6 crates: `cdi-scc68070` (CPU), `cdi-core` (bus/scheduler/
   boards/machine), `cdi-disc` (stub until M2), `cdi-os9` (OS-9 module parser +
   ROM identification), `cdi-frontend` (stub until M1), `cdi-cli` (headless
-  harness). GPL-2.0-or-later, SPDX header on every file, `unsafe_code = deny`.
+  harness). GPL-3.0-or-later, SPDX header on every file, `unsafe_code = deny`.
 - `cdi-os9`: parses OS-9 module headers (sync $4AFC, header parity, CRC-24
   poly $800063 / magic $800FE3) and identifies ROMs via rules transliterated
   from `cditypes.rul`. IMPORTANT discovery: the numeric conditions in that

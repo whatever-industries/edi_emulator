@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Photo CD image pack decoder (core algorithms, no I/O).
 //!
 //! Absorbed from the Photo CD Player project (`photocd-core`), by the same
-//! owner, and relicensed to match this workspace.
+//! owner; both are GPL-3.0-or-later.
 //!
 //! Based on: *System Description Photo CD*, Philips/Kodak, January 1992,
 //! Chapter IV (Image Data Representations) and Section IV.2.5 (Photo YCC).

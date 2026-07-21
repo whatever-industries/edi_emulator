@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! SCC68070 on-chip peripherals: interrupt controller (LIR/PICR), timers,
 //! UART, and register-level stubs for I²C/DMA/MMU.
 //!

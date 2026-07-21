@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! OS-9/68k memory module headers.
 //!
 //! Reference: Microware "OS-9/68000 Operating System Technical Manual",

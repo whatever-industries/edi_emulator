@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CUE sheet parsing (the subset used by CD-i rips: FILE/TRACK/INDEX with
 //! BINARY files; CDI/2352, MODE1/2352, MODE2/2352, and AUDIO tracks).
 

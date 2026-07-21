@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Conformance testing against the SingleStepTests m68000 vectors
 //! (https://github.com/SingleStepTests/m68000, MIT). Fetch them with
 //! `scripts/fetch-harte.sh`; the test is skipped if the directory is absent.

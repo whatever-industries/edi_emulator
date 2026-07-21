@@ -6,7 +6,7 @@ Greenfield open-source Philips CD-i emulator in `/Volumes/Projects/Coding/cdi_em
 
 - **Language**: Rust (Cargo workspace)
 - **UI**: egui + eframe (pure Rust), cpal audio, gilrs gamepads
-- **License**: GPL-2.0-or-later
+- **License**: GPL-3.0-or-later
 - **Architecture**: data-driven board/model abstraction from day one (modeled on CD-i Emulator's `.brd`/`.mdl` device-list design); only Mono-I implemented initially
 - **Milestones**: M0 scaffolding → M1 boot Mono-I BIOS to player shell → M2 CDIC + CUE/BIN disc playback. DVC/MPEG and non-Mono boards out of scope (but accommodated by the architecture).
 
@@ -40,7 +40,7 @@ Archive the CD-i emulation Discord channel with **DiscordChatExporter.Cli v2.47.
 ```
 cdi_emulator/
 ├── Cargo.toml                  # [workspace], resolver=2, shared lints
-├── LICENSE (GPL-2.0-or-later) · NOTICE.md · README.md · CONTRIBUTING.md
+├── LICENSE (GPL-3.0-or-later) · NOTICE.md · README.md · CONTRIBUTING.md
 ├── rust-toolchain.toml · .github/workflows/ci.yml
 ├── crates/
 │   ├── cdi-scc68070/   # CPU + on-chip peripherals; deps: log, serde(optional) only
@@ -53,7 +53,7 @@ cdi_emulator/
 └── tests-data/ (fixtures, hashes.toml)
 ```
 
-Every file: `// SPDX-License-Identifier: GPL-2.0-or-later`. Ported-from-MAME files carry an attribution comment naming the MAME source + authors.
+Every file: `// SPDX-License-Identifier: GPL-3.0-or-later`. Ported-from-MAME files carry an attribution comment naming the MAME source + authors.
 
 ## 2. Core abstractions (`cdi-core`)
 
@@ -119,7 +119,7 @@ Every file: `// SPDX-License-Identifier: GPL-2.0-or-later`. Ported-from-MAME fil
 
 ## 10. Licensing files
 
-- `LICENSE` GPL-2.0-or-later; `license` field in every crate.
+- `LICENSE` GPL-3.0-or-later; `license` field in every crate.
 - `NOTICE.md`: MAME BSD-3 attribution (files + authors) for ported logic; CD-i Fan credit for `.brd`/`.mdl`/`cditypes.rul` transliteration (LGPL-2.0+); explicit statement that CeDImu is study-only/not copied (policy repeated in CONTRIBUTING.md); game disc images are never bundled.
 
 ## Verification (end of each milestone)

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! One-call decoding of a disc image entry to interleaved RGB, wrapping the
 //! Base / 4Base / 16Base pipeline, Kodak USA raw variants, and INFO.PCD
 //! rotation. Ported from the Photo CD Player GUI's decode worker.

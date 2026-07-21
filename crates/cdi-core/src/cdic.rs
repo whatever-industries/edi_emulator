@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! CDIC (CD Interface Controller) high-level emulation.
 //!
 //! Ported from MAME `src/mame/philips/cdicdic.cpp` (BSD-3-Clause,

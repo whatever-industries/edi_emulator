@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! Raw sector structure: sync, header, Mode 2 subheader.
 
 /// The 12-byte data-sector sync pattern.

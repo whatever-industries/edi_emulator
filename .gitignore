@@ -20,3 +20,6 @@
 
 # Assembled app bundles
 /dist/
+
+# Local working notes
+/TODO.md

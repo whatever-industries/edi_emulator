@@ -2,9 +2,10 @@
 
 Read these files top-to-bottom before changing the emulator:
 
-1. `CODEX_HANDOVER.md`
-2. `docs/slave-protocol.md`
-3. `docs/mpeg-dvc-plan.md`
+1. `docs/slave-protocol.md`
+2. `docs/mpeg-dvc-plan.md`
+3. `docs/display-geometry.md`
+4. `TODO.md`
 
 The current milestone is M3: emulate the optional 22ER9141 VMPEG Digital
 Video Cartridge on the existing Mono-I/CD-i 220 model. VMPEG is the first

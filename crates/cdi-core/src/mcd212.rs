@@ -24,6 +24,7 @@ pub const CSR2R_IT2: u8 = 0x02;
 pub const CSR2R_BE: u8 = 0x01;
 
 const CSR1W_DI1: u16 = 1 << 15;
+const CSR1W_ST: u16 = 1 << 1;
 const CSR2W_DI2: u16 = 1 << 15;
 
 /// DCR bits.
@@ -98,6 +99,32 @@ pub struct Mcd212 {
 
 pub const FB_WIDTH: usize = 768;
 pub const FB_HEIGHT: usize = 560;
+
+/// Hardware-defined picture aperture inside the fixed host framebuffer.
+///
+/// The dimensions follow MCD212 tables 5-1 through 5-7 and section 5.8:
+/// `CF`/`ST` select the 720/768-pixel active line, while 625-line
+/// Compatibility Mode centers 240 source lines inside the 280-line raster.
+/// Scan mode and field parity do not change the aperture, but are included so
+/// diagnostics can describe the complete live display state without
+/// reinterpreting register bits outside the core. Pixel aspect is expressed
+/// as height/width from Philips TSA-003 (TN 093): 1.025 on Philips 625-line
+/// players and 1.225 on Philips 525-line players.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayGeometry {
+    pub raster_width: usize,
+    pub raster_height: usize,
+    pub active_x: usize,
+    pub active_y: usize,
+    pub active_width: usize,
+    pub active_height: usize,
+    pub compatibility_mode: bool,
+    pub interlaced: bool,
+    pub odd_field: bool,
+    pub frame_duration_60hz: bool,
+    pub pixel_aspect_num: u16,
+    pub pixel_aspect_den: u16,
+}
 
 /// Expand one CD-i/CCIR-601 internal RGB pixel for presentation on a desktop
 /// display. The MCD212 performs its pixel pipeline with nominal black at 16
@@ -297,8 +324,48 @@ impl Mcd212 {
 
     /// Visible output size for the current video standard.
     pub fn visible_size(&self) -> (usize, usize) {
-        let (ica, total) = geometry(self.pal);
-        (FB_WIDTH, ((total - ica) * 2) as usize)
+        let geometry = self.display_geometry();
+        (geometry.raster_width, geometry.raster_height)
+    }
+
+    /// Resolve the live MCD212 aperture from hardware state only.
+    ///
+    /// No title, disc-profile, or framebuffer-content information enters
+    /// this decision. Green Book V.4.8 defines Compatibility Mode offsets in
+    /// normal-resolution pixels; this framebuffer is double resolution in
+    /// both axes, hence the 24/40 host-pixel offsets.
+    pub fn display_geometry(&self) -> DisplayGeometry {
+        let compatibility_mode = self.csrw[0] & CSR1W_ST != 0;
+        let frame_duration_60hz = self.dcr[0] & DCR_FD != 0;
+        let active_width = if self.dcr[0] & DCR_CF != 0 && !compatibility_mode {
+            768
+        } else {
+            720
+        };
+        let raster_height = if self.pal { 560 } else { 480 };
+        let vertical_compatibility = self.pal && compatibility_mode && !frame_duration_60hz;
+        let active_height = if vertical_compatibility {
+            480
+        } else {
+            raster_height
+        };
+        DisplayGeometry {
+            raster_width: FB_WIDTH,
+            raster_height,
+            active_x: (FB_WIDTH - active_width) / 2,
+            active_y: (raster_height - active_height) / 2,
+            active_width,
+            active_height,
+            compatibility_mode,
+            interlaced: self.dcr[0] & DCR_SM != 0,
+            odd_field: self.csrr[0] & CSR1R_PA != 0,
+            frame_duration_60hz,
+            // Philips TSA-003 measured 384 samples in 51.2 us for PAL and
+            // 50.84 us for NTSC. Its resulting pixel-height/width ratios are
+            // 1.025 and 1.225 respectively.
+            pixel_aspect_num: if self.pal { 41 } else { 49 },
+            pixel_aspect_den: 40,
+        }
     }
 
     pub fn reset(&mut self) {
@@ -462,20 +529,26 @@ impl Mcd212 {
     /// Active picture width: 720 unless the 28.5 MHz crystal (CF) is
     /// selected without the 'Standard' override.
     pub fn screen_width(&self) -> usize {
-        if self.dcr[0] & DCR_CF == 0 || self.csrw[0] & 0x0002 != 0 {
-            720
-        } else {
-            768
-        }
+        self.display_geometry().active_width
     }
 
     /// Side border width inside the framebuffer (Standard/720 mode).
     pub fn border_width(&self) -> usize {
-        if self.screen_width() == 720 {
-            24
-        } else {
-            0
-        }
+        self.display_geometry().active_x
+    }
+
+    /// Top border inside the progressive host framebuffer. The MCD212's
+    /// 50 Hz Standard mode exposes 240 active lines in the 280-line PAL
+    /// timing aperture (datasheet tables 5-6 and 5-7). Each source line is
+    /// represented by two host rows, hence a 40-row margin at either end.
+    pub fn top_border(&self) -> usize {
+        self.display_geometry().active_y
+    }
+
+    /// Active picture height inside the framebuffer, excluding the timing
+    /// aperture that a television does not present as picture area.
+    pub fn screen_height(&self) -> usize {
+        self.display_geometry().active_height
     }
 
     fn icm_for(&self, path: usize) -> u8 {
@@ -904,16 +977,15 @@ impl Mcd212 {
     }
 
     /// Whether this physical active line consumes bitmap data and a DCA
-    /// control slot. PAL Standard mode masks 20 lines at both ends of the
-    /// 280-line raster, leaving a 240-line display file (MCD212 section 5.6).
+    /// control slot. PAL Compatibility Mode masks 20 lines at both ends of
+    /// the 280-line raster, leaving a 240-line display file (MCD212 tables
+    /// 5-6 and 5-7).
     fn display_file_line(&self, scanline: u32) -> bool {
         let (ica_height, total_height) = geometry(self.pal);
         if !(ica_height..total_height).contains(&scanline) {
             return false;
         }
-        !(self.dcr[0] & DCR_SM == 0
-            && self.dcr[0] & DCR_FD == 0
-            && self.csrw[0] & 0x0002 != 0
+        !(self.display_geometry().active_y != 0
             && (scanline - ica_height < 20 || scanline >= total_height - 20))
     }
 
@@ -927,8 +999,8 @@ impl Mcd212 {
             return;
         }
 
-        // PAL 'Standard' mode: 20-line top/bottom borders. FD and ST define
-        // the non-interlaced standard format; they do not crop interlace.
+        // PAL Compatibility Mode: 20-line top/bottom masks in both scan
+        // modes (MCD212 tables 5-6/5-7 and Green Book V.4.8).
         if !self.display_file_line(scanline) {
             let start = row * FB_WIDTH;
             self.field_framebuffer[start..start + FB_WIDTH].fill(COLOR_4BPP[0]);
@@ -973,12 +1045,12 @@ impl Mcd212 {
     fn process_ica(&mut self, path: usize, plane: &[u8]) {
         let (ica_height, _) = geometry(self.pal);
         let max = ica_height * 120;
-        // Start address depends on frame parity.
-        let mut addr: u32 = if self.csrr[0] & CSR1R_PA == 0 {
-            0x200
-        } else {
-            0x202
-        };
+        // MCD212 table 5-8: non-interlaced fields always start at byte
+        // address $400. In interlace mode the odd field (PA=1) starts at
+        // $400 and the even field (PA=0) starts at $404. `addr` is a
+        // word address, hence $200/$202 here.
+        let interlaced_even_field = self.dcr[0] & DCR_SM != 0 && self.csrr[0] & CSR1R_PA == 0;
+        let mut addr: u32 = if interlaced_even_field { 0x202 } else { 0x200 };
         for _ in 0..max {
             let cmd = (Self::plane_word(plane, addr) << 16) | Self::plane_word(plane, addr + 1);
             addr += 2;
@@ -1104,10 +1176,11 @@ impl Mcd212 {
                 if self.dcr[0] & DCR_DE != 0 {
                     self.render_line(planea, planeb, external);
                 }
-                // The first DCA slot was fetched after ICA. PAL Standard's
-                // masked top/bottom lines do not consume display-file data or
-                // DCA slots; hold the first slot through the top mask and
-                // fetch successors only between its 240 content lines.
+                // The first DCA slot was fetched after ICA. PAL
+                // Compatibility Mode's masked top/bottom lines do not consume
+                // display-file data or DCA slots; hold the first slot through
+                // the top mask and fetch successors only between its 240
+                // content lines.
                 let advance_dca =
                     self.display_file_line(self.line) && self.display_file_line(self.line + 1);
                 if advance_dca && self.dca_enabled(0) {
@@ -1247,6 +1320,71 @@ mod tests {
     }
 
     #[test]
+    fn display_geometry_follows_the_specification_matrix() {
+        for pal in [false, true] {
+            for cf in [false, true] {
+                for compatibility in [false, true] {
+                    for frame_duration_60hz in [false, true] {
+                        for interlaced in [false, true] {
+                            for odd_field in [false, true] {
+                                let mut m = Mcd212::new(pal);
+                                if cf {
+                                    m.dcr[0] |= DCR_CF;
+                                }
+                                if frame_duration_60hz {
+                                    m.dcr[0] |= DCR_FD;
+                                }
+                                if interlaced {
+                                    m.dcr[0] |= DCR_SM;
+                                }
+                                if compatibility {
+                                    m.csrw[0] |= CSR1W_ST;
+                                }
+                                if odd_field {
+                                    m.csrr[0] |= CSR1R_PA;
+                                }
+
+                                let geometry = m.display_geometry();
+                                let raster_height = if pal { 560 } else { 480 };
+                                let active_width = if cf && !compatibility { 768 } else { 720 };
+                                let vertical_compatibility =
+                                    pal && compatibility && !frame_duration_60hz;
+                                let active_height = if vertical_compatibility {
+                                    480
+                                } else {
+                                    raster_height
+                                };
+                                assert_eq!(
+                                    geometry,
+                                    DisplayGeometry {
+                                        raster_width: 768,
+                                        raster_height,
+                                        active_x: (768 - active_width) / 2,
+                                        active_y: (raster_height - active_height) / 2,
+                                        active_width,
+                                        active_height,
+                                        compatibility_mode: compatibility,
+                                        interlaced,
+                                        odd_field,
+                                        frame_duration_60hz,
+                                        pixel_aspect_num: if pal { 41 } else { 49 },
+                                        pixel_aspect_den: 40,
+                                    }
+                                );
+                                assert_eq!(m.visible_size(), (768, raster_height));
+                                assert_eq!(m.border_width(), geometry.active_x);
+                                assert_eq!(m.screen_width(), geometry.active_width);
+                                assert_eq!(m.top_border(), geometry.active_y);
+                                assert_eq!(m.screen_height(), geometry.active_height);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn animated_hardware_cursor_is_overlaid_after_field_weave() {
         let mut m = Mcd212::new(true);
         let background = 0x0012_3456;
@@ -1351,35 +1489,40 @@ mod tests {
     }
 
     #[test]
-    fn pal_standard_masks_do_not_consume_dca_slots() {
-        let mut m = Mcd212::new(true);
-        let mut plane = vec![0u8; 0x80000];
-        const DCP: usize = 0x1000;
+    fn pal_compatibility_masks_do_not_consume_dca_slots_in_either_scan_mode() {
+        for interlaced in [false, true] {
+            let mut m = Mcd212::new(true);
+            let mut plane = vec![0u8; 0x80000];
+            const DCP: usize = 0x1000;
 
-        // Field program: link the DCA table and stop.
-        plane[0x400..0x404].copy_from_slice(&[0x30, 0x00, 0x10, 0x00]);
-        // Exactly 240 valid line-control slots, all NOPs.
-        for slot in 0..240 {
-            for command in 0..16 {
-                plane[DCP + slot * 64 + command * 4] = 0x10;
+            // Both field entry points link the same DCA table. Noninterlace
+            // enters at $400; this test starts interlace on the even-field
+            // $404 entry.
+            plane[0x400..0x404].copy_from_slice(&[0x30, 0x00, 0x10, 0x00]);
+            plane[0x404..0x408].copy_from_slice(&[0x30, 0x00, 0x10, 0x00]);
+            // Exactly 240 valid line-control slots, all NOPs.
+            for slot in 0..240 {
+                for command in 0..16 {
+                    plane[DCP + slot * 64 + command * 4] = 0x10;
+                }
             }
+            // If either 20-line mask consumes slots, this bitmap data would
+            // be misexecuted as a control command and alter the backdrop.
+            plane[DCP + 240 * 64..DCP + 240 * 64 + 4].copy_from_slice(&[0xD8, 0, 0, 5]);
+
+            m.dcr[0] = DCR_DE | DCR_CF | DCR_ICA | DCR_DCA | if interlaced { DCR_SM } else { 0 };
+            m.csrw[0] = CSR1W_ST;
+            m.line = geometry(true).1 - 1;
+            m.tick(cycles_per_line(true), &plane, &plane); // ICA + first DCA slot.
+            m.tick(
+                cycles_per_line(true) * u64::from(geometry(true).1 - 1),
+                &plane,
+                &plane,
+            );
+
+            assert_eq!(m.dca[0], (DCP + 240 * 64) as u32, "interlaced={interlaced}");
+            assert_eq!(m.backdrop_color, 0);
         }
-        // If either 20-line mask consumes slots, this bitmap data would be
-        // misexecuted as a control command and alter the backdrop.
-        plane[DCP + 240 * 64..DCP + 240 * 64 + 4].copy_from_slice(&[0xD8, 0, 0, 5]);
-
-        m.dcr[0] = DCR_DE | DCR_CF | DCR_ICA | DCR_DCA;
-        m.csrw[0] = 0x0002; // PAL Standard: 20 masked lines above and below.
-        m.line = geometry(true).1 - 1;
-        m.tick(cycles_per_line(true), &plane, &plane); // ICA + first DCA slot.
-        m.tick(
-            cycles_per_line(true) * u64::from(geometry(true).1 - 1),
-            &plane,
-            &plane,
-        );
-
-        assert_eq!(m.dca[0], (DCP + 240 * 64) as u32);
-        assert_eq!(m.backdrop_color, 0);
     }
 
     #[test]
@@ -1412,11 +1555,44 @@ mod tests {
     }
 
     #[test]
+    fn ica_entry_address_follows_scan_mode_and_field_parity() {
+        let mut plane = vec![0u8; 0x80000];
+        // Keep the $400 and $404 entry points independent by jumping each to
+        // a small program that selects a distinct backdrop color.
+        plane[0x400..0x404].copy_from_slice(&[0x40, 0x00, 0x10, 0x00]);
+        plane[0x404..0x408].copy_from_slice(&[0x40, 0x00, 0x20, 0x00]);
+        plane[0x1000..0x1008].copy_from_slice(&[0xD8, 0, 0, 5, 0, 0, 0, 0]);
+        plane[0x2000..0x2008].copy_from_slice(&[0xD8, 0, 0, 6, 0, 0, 0, 0]);
+
+        // Table 5-8 fixes non-interlace at $400, regardless of the PA status
+        // left over from the previous frame.
+        for parity in [0, CSR1R_PA] {
+            let mut m = Mcd212::new(true);
+            m.csrr[0] = parity;
+            m.process_ica(0, &plane);
+            assert_eq!(m.backdrop_color, 5);
+        }
+
+        // Interlace uses $400 for the odd field and $404 for the even field.
+        let mut odd = Mcd212::new(true);
+        odd.dcr[0] = DCR_SM;
+        odd.csrr[0] = CSR1R_PA;
+        odd.process_ica(0, &plane);
+        assert_eq!(odd.backdrop_color, 5);
+
+        let mut even = Mcd212::new(true);
+        even.dcr[0] = DCR_SM;
+        even.csrr[0] = 0;
+        even.process_ica(0, &plane);
+        assert_eq!(even.backdrop_color, 6);
+    }
+
+    #[test]
     fn ica_interrupt_and_csr2_clear() {
         let mut m = Mcd212::new(true);
         let mut plane = vec![0u8; 0x80000];
-        // ICA start alternates between words 0x200/0x202 with field parity;
-        // cover both: INTERRUPT, INTERRUPT, STOP, STOP.
+        // Cover both interlaced entry points: INTERRUPT, INTERRUPT, STOP,
+        // STOP.
         plane[0x400..0x410]
             .copy_from_slice(&[0x60, 0, 0, 0, 0x60, 0, 0, 0, 0x00, 0, 0, 0, 0x00, 0, 0, 0]);
         m.dcr[0] |= DCR_DE | DCR_ICA;

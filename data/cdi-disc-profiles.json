@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "source": "https://redump.info/datfile/CDI/serial,version (retrieved 2026-07-22)",
+  "profiles": [
+    {
+      "redump_id": 54833,
+      "name": "Merlin's Apprentice (Europe)",
+      "serial": "810 0192",
+      "version": "1.10",
+      "track_sha1": [
+        "81524686f46469d64a747fbc7f4700a97ff70607"
+      ],
+      "video_standard": "pal",
+      "note": "Exact PAL/50 Hz recommendation. Presentation follows the live MCD212 hardware aperture; no title-specific host crop is applied."
+    },
+    {
+      "redump_id": 67973,
+      "name": "Merlin's Apprentice (USA)",
+      "serial": "310690099-2",
+      "version": null,
+      "track_sha1": [
+        "e0054a69e38eb296dc0e48a13605ca45659efaf2"
+      ],
+      "video_standard": "ntsc",
+      "note": "Exact NTSC/60 Hz recommendation. Presentation follows the live MCD212 hardware aperture."
+    },
+    {
+      "redump_id": 75532,
+      "name": "Merlin's Apprentice (USA) (Rev 1)",
+      "serial": "310-690-099-2",
+      "version": "1.11",
+      "track_sha1": [
+        "d8fcdcb3f593d1e789d04e1ff9428d09a0e4abe1"
+      ],
+      "video_standard": "ntsc",
+      "note": "Exact NTSC/60 Hz recommendation. Presentation follows the live MCD212 hardware aperture."
+    },
+    {
+      "redump_id": 78866,
+      "name": "Apprentice, The (USA)",
+      "serial": "310690167-2",
+      "version": null,
+      "track_sha1": [
+        "3cf98be339c74c7d7a6de26f245505d23caeedcd",
+        "fe10e48eaf7ee1c064e709fdad379dc658864856",
+        "5151a06c09840abf0260ce5d42641eaecdf8d344",
+        "2c0bf3fc9dfccd69bd0f94c2c90d2ceb33a677ea",
+        "a83268209628308b1a0a72acd8a27d7ce5fc74b4",
+        "6dc3a40c715fd582a92b1f6daf8a91601a72f9e0",
+        "e39ce747d4e98aea9c4e42e213424c29436d0392",
+        "ede95de19c9482203564cd9fa5863190c2bbf65e",
+        "6582256fc8b59a2553a8be0be13a63dc3f9b1c7b",
+        "e3fcdda346e7ce4414f7fde107fc185ed08237b4",
+        "3e7e5a4696ee4b19fe8fc010c88432359c2323e4",
+        "c9c26cf9e5915ae8b23066eeae45a629f71b0fcb",
+        "5eae82f5279e305e99a9f3654566a5f30bf7e09e",
+        "f992403f8d48e4842075dc414cf15f53cd7cb159",
+        "970a6395f22f0a011b5880f42c54e0e5a87ddb8b",
+        "b5174381cfb68963898e9e64d0fb4aded6c5b7cf",
+        "4026c4c9ad5b7905a38924a536430577e2171c61",
+        "bab78b5750b9de86f1089cb5dd83379dce2faf95",
+        "fca960418617965b022d87837ddb8a00160d0a87",
+        "c0593c3a3c98e274eef3de7139d3a17031a12bdb",
+        "0264d4e4ea319c6d78014501d6383e1a2e5d0dd3",
+        "81d31486f51c974cabb79d4b73f5d906d08f1c2c"
+      ],
+      "video_standard": "ntsc",
+      "note": "Exact NTSC/60 Hz recommendation. Authored padding is retained; presentation follows the live MCD212 hardware aperture."
+    }
+  ]
+}

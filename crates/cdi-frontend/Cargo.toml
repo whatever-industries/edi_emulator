@@ -14,6 +14,7 @@ eframe = { workspace = true, features = ["persistence"] }
 egui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha1.workspace = true
 rfd.workspace = true
 clap.workspace = true
 cpal.workspace = true
@@ -23,6 +24,8 @@ cdi-core = { path = "../cdi-core" }
 cdi-disc = { path = "../cdi-disc" }
 cdi-os9 = { path = "../cdi-os9" }
 cdi-photocd = { path = "../cdi-photocd" }
+zip.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda.workspace = true

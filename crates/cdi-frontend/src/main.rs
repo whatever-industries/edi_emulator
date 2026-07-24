@@ -5,21 +5,60 @@
 //! The emulator core runs on its own thread, paced to real time by frame
 //! count; the UI thread copies the latest completed frame into a texture.
 
+mod disc_profiles;
+mod store_zip;
+
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use cdi_core::mcd212::{presentation_rgb, FB_HEIGHT, FB_WIDTH};
+use cdi_core::mcd212::{presentation_rgb, DisplayGeometry, FB_HEIGHT, FB_WIDTH};
 use clap::{Parser, ValueEnum};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use disc_profiles::{DiscIdentity, VideoStandardRecommendation};
+
 const AUDIO_RATE: u32 = 44_100;
 const AUDIO_RING_SAMPLES: usize = AUDIO_RATE as usize * 2;
 const APP_NAME: &str = "E-Di: Emulator Disc Interactive";
+const UI_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(15, 17, 20);
+const UI_SURFACE: egui::Color32 = egui::Color32::from_rgb(23, 26, 30);
+const UI_SURFACE_HOVER: egui::Color32 = egui::Color32::from_rgb(34, 39, 45);
+const UI_BORDER: egui::Color32 = egui::Color32::from_rgb(46, 51, 58);
+const UI_ACCENT: egui::Color32 = egui::Color32::from_rgb(67, 82, 98);
+const UI_MUTED_TEXT: egui::Color32 = egui::Color32::from_rgb(145, 151, 160);
+const PARENTAL_PASSCODE_COLOR: egui::Color32 = egui::Color32::from_rgb(184, 126, 70);
+const PARENTAL_PASSCODE_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(50, 39, 29);
 const BUNDLED_CDI220B: &[u8] = include_bytes!("../../../firmware/cdi220b.rom");
 const BUNDLED_VMPEGA: &[u8] = include_bytes!("../../../firmware/vmpega.rom");
+
+fn configure_ui(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    style.spacing.item_spacing = egui::vec2(8.0, 7.0);
+    style.spacing.button_padding = egui::vec2(10.0, 5.0);
+    style.visuals = egui::Visuals::dark();
+    style.visuals.panel_fill = UI_BACKGROUND;
+    style.visuals.window_fill = UI_BACKGROUND;
+    style.visuals.faint_bg_color = UI_SURFACE;
+    style.visuals.extreme_bg_color = egui::Color32::from_rgb(9, 10, 12);
+    style.visuals.selection.bg_fill = UI_ACCENT;
+    style.visuals.widgets.inactive.weak_bg_fill = UI_SURFACE;
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, UI_BORDER);
+    style.visuals.widgets.hovered.weak_bg_fill = UI_SURFACE_HOVER;
+    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, UI_ACCENT);
+    style.visuals.widgets.active.weak_bg_fill = UI_ACCENT;
+    ctx.set_style(style);
+}
+
+fn chrome_frame() -> egui::Frame {
+    egui::Frame::new()
+        .fill(UI_SURFACE)
+        .stroke(egui::Stroke::new(1.0, UI_BORDER))
+        .inner_margin(egui::Margin::symmetric(10, 5))
+}
 
 /// A selectable bundled system ROM.
 ///
@@ -109,19 +148,91 @@ fn region_is_pal(disc_name: &str) -> Option<bool> {
         "ireland",
     ];
     let lower = disc_name.to_lowercase();
+    let mut found_ntsc = false;
+    let mut found_pal = false;
     // Scan parenthesised tags, e.g. "Title (Europe) (Rev 2)".
     for tag in lower.split('(').skip(1) {
         let tag = tag.split(')').next().unwrap_or("");
         for part in tag.split(',').map(str::trim) {
             if NTSC.contains(&part) {
-                return Some(false);
+                found_ntsc = true;
             }
             if PAL.contains(&part) {
-                return Some(true);
+                found_pal = true;
             }
         }
     }
-    None
+    match (found_pal, found_ntsc) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        // A cross-region pressing does not identify the target player. Keep
+        // the user's current standard instead of trusting whichever region
+        // happens to be listed first in the filename.
+        _ => None,
+    }
+}
+
+fn presentation_aspect(
+    aperture: DisplayAperture,
+    geometry: DisplayGeometry,
+    crt_aspect: bool,
+) -> f32 {
+    if aperture.height == 0 {
+        return 4.0 / 3.0;
+    }
+    if !crt_aspect || geometry.pixel_aspect_num == 0 {
+        return aperture.width as f32 / aperture.height as f32;
+    }
+    aperture.width as f32 * geometry.pixel_aspect_den as f32
+        / (aperture.height as f32 * geometry.pixel_aspect_num as f32)
+}
+
+fn fit_aspect(available: egui::Vec2, aspect: f32) -> egui::Vec2 {
+    if available.x <= 0.0 || available.y <= 0.0 || aspect <= 0.0 {
+        return egui::Vec2::ZERO;
+    }
+    let width = available.x.min(available.y * aspect);
+    egui::vec2(width, width / aspect)
+}
+
+struct ParentalPasscode {
+    title: &'static str,
+    code: Option<&'static str>,
+}
+
+const PARENTAL_PASSCODES: &[ParentalPasscode] = &[
+    ParentalPasscode {
+        title: "Voyeur",
+        code: Some("3333"),
+    },
+    ParentalPasscode {
+        title: "Vegas Girls",
+        code: Some("1234"),
+    },
+    ParentalPasscode {
+        title: "Loving for a Lifetime",
+        code: Some("6969"),
+    },
+    // Keep the title in the registry so its code can be added without having
+    // to rediscover where parental notices are maintained.
+    ParentalPasscode {
+        title: "Pleasures of Sex, The",
+        code: None,
+    },
+];
+
+/// Return a known parental passcode from the common dump-style disc name.
+/// Unknown and explicitly pending codes stay out of the UI.
+fn parental_passcode(disc_name: &str) -> Option<&'static str> {
+    let stem = disc_name
+        .strip_suffix(".cue")
+        .or_else(|| disc_name.strip_suffix(".CUE"))
+        .unwrap_or(disc_name);
+    let title = stem.split_once(" (").map_or(stem, |(title, _)| title);
+    PARENTAL_PASSCODES
+        .iter()
+        .find(|entry| entry.title.eq_ignore_ascii_case(title.trim()))
+        .and_then(|entry| entry.code)
 }
 
 impl SystemRom {
@@ -227,13 +338,21 @@ struct Prefs {
     save_dir: Option<String>,
     show_fps: bool,
     smooth_scaling: bool,
+    #[serde(default = "default_true")]
+    crt_aspect: bool,
+    display_area: DisplayArea,
     capture_mouse_enabled: bool,
     #[serde(default = "default_true")]
     auto_region: bool,
+    /// User choices keyed by exact ordered track SHA-1 fingerprint. Path and
+    /// filename changes therefore do not lose a disc's settings.
+    disc_overrides: BTreeMap<String, DiscOverride>,
     #[serde(default = "default_ff_key")]
     ff_key: egui::Key,
     pad_speed: f32,
     pad_deadzone: f32,
+    #[serde(default = "default_true")]
+    pad_analog_enabled: bool,
     pad_button1: gilrs::Button,
     pad_button2: gilrs::Button,
     kb_speed: f32,
@@ -252,11 +371,15 @@ impl Default for Prefs {
             save_dir: None,
             show_fps: true,
             smooth_scaling: false,
+            crt_aspect: true,
+            display_area: DisplayArea::TypicalCrt,
             capture_mouse_enabled: true,
             auto_region: true,
+            disc_overrides: BTreeMap::new(),
             ff_key: default_ff_key(),
             pad_speed: 8.0,
             pad_deadzone: 0.15,
+            pad_analog_enabled: true,
             pad_button1: gilrs::Button::South,
             pad_button2: gilrs::Button::East,
             kb_speed: 6.0,
@@ -268,6 +391,20 @@ impl Default for Prefs {
             kb_button2: egui::Key::X,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+enum DisplayArea {
+    #[default]
+    TypicalCrt,
+    FullSignal,
+}
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(default)]
+struct DiscOverride {
+    /// A manually selected hardware standard for this exact pressing.
+    video_standard: Option<VideoStandardRecommendation>,
 }
 
 /// Disc library slots, in UI order. CD-BGM is a CD-i-based background-music
@@ -336,10 +473,35 @@ fn button_name(button: gilrs::Button) -> &'static str {
     }
 }
 
+/// Select one controller movement source for this poll. A held D-pad takes
+/// priority over the left stick so stick drift cannot weaken, cancel, or skew
+/// digital movement. The D-pad vector retains both axes for diagonals.
+fn controller_deflection(
+    stick: egui::Vec2,
+    dpad: egui::Vec2,
+    dpad_active: bool,
+    analog_enabled: bool,
+) -> egui::Vec2 {
+    let selected = if dpad_active {
+        dpad
+    } else if analog_enabled {
+        stick
+    } else {
+        egui::Vec2::ZERO
+    };
+    selected.clamp(egui::vec2(-1.0, -1.0), egui::vec2(1.0, 1.0))
+}
+
 /// Commands for the Photo CD worker thread.
 enum PcdCmd {
-    Open(PathBuf),
-    Decode { index: usize, tier: usize },
+    Open {
+        path: PathBuf,
+        archive_guard: Option<Arc<tempfile::TempDir>>,
+    },
+    Decode {
+        index: usize,
+        tier: usize,
+    },
     Close,
 }
 
@@ -386,10 +548,15 @@ struct PhotoCdUi {
 /// the UI thread.
 fn photocd_worker(rx: mpsc::Receiver<PcdCmd>, tx: mpsc::Sender<PcdEvent>, ctx: egui::Context) {
     let mut disc: Option<cdi_photocd::disc::OpenedDisc> = None;
+    let mut archive_guard: Option<Arc<tempfile::TempDir>> = None;
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            PcdCmd::Open(path) => {
+            PcdCmd::Open {
+                path,
+                archive_guard: next_archive_guard,
+            } => {
                 disc = None;
+                archive_guard = next_archive_guard;
                 match cdi_photocd::disc::open_disc(&path) {
                     Ok(mut opened) if !opened.images.is_empty() => {
                         let names = opened.images.iter().map(|i| i.name.clone()).collect();
@@ -412,6 +579,7 @@ fn photocd_worker(rx: mpsc::Receiver<PcdCmd>, tx: mpsc::Sender<PcdEvent>, ctx: e
                         });
                     }
                     _ => {
+                        archive_guard = None;
                         let _ = tx.send(PcdEvent::NotPhotoCd);
                     }
                 }
@@ -428,8 +596,13 @@ fn photocd_worker(rx: mpsc::Receiver<PcdCmd>, tx: mpsc::Sender<PcdEvent>, ctx: e
                     }
                 }
             }
-            PcdCmd::Close => disc = None,
+            PcdCmd::Close => {
+                disc = None;
+                archive_guard = None;
+            }
         }
+        // The binding is intentionally retained alongside the opened disc.
+        let _ = &archive_guard;
         ctx.request_repaint();
     }
 }
@@ -461,11 +634,12 @@ fn downloads_dir() -> PathBuf {
     home.join("Downloads")
 }
 
-fn save_photo_png(
+fn save_rgb_png(
+    dialog_title: &str,
     suggested_name: &str,
     save_dir: Option<&str>,
     image: &cdi_photocd::decode::DecodedImage,
-) {
+) -> Option<Result<PathBuf, String>> {
     // Start in the configured save folder, else Downloads, else the first
     // existing of the two.
     let start_dir = save_dir
@@ -473,34 +647,145 @@ fn save_photo_png(
         .filter(|p| p.is_dir())
         .unwrap_or_else(downloads_dir);
     let mut dialog = rfd::FileDialog::new()
-        .set_title("Save photo as PNG")
+        .set_title(dialog_title)
         .set_file_name(suggested_name);
     if start_dir.is_dir() {
         dialog = dialog.set_directory(start_dir);
     }
-    let Some(path) = dialog.save_file() else {
-        return;
-    };
-    let Ok(file) = std::fs::File::create(&path) else {
-        return;
+    let path = dialog.save_file()?;
+    let file = match std::fs::File::create(&path) {
+        Ok(file) => file,
+        Err(error) => return Some(Err(format!("{}: {error}", path.display()))),
     };
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), image.width, image.height);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
-    if let Ok(mut writer) = encoder.write_header() {
-        let _ = writer.write_image_data(&image.rgb);
-    }
+    let result = encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(&image.rgb))
+        .map(|()| path)
+        .map_err(|error| error.to_string());
+    Some(result)
 }
 
 struct SharedFrame {
     pixels: Vec<u32>,
     width: usize,
     height: usize,
-    /// Side-border width and active picture width inside the framebuffer;
-    /// the pointer device range maps onto the active area only.
-    border: usize,
-    active_width: usize,
+    /// Hardware-derived timing aperture for this exact frame.
+    geometry: DisplayGeometry,
     frame_no: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DisplayAperture {
+    left: usize,
+    top: usize,
+    width: usize,
+    height: usize,
+}
+
+fn display_aperture(frame: &SharedFrame, display_area: DisplayArea) -> DisplayAperture {
+    let hardware = DisplayAperture {
+        left: frame.geometry.active_x,
+        top: frame.geometry.active_y,
+        width: frame.geometry.active_width,
+        height: frame.geometry.active_height,
+    };
+    if display_area == DisplayArea::TypicalCrt
+        && frame.geometry.raster_height == 480
+        && hardware
+            == (DisplayAperture {
+                left: 0,
+                top: 0,
+                width: 768,
+                height: 480,
+            })
+    {
+        // Philips TN 093 gives the 525-line player pixel aspect as 1.225.
+        // The 360x220 normal-resolution television viewing area therefore
+        // presents at 1.336:1, effectively 4:3, while the surrounding
+        // 384x240 signal remains available through Full signal. Four-sided
+        // windowboxed material stays centered. A picture which reaches the
+        // bottom overscan edge uses the title/game convention that places
+        // the same 220-line area against the bottom of the signal.
+        let mut bottom_picture_pixels = 0usize;
+        for y in 460..480 {
+            bottom_picture_pixels += frame.pixels[y * frame.width + 24..y * frame.width + 744]
+                .iter()
+                .filter(|pixel| {
+                    let pixel = **pixel;
+                    ((pixel >> 16) & 0xFF) > 20 || ((pixel >> 8) & 0xFF) > 20 || (pixel & 0xFF) > 20
+                })
+                .count();
+        }
+        let bottom_edge_picture = bottom_picture_pixels >= 3_600;
+        return DisplayAperture {
+            left: 24,
+            top: if bottom_edge_picture { 40 } else { 20 },
+            width: 720,
+            height: 440,
+        };
+    }
+    hardware
+}
+
+fn pointer_mapping(
+    aperture: DisplayAperture,
+    geometry: DisplayGeometry,
+) -> (egui::Pos2, egui::Vec2) {
+    let origin = egui::pos2(
+        (aperture.left - geometry.active_x) as f32 * 768.0 / geometry.active_width as f32,
+        (aperture.top - geometry.active_y) as f32 * 560.0 / geometry.active_height as f32,
+    );
+    let extent = egui::vec2(
+        aperture.width as f32 * 768.0 / geometry.active_width as f32,
+        aperture.height as f32 * 560.0 / geometry.active_height as f32,
+    );
+    (origin, extent)
+}
+
+fn screenshot_dimensions(
+    aperture: DisplayAperture,
+    geometry: DisplayGeometry,
+    crt_aspect: bool,
+) -> (usize, usize) {
+    if crt_aspect {
+        let aspect = presentation_aspect(aperture, geometry, true);
+        (
+            aperture.width,
+            (aperture.width as f32 / aspect).round() as usize,
+        )
+    } else {
+        (aperture.width, aperture.height)
+    }
+}
+
+/// Capture the same hardware/presentation aperture and television-pixel
+/// correction shown by the player, without including host-window chrome.
+/// Nearest-neighbor row selection keeps source pixels crisp while giving the
+/// PNG square display pixels.
+fn screenshot_image(
+    frame: &SharedFrame,
+    display_area: DisplayArea,
+    crt_aspect: bool,
+) -> cdi_photocd::decode::DecodedImage {
+    let aperture = display_aperture(frame, display_area);
+    let (width, height) = screenshot_dimensions(aperture, frame.geometry, crt_aspect);
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    for y in 0..height {
+        let source_y = aperture.top + y * aperture.height / height;
+        for x in 0..width {
+            let source_x = aperture.left + x * aperture.width / width;
+            let px = presentation_rgb(frame.pixels[source_y * frame.width + source_x]);
+            rgb.extend_from_slice(&[(px >> 16) as u8, (px >> 8) as u8, px as u8]);
+        }
+    }
+    cdi_photocd::decode::DecodedImage {
+        width: width as u32,
+        height: height as u32,
+        rgb,
+    }
 }
 
 struct Shared {
@@ -512,6 +797,11 @@ struct Shared {
     disc_name: Mutex<Option<String>>,
     /// Path of the loaded disc, so it can be restored across a machine rebuild.
     disc_path: Mutex<Option<PathBuf>>,
+    /// Exact ordered track hashes and an optional compact Redump profile.
+    disc_identity: Mutex<Option<DiscIdentity>>,
+    /// UI preferences mirrored for the emulation thread so the standard is
+    /// selected before the reset which boots a newly inserted disc.
+    disc_standard_overrides: Mutex<BTreeMap<String, VideoStandardRecommendation>>,
     /// Human-readable current system ROM, shown in Settings.
     rom_status: Mutex<String>,
     dvc_status: Mutex<String>,
@@ -523,13 +813,19 @@ struct Shared {
     /// Host-side turbo: run the emulation unthrottled while held.
     fast_forward: AtomicBool,
     muted: Arc<AtomicBool>,
+    /// Silence and drain host audio while the Library covers the player,
+    /// independently of the user's persistent mute preference.
+    audio_suppressed: Arc<AtomicBool>,
     running: AtomicBool,
     /// Emulated frames per second (diagnostics).
     fps: Mutex<f32>,
 }
 
 enum MachineCommand {
-    LoadDisc(PathBuf),
+    LoadDisc {
+        path: PathBuf,
+        archive_guard: Option<Arc<tempfile::TempDir>>,
+    },
     EjectDisc,
     AttachDvc(PathBuf),
     AttachBundledDvc,
@@ -724,27 +1020,59 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => log::warn!("nvram {}: {error}", path.display()),
         }
     }
+    let (initial_disc, initial_archive_guard) = match disc {
+        Some(source) => {
+            let (cue, guard) = resolve_disc_source(&source)
+                .map_err(|error| format!("{}: {error}", source.display()))?;
+            (Some(cue), guard)
+        }
+        None => (None, None),
+    };
     let mut disc_name: Option<String> = None;
-    let initial_disc = disc.clone();
-    if let Some(cue) = disc {
-        let disc = cdi_disc::DiscImage::load(&cue)?;
+    let mut initial_disc_identity = None;
+    if let Some(cue) = &initial_disc {
+        let disc = cdi_disc::DiscImage::load(cue)?;
         log::info!(
             "disc inserted: {} track(s), lead-out {}",
             disc.tracks().len(),
             disc.leadout_msf()
         );
         machine.set_disc(Some(disc));
-        disc_name = Some(display_name(&cue));
+        disc_name = Some(display_name(cue));
+        match disc_profiles::identify_disc(cue) {
+            Ok(identity) => {
+                if video_standard.is_none() {
+                    if let Some(profile) = &identity.profile {
+                        let pal = profile.video_standard.is_pal();
+                        machine.set_video_standard(if pal {
+                            cdi_core::VideoStandard::Pal
+                        } else {
+                            cdi_core::VideoStandard::Ntsc
+                        });
+                        model.video = if pal {
+                            cdi_core::VideoStandard::Pal
+                        } else {
+                            cdi_core::VideoStandard::Ntsc
+                        };
+                    }
+                }
+                initial_disc_identity = Some(identity);
+            }
+            Err(error) => log::warn!("disc identification failed: {error}"),
+        }
     }
-    let (fb_w, fb_h) = machine.bus.mcd212.visible_size();
+    let initial_geometry = machine.bus.mcd212.display_geometry();
+    let (fb_w, fb_h) = (
+        initial_geometry.raster_width,
+        initial_geometry.raster_height,
+    );
 
     let shared = Arc::new(Shared {
         frame: Mutex::new(SharedFrame {
             pixels: vec![0; FB_WIDTH * FB_HEIGHT],
             width: fb_w,
             height: fb_h,
-            border: 0,
-            active_width: fb_w,
+            geometry: initial_geometry,
             frame_no: 0,
         }),
         input: Mutex::new(InputState::default()),
@@ -752,6 +1080,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         status: Mutex::new(String::new()),
         disc_name: Mutex::new(disc_name),
         disc_path: Mutex::new(initial_disc.clone()),
+        disc_identity: Mutex::new(initial_disc_identity),
+        disc_standard_overrides: Mutex::new(BTreeMap::new()),
         rom_status: Mutex::new(initial_rom_status.unwrap_or_else(|| model.title.to_owned())),
         dvc_status: Mutex::new(dvc_status),
         dvc_path: Mutex::new(dvc_path),
@@ -760,11 +1090,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         auto_region: AtomicBool::new(true),
         fast_forward: AtomicBool::new(false),
         muted: Arc::new(AtomicBool::new(false)),
+        audio_suppressed: Arc::new(AtomicBool::new(false)),
         running: AtomicBool::new(true),
         fps: Mutex::new(0.0),
     });
 
-    let (audio_stream, audio_producer) = match start_audio(Arc::clone(&shared.muted)) {
+    let (audio_stream, audio_producer) = match start_audio(
+        Arc::clone(&shared.muted),
+        Arc::clone(&shared.audio_suppressed),
+    ) {
         Ok(pair) => (Some(pair.0), Some(pair.1)),
         Err(error) => {
             log::warn!("audio output disabled: {error}");
@@ -774,9 +1108,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let emu_shared = Arc::clone(&shared);
-    let emu_thread = std::thread::Builder::new()
-        .name("emu".into())
-        .spawn(move || emu_loop(machine, emu_shared, audio_producer, nvram_path))?;
+    let emu_thread = std::thread::Builder::new().name("emu".into()).spawn({
+        let initial_archive_guard = initial_archive_guard.clone();
+        move || {
+            emu_loop(
+                machine,
+                emu_shared,
+                audio_producer,
+                nvram_path,
+                initial_archive_guard,
+            )
+        }
+    })?;
 
     let mut viewport = egui::ViewportBuilder::default();
     if let Some(icon) = load_app_icon() {
@@ -789,7 +1132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_app_id("cdi-frontend")
             .with_inner_size([
                 fb_w as f32,
-                fb_h as f32
+                fb_w as f32 / (4.0 / 3.0)
                     + if cfg!(target_os = "macos") {
                         24.0
                     } else {
@@ -798,9 +1141,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ])
             .with_title(&title),
         vsync: true,
-        // Keep preference storage, but always open at the framebuffer size
-        // above rather than a restored window size, so the launch/library
-        // view and the emulation view share one resolution.
+        // Keep preference storage, but start close to the television shape.
+        // The first UI frame resizes to the selected display-area and exact
+        // Philips player pixel aspect.
         persist_window: false,
         ..Default::default()
     };
@@ -808,7 +1151,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let result = eframe::run_native(
         &title,
         options,
-        Box::new(move |cc| Ok(Box::new(App::new(app_shared, cc, initial_disc)))),
+        Box::new(move |cc| {
+            Ok(Box::new(App::new(
+                app_shared,
+                cc,
+                initial_disc,
+                initial_archive_guard,
+            )))
+        }),
     );
 
     shared.running.store(false, Ordering::Relaxed);
@@ -825,8 +1175,25 @@ fn display_name(path: &std::path::Path) -> String {
     )
 }
 
+fn is_zip_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+}
+
+fn resolve_disc_source(
+    path: &std::path::Path,
+) -> Result<(PathBuf, Option<Arc<tempfile::TempDir>>), String> {
+    if !is_zip_path(path) {
+        return Ok((path.to_owned(), None));
+    }
+    let extracted = store_zip::extract(path)?;
+    let guard = Arc::new(extracted.temp_dir);
+    Ok((extracted.cue_path, Some(guard)))
+}
+
 fn start_audio(
     muted: Arc<AtomicBool>,
+    suppressed: Arc<AtomicBool>,
 ) -> Result<(cpal::Stream, Producer<i16>), Box<dyn std::error::Error>> {
     let device = cpal::default_host()
         .default_output_device()
@@ -855,7 +1222,7 @@ fn start_audio(
                     data,
                     channels,
                     &mut consumer,
-                    muted.load(Ordering::Relaxed),
+                    muted.load(Ordering::Relaxed) || suppressed.load(Ordering::Relaxed),
                     |sample| f32::from(sample) / 32768.0,
                 );
             },
@@ -869,7 +1236,7 @@ fn start_audio(
                     data,
                     channels,
                     &mut consumer,
-                    muted.load(Ordering::Relaxed),
+                    muted.load(Ordering::Relaxed) || suppressed.load(Ordering::Relaxed),
                     |sample| sample,
                 );
             },
@@ -883,7 +1250,7 @@ fn start_audio(
                     data,
                     channels,
                     &mut consumer,
-                    muted.load(Ordering::Relaxed),
+                    muted.load(Ordering::Relaxed) || suppressed.load(Ordering::Relaxed),
                     |sample| (i32::from(sample) + 32768) as u16,
                 );
             },
@@ -927,6 +1294,7 @@ fn emu_loop(
     shared: Arc<Shared>,
     mut audio: Option<Producer<i16>>,
     nvram_path: Option<PathBuf>,
+    mut disc_archive_guard: Option<Arc<tempfile::TempDir>>,
 ) {
     let mut next_frame_deadline = Instant::now();
     let mut fps_window_start = Instant::now();
@@ -939,13 +1307,43 @@ fn emu_loop(
     while shared.running.load(Ordering::Relaxed) {
         if let Some(command) = shared.command.lock().unwrap().take() {
             match command {
-                MachineCommand::LoadDisc(path) => match cdi_disc::DiscImage::load(&path) {
+                MachineCommand::LoadDisc {
+                    path,
+                    archive_guard,
+                } => match cdi_disc::DiscImage::load(&path) {
                     Ok(disc) => {
                         machine.set_disc(Some(disc));
-                        // Optionally match the player's standard to the disc's
-                        // region tag before the reset that boots it.
+                        // Identify the exact pressing before the boot reset.
+                        // Hashing is intentionally done on the emulation
+                        // thread so the GUI remains responsive for large BINs.
+                        let identity = match disc_profiles::identify_disc(&path) {
+                            Ok(identity) => Some(identity),
+                            Err(error) => {
+                                log::warn!("disc identification failed: {error}");
+                                None
+                            }
+                        };
+
+                        // Exact user choice, then exact tracked profile, then
+                        // filename region are progressively weaker evidence.
                         if shared.auto_region.load(Ordering::Relaxed) {
-                            if let Some(pal) = region_is_pal(&display_name(&path)) {
+                            let remembered = identity.as_ref().and_then(|identity| {
+                                shared
+                                    .disc_standard_overrides
+                                    .lock()
+                                    .unwrap()
+                                    .get(&identity.fingerprint)
+                                    .copied()
+                            });
+                            let profiled = identity
+                                .as_ref()
+                                .and_then(|identity| identity.profile.as_ref())
+                                .map(|profile| profile.video_standard);
+                            let pal = remembered
+                                .or(profiled)
+                                .map(VideoStandardRecommendation::is_pal)
+                                .or_else(|| region_is_pal(&display_name(&path)));
+                            if let Some(pal) = pal {
                                 if pal != shared.pal.load(Ordering::Relaxed) {
                                     machine.set_video_standard(if pal {
                                         cdi_core::VideoStandard::Pal
@@ -959,19 +1357,24 @@ fn emu_loop(
                         machine.reset();
                         *shared.disc_name.lock().unwrap() = Some(display_name(&path));
                         *shared.disc_path.lock().unwrap() = Some(path);
+                        *shared.disc_identity.lock().unwrap() = identity;
+                        disc_archive_guard = archive_guard;
                         shared.status.lock().unwrap().clear();
                     }
                     Err(error) => {
                         *shared.disc_name.lock().unwrap() = None;
                         *shared.disc_path.lock().unwrap() = None;
+                        *shared.disc_identity.lock().unwrap() = None;
                         *shared.status.lock().unwrap() = format!("Open failed: {error}");
                     }
                 },
                 MachineCommand::EjectDisc => {
                     machine.set_disc(None);
+                    disc_archive_guard = None;
                     machine.reset();
                     *shared.disc_name.lock().unwrap() = None;
                     *shared.disc_path.lock().unwrap() = None;
+                    *shared.disc_identity.lock().unwrap() = None;
                     shared.status.lock().unwrap().clear();
                 }
                 MachineCommand::SetSystemRom { image, label } => {
@@ -1086,6 +1489,10 @@ fn emu_loop(
             }
         }
 
+        // Keep extracted Store ZIP contents alive for the machine's open
+        // sector files and for system-ROM rebuilds which reopen the CUE.
+        let _ = &disc_archive_guard;
+
         // Apply the latest pointer state.
         {
             let input = {
@@ -1131,11 +1538,11 @@ fn emu_loop(
         // Publish the frame.
         {
             let mut frame = shared.frame.lock().unwrap();
-            let (w, h) = machine.bus.mcd212.visible_size();
+            let geometry = machine.bus.mcd212.display_geometry();
+            let (w, h) = (geometry.raster_width, geometry.raster_height);
             frame.width = w;
             frame.height = h;
-            frame.border = machine.bus.mcd212.border_width();
-            frame.active_width = machine.bus.mcd212.screen_width();
+            frame.geometry = geometry;
             frame.pixels[..w * h].copy_from_slice(&machine.bus.mcd212.framebuffer()[..w * h]);
             frame.frame_no += 1;
         }
@@ -1202,6 +1609,10 @@ struct App {
     settings_open: bool,
     show_fps: bool,
     smooth_scaling: bool,
+    crt_aspect: bool,
+    display_area: DisplayArea,
+    disc_overrides: BTreeMap<String, DiscOverride>,
+    active_fingerprint: Option<String>,
     capture_mouse_enabled: bool,
     mouse_captured: bool,
     suppress_capture_click: bool,
@@ -1213,6 +1624,7 @@ struct App {
     pad_frac: egui::Vec2,
     pad_speed: f32,
     pad_deadzone: f32,
+    pad_analog_enabled: bool,
     pad_button1: gilrs::Button,
     pad_button2: gilrs::Button,
     /// CD-i button (0 or 1) awaiting a controller press to rebind.
@@ -1254,7 +1666,9 @@ impl App {
         shared: Arc<Shared>,
         cc: &eframe::CreationContext<'_>,
         initial_disc: Option<PathBuf>,
+        initial_archive_guard: Option<Arc<tempfile::TempDir>>,
     ) -> Self {
+        configure_ui(&cc.egui_ctx);
         let (pcd_tx, cmd_rx) = mpsc::channel();
         let (event_tx, pcd_rx) = mpsc::channel();
         let worker_ctx = cc.egui_ctx.clone();
@@ -1264,13 +1678,21 @@ impl App {
             .expect("spawn photocd worker");
         let has_initial_disc = initial_disc.is_some();
         if let Some(path) = initial_disc {
-            let _ = pcd_tx.send(PcdCmd::Open(path));
+            let _ = pcd_tx.send(PcdCmd::Open {
+                path,
+                archive_guard: initial_archive_guard,
+            });
         }
         let prefs: Prefs = cc
             .storage
             .and_then(|storage| storage.get_string(PREFS_KEY))
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default();
+        let mut disc_overrides = prefs.disc_overrides.clone();
+        // Older builds persisted host-only crop selections. Serde ignores
+        // that obsolete field; discard entries which now contain no
+        // hardware-standard override so saving preferences prunes them.
+        disc_overrides.retain(|_, settings| settings.video_standard.is_some());
         let mut app = Self {
             shared,
             texture: None,
@@ -1278,6 +1700,10 @@ impl App {
             settings_open: false,
             show_fps: prefs.show_fps,
             smooth_scaling: prefs.smooth_scaling,
+            crt_aspect: prefs.crt_aspect,
+            display_area: prefs.display_area,
+            disc_overrides,
+            active_fingerprint: None,
             capture_mouse_enabled: prefs.capture_mouse_enabled,
             mouse_captured: false,
             suppress_capture_click: false,
@@ -1293,6 +1719,7 @@ impl App {
             pad_frac: egui::Vec2::ZERO,
             pad_speed: prefs.pad_speed,
             pad_deadzone: prefs.pad_deadzone,
+            pad_analog_enabled: prefs.pad_analog_enabled,
             pad_button1: prefs.pad_button1,
             pad_button2: prefs.pad_button2,
             pad_rebind: None,
@@ -1341,14 +1768,71 @@ impl App {
         app.shared
             .auto_region
             .store(prefs.auto_region, Ordering::Relaxed);
+        *app.shared.disc_standard_overrides.lock().unwrap() = app
+            .disc_overrides
+            .iter()
+            .filter_map(|(fingerprint, settings)| {
+                settings
+                    .video_standard
+                    .map(|standard| (fingerprint.clone(), standard))
+            })
+            .collect();
+        app.sync_disc_identity();
+        app.shared
+            .audio_suppressed
+            .store(app.show_library, Ordering::Relaxed);
         app.scan_libraries();
         app
     }
 
+    /// Track the exact pressing when the emulation thread finishes
+    /// identifying a newly inserted disc.
+    fn sync_disc_identity(&mut self) {
+        let fingerprint = self
+            .shared
+            .disc_identity
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|identity| identity.fingerprint.clone());
+        if fingerprint == self.active_fingerprint {
+            return;
+        }
+        self.active_fingerprint = fingerprint;
+    }
+
+    fn store_disc_override(&mut self, settings: DiscOverride) {
+        let Some(fingerprint) = self.active_fingerprint.clone() else {
+            return;
+        };
+        if settings == DiscOverride::default() {
+            self.disc_overrides.remove(&fingerprint);
+        } else {
+            self.disc_overrides.insert(fingerprint, settings);
+        }
+        *self.shared.disc_standard_overrides.lock().unwrap() = self
+            .disc_overrides
+            .iter()
+            .filter_map(|(fingerprint, settings)| {
+                settings
+                    .video_standard
+                    .map(|standard| (fingerprint.clone(), standard))
+            })
+            .collect();
+    }
+
+    fn current_disc_override(&self) -> DiscOverride {
+        self.active_fingerprint
+            .as_ref()
+            .and_then(|fingerprint| self.disc_overrides.get(fingerprint))
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Rebuild the library list from the configured folders. Each library is
-    /// a folder of per-disc subdirectories (each holding a `.cue`), matching
-    /// how the disc images are organized; loose `.cue` files are also picked
-    /// up.
+    /// a folder of per-disc subdirectories (each holding a `.cue` or eligible
+    /// Store ZIP), matching how the disc images are organized; loose CUE/ZIP
+    /// files are also picked up.
     fn scan_libraries(&mut self) {
         self.library.clear();
         for (category, dir) in self.libraries.iter().enumerate() {
@@ -1364,14 +1848,29 @@ impl App {
             for path in paths {
                 let cue = if path.is_dir() {
                     std::fs::read_dir(&path).ok().and_then(|inner| {
-                        inner
-                            .filter_map(|e| e.ok().map(|e| e.path()))
-                            .find(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("cue")))
+                        let mut candidates: Vec<PathBuf> = inner
+                            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                            .filter(|candidate| {
+                                candidate.extension().is_some_and(|extension| {
+                                    extension.eq_ignore_ascii_case("cue")
+                                        || extension.eq_ignore_ascii_case("zip")
+                                })
+                            })
+                            .collect();
+                        candidates.sort_by_key(|candidate| {
+                            (
+                                is_zip_path(candidate),
+                                candidate.file_name().map(|name| name.to_ascii_lowercase()),
+                            )
+                        });
+                        candidates.into_iter().find(|candidate| {
+                            !is_zip_path(candidate) || store_zip::is_eligible(candidate)
+                        })
                     })
-                } else if path
-                    .extension()
-                    .is_some_and(|x| x.eq_ignore_ascii_case("cue"))
-                {
+                } else if path.extension().is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("cue")
+                        || (extension.eq_ignore_ascii_case("zip") && store_zip::is_eligible(&path))
+                }) {
                     Some(path.clone())
                 } else {
                     None
@@ -1556,7 +2055,7 @@ impl App {
     fn open_disc(&mut self) {
         let mut dialog = rfd::FileDialog::new()
             .set_title("Open a CD-i disc image")
-            .add_filter("CUE sheets", &["cue"]);
+            .add_filter("CD-i discs", &["cue", "zip"]);
         // Start in the first configured library folder that exists.
         if let Some(dir) = self
             .libraries
@@ -1576,15 +2075,38 @@ impl App {
     /// to both the emulation core and the Photo CD detector, and leave the
     /// library view.
     fn load_disc_path(&mut self, path: PathBuf) {
-        *self.shared.status.lock().unwrap() = format!("Loading {}…", display_name(&path));
+        let source_name = display_name(&path);
+        *self.shared.status.lock().unwrap() = if is_zip_path(&path) {
+            format!("Opening Store ZIP {source_name}…")
+        } else {
+            format!("Loading {source_name}…")
+        };
+        let (cue_path, archive_guard) = match resolve_disc_source(&path) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                *self.shared.status.lock().unwrap() = format!("Open failed: {error}");
+                return;
+            }
+        };
+        *self.shared.disc_identity.lock().unwrap() = None;
+        self.sync_disc_identity();
         self.photocd = None;
         self.show_library = false;
-        let _ = self.pcd_tx.send(PcdCmd::Open(path.clone()));
-        *self.shared.command.lock().unwrap() = Some(MachineCommand::LoadDisc(path));
+        self.shared.audio_suppressed.store(false, Ordering::Relaxed);
+        let _ = self.pcd_tx.send(PcdCmd::Open {
+            path: cue_path.clone(),
+            archive_guard: archive_guard.clone(),
+        });
+        *self.shared.command.lock().unwrap() = Some(MachineCommand::LoadDisc {
+            path: cue_path,
+            archive_guard,
+        });
     }
 
     fn eject_disc(&mut self) {
         self.photocd = None;
+        *self.shared.disc_identity.lock().unwrap() = None;
+        self.sync_disc_identity();
         let _ = self.pcd_tx.send(PcdCmd::Close);
         *self.shared.command.lock().unwrap() = Some(MachineCommand::EjectDisc);
     }
@@ -1601,6 +2123,45 @@ impl App {
                 index: p.current,
                 tier: p.tier,
             });
+        }
+    }
+
+    fn save_player_screenshot(&self) {
+        let image = {
+            let frame = self.shared.frame.lock().unwrap();
+            screenshot_image(&frame, self.display_area, self.crt_aspect)
+        };
+        let disc_name = self.shared.disc_name.lock().unwrap().clone();
+        let stem = disc_name
+            .as_deref()
+            .and_then(|name| std::path::Path::new(name).file_stem())
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or(APP_NAME);
+        let safe_stem: String = stem
+            .chars()
+            .map(|ch| {
+                if matches!(ch, '/' | ':' | '\\') {
+                    '_'
+                } else {
+                    ch
+                }
+            })
+            .collect();
+        let suggested_name = format!("{safe_stem} screenshot.png");
+        match save_rgb_png(
+            "Save player screenshot as PNG",
+            &suggested_name,
+            self.save_dir.as_deref(),
+            &image,
+        ) {
+            Some(Ok(path)) => {
+                *self.shared.status.lock().unwrap() =
+                    format!("Screenshot saved to {}", path.display());
+            }
+            Some(Err(error)) => {
+                *self.shared.status.lock().unwrap() = format!("Screenshot save failed: {error}");
+            }
+            None => {}
         }
     }
 
@@ -1677,17 +2238,40 @@ impl App {
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::System, "System");
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Input, "Input");
-            ui.selectable_value(&mut self.settings_tab, SettingsTab::Libraries, "Libraries");
-        });
-        ui.separator();
-        match self.settings_tab {
-            SettingsTab::System => self.settings_system_ui(ui),
-            SettingsTab::Input => self.settings_input_ui(ui),
-            SettingsTab::Libraries => self.settings_libraries_ui(ui),
-        }
+        ui.label(egui::RichText::new("Settings").size(22.0).strong());
+        ui.label(
+            egui::RichText::new("Player, input, and library preferences")
+                .color(UI_MUTED_TEXT)
+                .size(12.0),
+        );
+        ui.add_space(8.0);
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(18, 21, 24))
+            .corner_radius(egui::CornerRadius::same(8))
+            .inner_margin(egui::Margin::symmetric(4, 4))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 3.0;
+                    ui.selectable_value(&mut self.settings_tab, SettingsTab::System, "System");
+                    ui.selectable_value(&mut self.settings_tab, SettingsTab::Input, "Input");
+                    ui.selectable_value(
+                        &mut self.settings_tab,
+                        SettingsTab::Libraries,
+                        "Libraries",
+                    );
+                });
+            });
+        ui.add_space(8.0);
+        egui::Frame::new()
+            .fill(UI_SURFACE)
+            .stroke(egui::Stroke::new(1.0, UI_BORDER))
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| match self.settings_tab {
+                SettingsTab::System => self.settings_system_ui(ui),
+                SettingsTab::Input => self.settings_input_ui(ui),
+                SettingsTab::Libraries => self.settings_libraries_ui(ui),
+            });
     }
 
     fn settings_libraries_ui(&mut self, ui: &mut egui::Ui) {
@@ -1820,6 +2404,41 @@ impl App {
         );
         ui.separator();
         ui.heading("Display");
+        let identity = self.shared.disc_identity.lock().unwrap().clone();
+        if let Some(identity) = &identity {
+            if let Some(profile) = &identity.profile {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong("Exact disc:");
+                    ui.label(&profile.name);
+                    ui.hyperlink_to(
+                        format!("Redump #{}", profile.redump_id),
+                        format!("https://redump.info/disc/{}/", profile.redump_id),
+                    );
+                });
+                let mut details = Vec::new();
+                if let Some(serial) = &profile.serial {
+                    details.push(format!("serial {serial}"));
+                }
+                if let Some(version) = &profile.version {
+                    details.push(format!("version {version}"));
+                }
+                details.push(format!(
+                    "{} recommendation",
+                    if profile.video_standard.is_pal() {
+                        "PAL/50 Hz"
+                    } else {
+                        "NTSC/60 Hz"
+                    }
+                ));
+                ui.weak(details.join(" · "));
+            } else {
+                ui.weak(format!(
+                    "Exact pressing identified ({}) but no display profile is tracked yet.",
+                    &identity.fingerprint[..identity.fingerprint.len().min(12)]
+                ));
+            }
+            ui.add_space(4.0);
+        }
         let mut pal = self.shared.pal.load(Ordering::Relaxed);
         ui.horizontal(|ui| {
             ui.label("Video standard:");
@@ -1833,6 +2452,47 @@ impl App {
                 cdi_core::VideoStandard::Ntsc
             };
             *self.shared.command.lock().unwrap() = Some(MachineCommand::SetVideoStandard(standard));
+            if self.active_fingerprint.is_some() {
+                let mut settings = self.current_disc_override();
+                settings.video_standard = Some(if pal {
+                    VideoStandardRecommendation::Pal
+                } else {
+                    VideoStandardRecommendation::Ntsc
+                });
+                self.store_disc_override(settings);
+            }
+        }
+        let remembered_standard = self.current_disc_override().video_standard;
+        if let Some(remembered) = remembered_standard {
+            ui.horizontal(|ui| {
+                ui.weak(format!(
+                    "Remembered for this exact disc: {}",
+                    if remembered.is_pal() {
+                        "PAL/50 Hz"
+                    } else {
+                        "NTSC/60 Hz"
+                    }
+                ));
+                if ui.button("Use detected default").clicked() {
+                    let mut settings = self.current_disc_override();
+                    settings.video_standard = None;
+                    self.store_disc_override(settings);
+                    if let Some(profile) = identity
+                        .as_ref()
+                        .and_then(|identity| identity.profile.as_ref())
+                    {
+                        let profile_pal = profile.video_standard.is_pal();
+                        if profile_pal != self.shared.pal.load(Ordering::Relaxed) {
+                            *self.shared.command.lock().unwrap() =
+                                Some(MachineCommand::SetVideoStandard(if profile_pal {
+                                    cdi_core::VideoStandard::Pal
+                                } else {
+                                    cdi_core::VideoStandard::Ntsc
+                                }));
+                        }
+                    }
+                }
+            });
         }
         let mut auto_region = self.shared.auto_region.load(Ordering::Relaxed);
         if ui
@@ -1844,7 +2504,30 @@ impl App {
                 .store(auto_region, Ordering::Relaxed);
         }
         ui.label(
-            "Reads the region tag in the disc's name (USA/Japan → 60 Hz, Europe → 50 Hz). Cross-region pressings play at either rate, so this is only a starting point you can change above.",
+            "Uses an exact Redump profile when available, otherwise an unambiguous region tag in the disc's name (USA/Japan → 60 Hz, Europe → 50 Hz). Mixed-region and untagged pressings keep the current setting. This changes timing, not the screen shape.",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Display area:");
+            ui.radio_value(
+                &mut self.display_area,
+                DisplayArea::TypicalCrt,
+                "Typical CRT",
+            );
+            ui.radio_value(
+                &mut self.display_area,
+                DisplayArea::FullSignal,
+                "Full signal",
+            );
+        });
+        ui.label(
+            "Typical CRT hides the nominal analog overscan margin on a 525-line player. Full signal exposes the complete hardware aperture. PAL and MCD212 Compatibility Mode remain hardware-defined.",
+        );
+        ui.checkbox(
+            &mut self.crt_aspect,
+            "Correct for Philips CD-i CRT pixel shape",
+        );
+        ui.label(
+            "Uses Philips player measurements (PAL 1.025, NTSC 1.225 pixel height/width). Disable only for raw square-pixel diagnostics.",
         );
         ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
         ui.checkbox(&mut self.show_fps, "Show frame rate");
@@ -1880,108 +2563,15 @@ impl App {
                 ui.label("Captured: relative motion like a real CD-i mouse. Uncaptured: the pointer follows the cursor over the picture.");
             });
 
-        egui::CollapsingHeader::new("Pointing device — Keyboard")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.add(egui::Slider::new(&mut self.kb_speed, 1.0..=20.0).text("Pointer speed"));
-                for (slot, name) in KB_SLOTS.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{name}:"));
-                        let text = if self.kb_rebind == Some(slot) {
-                            "Press a key… (Esc cancels)".to_owned()
-                        } else {
-                            self.kb_keys[slot].name().to_owned()
-                        };
-                        if ui.button(text).clicked() {
-                            self.kb_rebind = if self.kb_rebind == Some(slot) {
-                                None
-                            } else {
-                                Some(slot)
-                            };
-                        }
-                    });
-                }
-                if ui.button("Reset keyboard defaults").clicked() {
-                    let defaults = Prefs::default();
-                    self.kb_speed = defaults.kb_speed;
-                    self.kb_keys = [
-                        defaults.kb_up,
-                        defaults.kb_down,
-                        defaults.kb_left,
-                        defaults.kb_right,
-                        defaults.kb_button1,
-                        defaults.kb_button2,
-                    ];
-                    self.kb_rebind = None;
-                }
+        if ui.available_width() >= 620.0 {
+            ui.columns(2, |columns| {
+                self.settings_keyboard_ui(&mut columns[0]);
+                self.settings_controller_ui(&mut columns[1]);
             });
-
-        egui::CollapsingHeader::new("Pointing device — Controller")
-            .default_open(true)
-            .show(ui, |ui| match &self.gamepad {
-                Some(gilrs) => {
-                    let names: Vec<String> = gilrs
-                        .gamepads()
-                        .map(|(_, pad)| pad.name().to_owned())
-                        .collect();
-                    if names.is_empty() {
-                        ui.label("No controller connected");
-                    } else {
-                        ui.label(format!("Connected: {}", names.join(", ")));
-                    }
-                    ui.add(
-                        egui::Slider::new(&mut self.pad_speed, 1.0..=20.0).text("Pointer speed"),
-                    );
-                    ui.add(
-                        egui::Slider::new(&mut self.pad_deadzone, 0.0..=0.5)
-                            .text("Stick deadzone"),
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label("CD-i button 1:");
-                        let text = if self.pad_rebind == Some(0) {
-                            "Press a controller button…"
-                        } else {
-                            button_name(self.pad_button1)
-                        };
-                        if ui.button(text).clicked() {
-                            self.pad_rebind = if self.pad_rebind == Some(0) {
-                                None
-                            } else {
-                                Some(0)
-                            };
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("CD-i button 2:");
-                        let text = if self.pad_rebind == Some(1) {
-                            "Press a controller button…"
-                        } else {
-                            button_name(self.pad_button2)
-                        };
-                        if ui.button(text).clicked() {
-                            self.pad_rebind = if self.pad_rebind == Some(1) {
-                                None
-                            } else {
-                                Some(1)
-                            };
-                        }
-                    });
-                    if ui.button("Reset controller defaults").clicked() {
-                        let defaults = Prefs::default();
-                        self.pad_speed = defaults.pad_speed;
-                        self.pad_deadzone = defaults.pad_deadzone;
-                        self.pad_button1 = defaults.pad_button1;
-                        self.pad_button2 = defaults.pad_button2;
-                        self.pad_rebind = None;
-                    }
-                    ui.label(
-                        "Left stick and d-pad move the pointer. Layouts are auto-detected via the open-source SDL_GameControllerDB mappings bundled with gilrs.",
-                    );
-                }
-                None => {
-                    ui.label("Controller support unavailable on this system");
-                }
-            });
+        } else {
+            self.settings_keyboard_ui(ui);
+            self.settings_controller_ui(ui);
+        }
 
         ui.separator();
         ui.heading("Emulator Controls");
@@ -2025,6 +2615,107 @@ impl App {
                 ui.label(
                     "Some CD-i players (notably authoring/industrial models) support a keyboard peripheral. Emulating it needs core-side support for the keyboard port; planned in TODO.md.",
                 );
+            });
+    }
+
+    fn settings_keyboard_ui(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Pointing device — Keyboard")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.add(egui::Slider::new(&mut self.kb_speed, 1.0..=20.0).text("Pointer speed"));
+                for (slot, name) in KB_SLOTS.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{name}:"));
+                        let text = if self.kb_rebind == Some(slot) {
+                            "Press a key… (Esc cancels)".to_owned()
+                        } else {
+                            self.kb_keys[slot].name().to_owned()
+                        };
+                        if ui.button(text).clicked() {
+                            self.kb_rebind = if self.kb_rebind == Some(slot) {
+                                None
+                            } else {
+                                Some(slot)
+                            };
+                        }
+                    });
+                }
+                if ui.button("Reset keyboard defaults").clicked() {
+                    let defaults = Prefs::default();
+                    self.kb_speed = defaults.kb_speed;
+                    self.kb_keys = [
+                        defaults.kb_up,
+                        defaults.kb_down,
+                        defaults.kb_left,
+                        defaults.kb_right,
+                        defaults.kb_button1,
+                        defaults.kb_button2,
+                    ];
+                    self.kb_rebind = None;
+                }
+            });
+    }
+
+    fn settings_controller_ui(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Pointing device — Controller")
+            .default_open(true)
+            .show(ui, |ui| match &self.gamepad {
+                Some(gilrs) => {
+                    let names: Vec<String> = gilrs
+                        .gamepads()
+                        .map(|(_, pad)| pad.name().to_owned())
+                        .collect();
+                    if names.is_empty() {
+                        ui.label("No controller connected");
+                    } else {
+                        ui.label(format!("Connected: {}", names.join(", ")));
+                    }
+                    ui.add(
+                        egui::Slider::new(&mut self.pad_speed, 1.0..=20.0).text("Pointer speed"),
+                    );
+                    ui.checkbox(&mut self.pad_analog_enabled, "Enable D-pad and left stick");
+                    ui.add_enabled(
+                        self.pad_analog_enabled,
+                        egui::Slider::new(&mut self.pad_deadzone, 0.0..=0.5).text("Stick deadzone"),
+                    );
+                    for (button, label) in [(0, "CD-i button 1:"), (1, "CD-i button 2:")] {
+                        ui.horizontal(|ui| {
+                            ui.label(label);
+                            let text = if self.pad_rebind == Some(button) {
+                                "Press a button…"
+                            } else if button == 0 {
+                                button_name(self.pad_button1)
+                            } else {
+                                button_name(self.pad_button2)
+                            };
+                            if ui.button(text).clicked() {
+                                self.pad_rebind = if self.pad_rebind == Some(button) {
+                                    None
+                                } else {
+                                    Some(button)
+                                };
+                            }
+                        });
+                    }
+                    if ui.button("Reset controller defaults").clicked() {
+                        let defaults = Prefs::default();
+                        self.pad_speed = defaults.pad_speed;
+                        self.pad_deadzone = defaults.pad_deadzone;
+                        self.pad_analog_enabled = defaults.pad_analog_enabled;
+                        self.pad_button1 = defaults.pad_button1;
+                        self.pad_button2 = defaults.pad_button2;
+                        self.pad_rebind = None;
+                    }
+                    ui.weak(if self.pad_analog_enabled {
+                        "D-pad input takes priority over stick drift."
+                    } else {
+                        "D-pad-only movement is enabled."
+                    });
+                    ui.weak("Controller layouts are auto-detected.");
+                }
+                None => {
+                    ui.label("Controller support unavailable on this system");
+                }
             });
     }
 
@@ -2096,29 +2787,35 @@ impl App {
         }
 
         let deadzone = self.pad_deadzone;
-        let mut deflection = egui::Vec2::ZERO;
+        let mut stick_deflection = egui::Vec2::ZERO;
+        let mut dpad_deflection = egui::Vec2::ZERO;
+        let mut dpad_active = false;
         let mut buttons = 0u8;
         for (_id, pad) in gilrs.gamepads() {
             let x = pad.value(gilrs::Axis::LeftStickX);
             let y = pad.value(gilrs::Axis::LeftStickY);
             if x.abs() > deadzone {
-                deflection.x += x;
+                stick_deflection.x += x;
             }
             if y.abs() > deadzone {
                 // Stick up moves the pointer up (screen Y grows downward).
-                deflection.y -= y;
+                stick_deflection.y -= y;
             }
             if pad.is_pressed(gilrs::Button::DPadLeft) {
-                deflection.x -= 1.0;
+                dpad_deflection.x -= 1.0;
+                dpad_active = true;
             }
             if pad.is_pressed(gilrs::Button::DPadRight) {
-                deflection.x += 1.0;
+                dpad_deflection.x += 1.0;
+                dpad_active = true;
             }
             if pad.is_pressed(gilrs::Button::DPadUp) {
-                deflection.y -= 1.0;
+                dpad_deflection.y -= 1.0;
+                dpad_active = true;
             }
             if pad.is_pressed(gilrs::Button::DPadDown) {
-                deflection.y += 1.0;
+                dpad_deflection.y += 1.0;
+                dpad_active = true;
             }
             if pad.is_pressed(self.pad_button1) {
                 buttons |= 1;
@@ -2132,8 +2829,13 @@ impl App {
             buttons = 0;
         }
 
-        let delta = deflection.clamp(egui::vec2(-1.0, -1.0), egui::vec2(1.0, 1.0)) * self.pad_speed
-            + self.pad_frac;
+        let deflection = controller_deflection(
+            stick_deflection,
+            dpad_deflection,
+            dpad_active,
+            self.pad_analog_enabled,
+        );
+        let delta = deflection * self.pad_speed + self.pad_frac;
         let step = egui::vec2(delta.x.trunc(), delta.y.trunc());
         self.pad_frac = delta - step;
 
@@ -2169,11 +2871,15 @@ impl eframe::App for App {
             save_dir: self.save_dir.clone(),
             show_fps: self.show_fps,
             smooth_scaling: self.smooth_scaling,
+            crt_aspect: self.crt_aspect,
+            display_area: self.display_area,
             capture_mouse_enabled: self.capture_mouse_enabled,
             auto_region: self.shared.auto_region.load(Ordering::Relaxed),
+            disc_overrides: self.disc_overrides.clone(),
             ff_key: self.ff_key,
             pad_speed: self.pad_speed,
             pad_deadzone: self.pad_deadzone,
+            pad_analog_enabled: self.pad_analog_enabled,
             pad_button1: self.pad_button1,
             pad_button2: self.pad_button2,
             kb_speed: self.kb_speed,
@@ -2190,6 +2896,8 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.sync_disc_identity();
+
         // Photo CD worker events.
         let mut request_first_decode = false;
         while let Ok(event) = self.pcd_rx.try_recv() {
@@ -2361,12 +3069,17 @@ impl eframe::App for App {
         }
 
         if self.settings_open {
+            let settings_size = if self.settings_tab == SettingsTab::Input {
+                [760.0, 540.0]
+            } else {
+                [470.0, 580.0]
+            };
             ctx.show_viewport_immediate(
                 egui::ViewportId::from_hash_of("settings"),
                 egui::ViewportBuilder::default()
                     .with_title("Settings")
-                    .with_inner_size([400.0, 480.0])
-                    .with_min_inner_size([320.0, 240.0]),
+                    .with_inner_size(settings_size)
+                    .with_min_inner_size([380.0, 320.0]),
                 |ctx, class| {
                     if class == egui::ViewportClass::Embedded {
                         // Backend without multi-viewport support: fall back to
@@ -2374,7 +3087,7 @@ impl eframe::App for App {
                         let mut open = true;
                         egui::Window::new("Settings")
                             .open(&mut open)
-                            .resizable(false)
+                            .resizable(true)
                             .show(ctx, |ui| self.settings_ui(ui));
                         if !open {
                             self.settings_open = false;
@@ -2424,47 +3137,122 @@ impl eframe::App for App {
         }
 
         let mut toggle_library = false;
+        let mut save_player_screenshot = false;
         if !fullscreen {
-            egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    // Always offer a way between the library and the player.
-                    let label = if self.show_library {
-                        "Player"
-                    } else {
-                        "Library"
-                    };
-                    if ui.button(label).clicked() {
-                        toggle_library = true;
-                    }
-                    ui.separator();
-                    ui.label(self.shared.status.lock().unwrap().as_str());
-                    let viewing_photos =
-                        self.photocd.as_ref().map(|p| p.view_photo).unwrap_or(false);
-                    if self.mouse_captured {
-                        ui.weak("Esc releases the mouse");
-                    } else if self.capture_mouse_enabled && !viewing_photos && !self.show_library {
-                        ui.weak("Click the screen to capture the mouse");
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Right-to-left: added first sits furthest right, so
-                        // the standard ends up left of the frame rate.
-                        if self.show_fps {
-                            ui.weak(format!("{:.0} fps", *self.shared.fps.lock().unwrap()));
-                        }
-                        ui.weak(if self.shared.pal.load(Ordering::Relaxed) {
-                            "PAL"
+            egui::TopBottomPanel::bottom("status")
+                .resizable(false)
+                .frame(chrome_frame())
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        // Always offer a way between the library and the player.
+                        let label = if self.show_library {
+                            "Player"
                         } else {
-                            "NTSC"
-                        });
-                        if self.shared.fast_forward.load(Ordering::Relaxed) {
-                            ui.label(egui::RichText::new("▶▶").strong());
+                            "Library"
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new(label).size(12.0).strong())
+                                    .frame(false),
+                            )
+                            .clicked()
+                        {
+                            toggle_library = true;
                         }
+                        ui.separator();
+                        let status = self.shared.status.lock().unwrap().clone();
+                        if !status.is_empty() {
+                            ui.label(egui::RichText::new(status).color(UI_MUTED_TEXT).size(12.0));
+                        }
+                        if !self.show_library {
+                            let disc_name = self.shared.disc_name.lock().unwrap().clone();
+                            if let Some(code) = disc_name.as_deref().and_then(parental_passcode) {
+                                egui::Frame::new()
+                                    .fill(PARENTAL_PASSCODE_BACKGROUND)
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .inner_margin(egui::Margin::symmetric(7, 2))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "Parental passcode  {code}"
+                                            ))
+                                            .color(PARENTAL_PASSCODE_COLOR)
+                                            .size(11.0),
+                                        );
+                                    });
+                            }
+                        }
+                        let viewing_photos =
+                            self.photocd.as_ref().map(|p| p.view_photo).unwrap_or(false);
+                        if self.mouse_captured {
+                            ui.label(
+                                egui::RichText::new("Esc releases the mouse")
+                                    .color(UI_MUTED_TEXT)
+                                    .size(11.0),
+                            );
+                        } else if self.capture_mouse_enabled
+                            && !viewing_photos
+                            && !self.show_library
+                        {
+                            ui.label(
+                                egui::RichText::new("Click the screen to capture the mouse")
+                                    .color(UI_MUTED_TEXT)
+                                    .size(11.0),
+                            );
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // Right-to-left: added first sits furthest right.
+                            if self.show_fps {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{:.0} fps",
+                                        *self.shared.fps.lock().unwrap()
+                                    ))
+                                    .color(UI_MUTED_TEXT)
+                                    .size(11.0),
+                                );
+                            }
+                            ui.label(
+                                egui::RichText::new(if self.shared.pal.load(Ordering::Relaxed) {
+                                    "PAL"
+                                } else {
+                                    "NTSC"
+                                })
+                                .color(UI_MUTED_TEXT)
+                                .size(11.0),
+                            );
+                            if self.shared.fast_forward.load(Ordering::Relaxed) {
+                                ui.label(
+                                    egui::RichText::new("▶▶")
+                                        .color(egui::Color32::LIGHT_GRAY)
+                                        .strong(),
+                                );
+                            }
+                            if !self.show_library
+                                && !viewing_photos
+                                && ui
+                                    .add(
+                                        egui::Button::new(egui::RichText::new("⬇").size(16.0))
+                                            .frame(false),
+                                    )
+                                    .on_hover_text("Save the displayed CD-i picture as PNG")
+                                    .clicked()
+                            {
+                                save_player_screenshot = true;
+                            }
+                        });
                     });
                 });
-            });
+        }
+        if save_player_screenshot {
+            self.save_player_screenshot();
         }
         if toggle_library {
             self.show_library = !self.show_library;
+            self.shared
+                .audio_suppressed
+                .store(self.show_library, Ordering::Relaxed);
             if self.show_library {
                 self.scan_libraries();
                 if self.mouse_captured {
@@ -2478,87 +3266,92 @@ impl eframe::App for App {
         let mut photo_save: Option<(String, cdi_photocd::decode::DecodedImage)> = None;
         let mut photo_entered_view = false;
         if let (false, Some(p)) = (fullscreen, &mut self.photocd) {
-            egui::TopBottomPanel::bottom("photocd_panel").show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Photo CD");
-                    if p.has_cdi_app {
-                        let view_label = if p.view_photo {
-                            "Back to CD-i"
-                        } else {
-                            "View Raw Images"
-                        };
-                        if ui.button(view_label).clicked() {
-                            p.view_photo = !p.view_photo;
-                            if p.view_photo {
-                                photo_entered_view = true;
-                                if p.decoded.is_none() && !p.decoding {
-                                    photo_decode = true;
-                                }
+            egui::TopBottomPanel::bottom("photocd_panel")
+                .resizable(false)
+                .frame(chrome_frame())
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Photo CD").size(12.0).strong());
+                        if p.has_cdi_app {
+                            let view_label = if p.view_photo {
+                                "Back to CD-i"
                             } else {
-                                p.slideshow = false;
-                            }
-                        }
-                    } else {
-                        p.view_photo = true;
-                        ui.weak("No CD-i support on this disc");
-                    }
-                    if p.view_photo && !p.names.is_empty() {
-                        ui.separator();
-                        if ui.button("◀").clicked() {
-                            p.current = (p.current + p.names.len() - 1) % p.names.len();
-                            photo_decode = true;
-                        }
-                        if ui.button("▶").clicked() {
-                            p.current = (p.current + 1) % p.names.len();
-                            photo_decode = true;
-                        }
-                        ui.label(format!("{} / {}", p.current + 1, p.names.len()));
-                        ui.separator();
-                        let prev_tier = p.tier;
-                        egui::ComboBox::from_id_salt("pcd_tier")
-                            .selected_text(cdi_photocd::decode::TIER_LABELS[p.tier])
-                            .show_ui(ui, |ui| {
-                                for tier in 0..=p.max_tier.min(2) {
-                                    ui.selectable_value(
-                                        &mut p.tier,
-                                        tier,
-                                        cdi_photocd::decode::TIER_LABELS[tier],
-                                    );
+                                "View Raw Images"
+                            };
+                            if ui.button(view_label).clicked() {
+                                p.view_photo = !p.view_photo;
+                                if p.view_photo {
+                                    photo_entered_view = true;
+                                    if p.decoded.is_none() && !p.decoding {
+                                        photo_decode = true;
+                                    }
+                                } else {
+                                    p.slideshow = false;
                                 }
-                            });
-                        if p.tier != prev_tier {
-                            photo_decode = true;
+                            }
+                        } else {
+                            p.view_photo = true;
+                            ui.weak("No CD-i support on this disc");
                         }
-                        if p.names.len() > 1 {
-                            let label = if p.slideshow { "■" } else { "▶" };
-                            if ui.button(label).clicked() {
-                                p.slideshow = !p.slideshow;
-                                p.last_advance = Instant::now();
+                        if p.view_photo && !p.names.is_empty() {
+                            ui.separator();
+                            if ui.button("◀").clicked() {
+                                p.current = (p.current + p.names.len() - 1) % p.names.len();
+                                photo_decode = true;
+                            }
+                            if ui.button("▶").clicked() {
+                                p.current = (p.current + 1) % p.names.len();
+                                photo_decode = true;
+                            }
+                            ui.label(format!("{} / {}", p.current + 1, p.names.len()));
+                            ui.separator();
+                            let prev_tier = p.tier;
+                            egui::ComboBox::from_id_salt("pcd_tier")
+                                .selected_text(cdi_photocd::decode::TIER_LABELS[p.tier])
+                                .show_ui(ui, |ui| {
+                                    for tier in 0..=p.max_tier.min(2) {
+                                        ui.selectable_value(
+                                            &mut p.tier,
+                                            tier,
+                                            cdi_photocd::decode::TIER_LABELS[tier],
+                                        );
+                                    }
+                                });
+                            if p.tier != prev_tier {
+                                photo_decode = true;
+                            }
+                            if p.names.len() > 1 {
+                                let label = if p.slideshow { "■" } else { "▶" };
+                                if ui.button(label).clicked() {
+                                    p.slideshow = !p.slideshow;
+                                    p.last_advance = Instant::now();
+                                }
+                            }
+                            if p.decoded.is_some()
+                                && ui
+                                    .button(egui::RichText::new("⬇").size(16.0))
+                                    .on_hover_text("Save photo as PNG")
+                                    .clicked()
+                            {
+                                let stem = p.names[p.current]
+                                    .rsplit_once('.')
+                                    .map(|(s, _)| s.to_owned())
+                                    .unwrap_or_else(|| p.names[p.current].clone());
+                                let name = format!(
+                                    "{stem}_{}.png",
+                                    cdi_photocd::decode::TIER_LABELS[p.tier]
+                                );
+                                photo_save = Some((name, p.decoded.clone().unwrap()));
+                            }
+                            if p.decoding {
+                                ui.spinner();
+                                ui.weak("Decoding…");
+                            } else if let Some(error) = &p.error {
+                                ui.colored_label(egui::Color32::RED, error);
                             }
                         }
-                        if p.decoded.is_some()
-                            && ui
-                                .button(egui::RichText::new("⬇").size(16.0))
-                                .on_hover_text("Save photo as PNG")
-                                .clicked()
-                        {
-                            let stem = p.names[p.current]
-                                .rsplit_once('.')
-                                .map(|(s, _)| s.to_owned())
-                                .unwrap_or_else(|| p.names[p.current].clone());
-                            let name =
-                                format!("{stem}_{}.png", cdi_photocd::decode::TIER_LABELS[p.tier]);
-                            photo_save = Some((name, p.decoded.clone().unwrap()));
-                        }
-                        if p.decoding {
-                            ui.spinner();
-                            ui.weak("Decoding…");
-                        } else if let Some(error) = &p.error {
-                            ui.colored_label(egui::Color32::RED, error);
-                        }
-                    }
+                    });
                 });
-            });
         }
         if photo_entered_view && self.mouse_captured {
             self.set_mouse_capture(ctx, false);
@@ -2567,7 +3360,7 @@ impl eframe::App for App {
             self.request_photo_decode();
         }
         if let Some((name, image)) = photo_save {
-            save_photo_png(&name, self.save_dir.as_deref(), &image);
+            let _ = save_rgb_png("Save photo as PNG", &name, self.save_dir.as_deref(), &image);
         }
 
         // Library browser replaces the central view while active; the
@@ -2580,19 +3373,19 @@ impl eframe::App for App {
             return;
         }
 
-        // Keep the picture area at the framebuffer's aspect. Its height
-        // differs by standard (PAL 768x560, NTSC 768x480) and the chrome
-        // above/below changes as the disc bar appears, so a window sized once
-        // at startup ends up pillarboxed on PAL and letterboxed on NTSC.
+        // Keep the picture area at its presentation aspect. The raw PAL and
+        // NTSC rasters use non-square television pixels, while the live
+        // MCD212 timing aperture can switch between 720/768 by 240/280 lines.
         if !fullscreen {
-            let (fb_w, fb_h) = {
+            let aspect = {
                 let frame = self.shared.frame.lock().unwrap();
-                (frame.width as f32, frame.height as f32)
+                let aperture = display_aperture(&frame, self.display_area);
+                presentation_aspect(aperture, frame.geometry, self.crt_aspect)
             };
             let picture = ctx.available_rect();
             if let Some(inner) = ctx.input(|input| input.viewport().inner_rect) {
-                if fb_w > 0.0 && fb_h > 0.0 && picture.width() > 0.0 {
-                    let wanted = picture.width() * fb_h / fb_w;
+                if aspect > 0.0 && picture.width() > 0.0 {
+                    let wanted = picture.width() / aspect;
                     let delta = wanted - picture.height();
                     // Ignore sub-pixel drift so this cannot oscillate.
                     if delta.abs() > 1.0 {
@@ -2639,22 +3432,31 @@ impl eframe::App for App {
                     return;
                 };
                 let avail = ui.available_size();
-                let tex_size = texture.size_vec2();
-                let scale = (avail.x / tex_size.x).min(avail.y / tex_size.y).max(0.1);
-                let size = tex_size * scale;
+                let (uv_rect, aspect, pointer_origin, pointer_extent) = {
+                    let frame = self.shared.frame.lock().unwrap();
+                    let aperture = display_aperture(&frame, self.display_area);
+                    let uv_min = egui::pos2(
+                        aperture.left as f32 / frame.width as f32,
+                        aperture.top as f32 / frame.height as f32,
+                    );
+                    let uv_max = egui::pos2(
+                        (aperture.left + aperture.width) as f32 / frame.width as f32,
+                        (aperture.top + aperture.height) as f32 / frame.height as f32,
+                    );
+                    let (pointer_origin, pointer_extent) =
+                        pointer_mapping(aperture, frame.geometry);
+                    (
+                        egui::Rect::from_min_max(uv_min, uv_max),
+                        presentation_aspect(aperture, frame.geometry, self.crt_aspect),
+                        pointer_origin,
+                        pointer_extent,
+                    )
+                };
+                let size = fit_aspect(avail, aspect);
                 let rect = egui::Rect::from_center_size(ui.max_rect().center(), size);
                 let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
-                ui.painter().image(
-                    texture.id(),
-                    rect,
-                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
-
-                let (border, active_w) = {
-                    let frame = self.shared.frame.lock().unwrap();
-                    (frame.border as f32, frame.active_width as f32)
-                };
+                ui.painter()
+                    .image(texture.id(), rect, uv_rect, egui::Color32::WHITE);
                 let capture_pressed = self.capture_mouse_enabled
                     && !self.mouse_captured
                     && response.hovered()
@@ -2716,8 +3518,8 @@ impl eframe::App for App {
                     } else {
                         motion / ctx.pixels_per_point()
                     };
-                    let x_scale = tex_size.x * 768.0 / (size.x * active_w);
-                    let y_scale = 560.0 / size.y;
+                    let x_scale = pointer_extent.x / size.x;
+                    let y_scale = pointer_extent.y / size.y;
                     let scaled = egui::vec2(motion_points.x * x_scale, motion_points.y * y_scale)
                         + self.capture_frac;
                     let step = egui::vec2(scaled.x.trunc(), scaled.y.trunc());
@@ -2744,9 +3546,10 @@ impl eframe::App for App {
                         // video-mode/layout changes under a stationary cursor are
                         // not CD-i mouse movement.
                         let uv = (pos - rect.min) / size;
-                        let fx = uv.x * tex_size.x;
-                        let x = (((fx - border) * 768.0) / active_w).clamp(0.0, 767.0) as i32;
-                        let y = (uv.y * tex_size.y).clamp(0.0, 559.0) as i32;
+                        let x =
+                            (pointer_origin.x + uv.x * pointer_extent.x).clamp(0.0, 767.0) as i32;
+                        let y =
+                            (pointer_origin.y + uv.y * pointer_extent.y).clamp(0.0, 559.0) as i32;
                         let mut input = self.shared.input.lock().unwrap();
                         input.x = x;
                         input.y = y;
@@ -2773,7 +3576,69 @@ impl eframe::App for App {
 
 #[cfg(test)]
 mod tests {
-    use super::region_is_pal;
+    use super::{
+        controller_deflection, display_aperture, fill_audio, fit_aspect, parental_passcode,
+        pointer_mapping, presentation_aspect, region_is_pal, screenshot_dimensions,
+        screenshot_image, DiscOverride, DisplayAperture, DisplayArea, SharedFrame,
+    };
+    use cdi_core::mcd212::DisplayGeometry;
+
+    #[test]
+    fn suppressed_audio_is_silent_and_drains_queued_samples() {
+        let (mut producer, mut consumer) = rtrb::RingBuffer::<i16>::new(8);
+        for sample in [100, -100, 200, -200] {
+            producer.push(sample).unwrap();
+        }
+        let mut output = [1i16; 4];
+        fill_audio(&mut output, 2, &mut consumer, true, |sample| sample);
+        assert_eq!(output, [0; 4]);
+        assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn known_parental_passcode_matches_dump_style_disc_names() {
+        assert_eq!(parental_passcode("Voyeur (Europe).cue"), Some("3333"));
+        assert_eq!(parental_passcode("voyeur (USA) (Disc 1).CUE"), Some("3333"));
+        assert_eq!(parental_passcode("Vegas Girls (Europe).cue"), Some("1234"));
+        assert_eq!(
+            parental_passcode("Loving for a Lifetime (USA).cue"),
+            Some("6969")
+        );
+    }
+
+    #[test]
+    fn pending_and_unrelated_parental_passcodes_stay_hidden() {
+        assert_eq!(
+            parental_passcode("Pleasures of Sex, The (Europe).cue"),
+            None
+        );
+        assert_eq!(parental_passcode("Voyeur II (Europe).cue"), None);
+    }
+
+    #[test]
+    fn controller_dpad_preserves_diagonals_and_overrides_stick_drift() {
+        let diagonal =
+            controller_deflection(egui::vec2(-0.3, -0.2), egui::vec2(1.0, 1.0), true, true);
+        assert_eq!(diagonal, egui::vec2(1.0, 1.0));
+    }
+
+    #[test]
+    fn controller_uses_left_stick_while_dpad_is_idle() {
+        let stick = controller_deflection(egui::vec2(0.75, -0.5), egui::Vec2::ZERO, false, true);
+        assert_eq!(stick, egui::vec2(0.75, -0.5));
+    }
+
+    #[test]
+    fn controller_can_disable_left_stick() {
+        let stopped = controller_deflection(egui::vec2(0.75, -0.5), egui::Vec2::ZERO, false, false);
+        assert_eq!(stopped, egui::Vec2::ZERO);
+    }
+
+    #[test]
+    fn opposing_dpad_directions_do_not_fall_through_to_stick() {
+        let stopped = controller_deflection(egui::vec2(0.8, 0.6), egui::Vec2::ZERO, true, true);
+        assert_eq!(stopped, egui::Vec2::ZERO);
+    }
 
     #[test]
     fn region_tag_selects_video_standard() {
@@ -2784,6 +3649,7 @@ mod tests {
             region_is_pal("Vincent van Gogh Vol. 1, The (Europe)"),
             Some(true)
         );
+        assert_eq!(region_is_pal("Nobelia (USA, Europe)"), None);
     }
 
     #[test]
@@ -2794,5 +3660,285 @@ mod tests {
         assert_eq!(region_is_pal("Some Untagged Disc"), None);
         // Parentheses that are not regions.
         assert_eq!(region_is_pal("Title (Demo)"), None);
+    }
+
+    #[test]
+    fn philips_player_pixel_aspect_controls_presentation() {
+        let ntsc = DisplayGeometry {
+            raster_width: 768,
+            raster_height: 480,
+            active_x: 0,
+            active_y: 0,
+            active_width: 768,
+            active_height: 480,
+            compatibility_mode: false,
+            interlaced: false,
+            odd_field: false,
+            frame_duration_60hz: true,
+            pixel_aspect_num: 49,
+            pixel_aspect_den: 40,
+        };
+        let full = DisplayAperture {
+            left: 0,
+            top: 0,
+            width: 768,
+            height: 480,
+        };
+        let typical = DisplayAperture {
+            left: 24,
+            top: 20,
+            width: 720,
+            height: 440,
+        };
+        assert!((presentation_aspect(full, ntsc, true) - 1.306_122_4).abs() < 0.000_001);
+        assert!((presentation_aspect(typical, ntsc, true) - 1.335_807).abs() < 0.000_001);
+
+        let pal = DisplayGeometry {
+            raster_height: 560,
+            active_height: 560,
+            frame_duration_60hz: false,
+            pixel_aspect_num: 41,
+            ..ntsc
+        };
+        let pal_aperture = DisplayAperture {
+            height: 560,
+            ..full
+        };
+        assert!((presentation_aspect(pal_aperture, pal, true) - 1.337_979_1).abs() < 0.000_001);
+
+        let size = fit_aspect(egui::vec2(720.0, 700.0), 720.0 / 539.0);
+        assert_eq!(size, egui::vec2(720.0, 539.0));
+    }
+
+    #[test]
+    fn raw_presentation_preserves_active_pixel_geometry() {
+        let geometry = DisplayGeometry {
+            raster_width: 768,
+            raster_height: 480,
+            active_x: 0,
+            active_y: 0,
+            active_width: 768,
+            active_height: 480,
+            compatibility_mode: false,
+            interlaced: false,
+            odd_field: false,
+            frame_duration_60hz: true,
+            pixel_aspect_num: 49,
+            pixel_aspect_den: 40,
+        };
+        assert_eq!(
+            presentation_aspect(
+                DisplayAperture {
+                    left: 0,
+                    top: 0,
+                    width: 768,
+                    height: 480,
+                },
+                geometry,
+                false,
+            ),
+            1.6
+        );
+    }
+
+    #[test]
+    fn player_screenshot_uses_the_displayed_aperture_and_aspect() {
+        let ntsc = DisplayGeometry {
+            raster_width: 768,
+            raster_height: 480,
+            active_x: 0,
+            active_y: 0,
+            active_width: 768,
+            active_height: 480,
+            compatibility_mode: false,
+            interlaced: false,
+            odd_field: false,
+            frame_duration_60hz: true,
+            pixel_aspect_num: 49,
+            pixel_aspect_den: 40,
+        };
+        assert_eq!(
+            screenshot_dimensions(
+                DisplayAperture {
+                    left: 24,
+                    top: 20,
+                    width: 720,
+                    height: 440,
+                },
+                ntsc,
+                true,
+            ),
+            (720, 539)
+        );
+        assert_eq!(
+            screenshot_dimensions(
+                DisplayAperture {
+                    left: 0,
+                    top: 0,
+                    width: 768,
+                    height: 480,
+                },
+                ntsc,
+                true,
+            ),
+            (768, 588)
+        );
+
+        let mut pixels = vec![0x0010_1010; 16];
+        for y in 1..3 {
+            for x in 1..3 {
+                pixels[y * 4 + x] = 0x00EB_EBEB;
+            }
+        }
+        let frame = SharedFrame {
+            pixels,
+            width: 4,
+            height: 4,
+            geometry: DisplayGeometry {
+                raster_width: 4,
+                raster_height: 4,
+                active_x: 1,
+                active_y: 1,
+                active_width: 2,
+                active_height: 2,
+                compatibility_mode: true,
+                interlaced: false,
+                odd_field: false,
+                frame_duration_60hz: false,
+                pixel_aspect_num: 1,
+                pixel_aspect_den: 1,
+            },
+            frame_no: 0,
+        };
+        let image = screenshot_image(&frame, DisplayArea::FullSignal, false);
+        assert_eq!((image.width, image.height), (2, 2));
+        assert_eq!(image.rgb, vec![255; 12]);
+    }
+
+    #[test]
+    fn hardware_aperture_is_independent_of_frame_contents() {
+        let geometry = DisplayGeometry {
+            raster_width: 768,
+            raster_height: 560,
+            active_x: 24,
+            active_y: 40,
+            active_width: 720,
+            active_height: 480,
+            compatibility_mode: true,
+            interlaced: true,
+            odd_field: true,
+            frame_duration_60hz: false,
+            pixel_aspect_num: 41,
+            pixel_aspect_den: 40,
+        };
+        let black = SharedFrame {
+            pixels: vec![0; 768 * 560],
+            width: 768,
+            height: 560,
+            geometry,
+            frame_no: 0,
+        };
+        let patterned = SharedFrame {
+            pixels: vec![0x00FF_00FF; 768 * 560],
+            width: 768,
+            height: 560,
+            geometry,
+            frame_no: 0,
+        };
+        let aperture = display_aperture(&patterned, DisplayArea::TypicalCrt);
+        assert_eq!(
+            (aperture.left, aperture.top, aperture.width, aperture.height),
+            (24, 40, 720, 480)
+        );
+        assert_eq!(display_aperture(&black, DisplayArea::TypicalCrt), aperture);
+    }
+
+    #[test]
+    fn mouse_endpoints_match_the_displayed_hardware_aperture() {
+        let geometry = DisplayGeometry {
+            raster_width: 768,
+            raster_height: 560,
+            active_x: 24,
+            active_y: 40,
+            active_width: 720,
+            active_height: 480,
+            compatibility_mode: true,
+            interlaced: false,
+            odd_field: false,
+            frame_duration_60hz: false,
+            pixel_aspect_num: 41,
+            pixel_aspect_den: 40,
+        };
+        let aperture = DisplayAperture {
+            left: geometry.active_x,
+            top: geometry.active_y,
+            width: geometry.active_width,
+            height: geometry.active_height,
+        };
+        let (origin, extent) = pointer_mapping(aperture, geometry);
+        assert_eq!(origin, egui::Pos2::ZERO);
+        assert_eq!(extent, egui::vec2(768.0, 560.0));
+    }
+
+    #[test]
+    fn ntsc_crt_framing_centers_windowboxes_and_fills_bottom_aligned_pictures() {
+        let geometry = DisplayGeometry {
+            raster_width: 768,
+            raster_height: 480,
+            active_x: 0,
+            active_y: 0,
+            active_width: 768,
+            active_height: 480,
+            compatibility_mode: false,
+            interlaced: false,
+            odd_field: false,
+            frame_duration_60hz: true,
+            pixel_aspect_num: 49,
+            pixel_aspect_den: 40,
+        };
+        let bottom_aligned = SharedFrame {
+            pixels: vec![0x0012_3456; 768 * 480],
+            width: 768,
+            height: 480,
+            geometry,
+            frame_no: 0,
+        };
+        let black = SharedFrame {
+            pixels: vec![0; 768 * 480],
+            width: 768,
+            height: 480,
+            geometry,
+            frame_no: 0,
+        };
+        let centered = display_aperture(&black, DisplayArea::TypicalCrt);
+        assert_eq!(
+            (centered.left, centered.top, centered.width, centered.height),
+            (24, 20, 720, 440)
+        );
+        let filled = display_aperture(&bottom_aligned, DisplayArea::TypicalCrt);
+        assert_eq!(
+            (filled.left, filled.top, filled.width, filled.height),
+            (24, 40, 720, 440)
+        );
+        assert_eq!(
+            display_aperture(&black, DisplayArea::FullSignal),
+            DisplayAperture {
+                left: 0,
+                top: 0,
+                width: 768,
+                height: 480,
+            }
+        );
+
+        let (origin, extent) = pointer_mapping(filled, geometry);
+        assert_eq!(origin, egui::pos2(24.0, 560.0 / 12.0));
+        assert_eq!(extent, egui::vec2(720.0, 560.0 * 11.0 / 12.0));
+    }
+
+    #[test]
+    fn obsolete_fill_preference_is_ignored() {
+        let legacy: DiscOverride =
+            serde_json::from_str(r#"{"fill_compatibility_frame":true}"#).unwrap();
+        assert_eq!(legacy, DiscOverride::default());
     }
 }

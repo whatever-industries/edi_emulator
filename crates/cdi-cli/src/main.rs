@@ -527,7 +527,22 @@ fn boot(
         machine.bus.mcd212.cursor_control,
     );
 
-    let (width, height) = machine.bus.mcd212.visible_size();
+    let geometry = machine.bus.mcd212.display_geometry();
+    log::info!(
+        "display geometry: raster={}x{} active={}x{}+{},{} compatibility={} interlaced={} odd-field={} 60hz={}",
+        geometry.raster_width,
+        geometry.raster_height,
+        geometry.active_width,
+        geometry.active_height,
+        geometry.active_x,
+        geometry.active_y,
+        geometry.compatibility_mode,
+        geometry.interlaced,
+        geometry.odd_field,
+        geometry.frame_duration_60hz,
+    );
+
+    let (width, height) = (geometry.raster_width, geometry.raster_height);
     let fb = machine.bus.mcd212.framebuffer();
     if hash {
         use sha2::{Digest, Sha256};

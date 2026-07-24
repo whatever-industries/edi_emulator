@@ -1,6 +1,6 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-07-19
+Status date: 2026-07-22
 
 ## Current implementation status
 
@@ -15,6 +15,37 @@ Status date: 2026-07-19
 - [x] M3.9 interlaced field/base-cursor composition and CCIR presentation range
 - [x] M3.10 masked FMV VSYNC status and native release-path completion
 - [ ] M3.11 seamless-branch B-picture recovery (five rare failures remain in the full run)
+
+Frontend presentation consumes `cdi-core`'s public `DisplayGeometry`, derived
+only from live MCD212 `CF`, `ST`, `FD`, `SM`, field parity, and the player
+standard. Horizontal Compatibility Mode masks 24 double-resolution pixels on
+each side, and 625/50 vertical Compatibility Mode masks 40 host rows above and
+below the 720x480 picture. `DisplayGeometry` carries Philips TSA-003's measured
+PAL/NTSC pixel aspect. Rendering, screenshots, window aspect, and pointer
+mapping use the same geometry and the global `Typical CRT` or `Full signal`
+presentation choice. Typical CRT exposes a fixed 360x220 viewing area only
+when a 525-line title supplies the full 384x240 signal. Four-sided windowboxes
+are centered; pictures which substantially reach the bottom overscan edge use
+the bottom-aligned form of that same aperture. No disc name or profile enters
+the decision. PAL and hardware Compatibility Mode are not host-cropped.
+Raw-square-pixel presentation remains a Settings diagnostic.
+Mixed-region filenames no longer force whichever standard appears first in
+the label. Full source notes are in `docs/display-geometry.md`.
+
+Exact-disc display profiles use the ordered SHA-1 hashes of distinct CUE files
+instead of filenames. The compact tracked database starts with the three
+Merlin's Apprentice pressings and The Apprentice USA Redump #78866. Merlin
+Europe Redump #54833 remains PAL/50 Hz and The Apprentice USA remains
+NTSC/60 Hz. Profiles recommend player timing only: there are no title or
+filename crop profiles. Authored pixels inside the selected global
+presentation area remain visible. The full
+current Philips CD-i metadata DAT is fetched only from `redump.info` by
+`scripts/fetch-redump-cdi-refs.sh` into ignored `references/redump-cdi/`.
+The frontend library and Open dialog also accept one-disc `.zip` archives when
+every non-directory member is unencrypted Store data and exactly one CUE sheet
+is present. Contents are streamed to a guarded temporary directory so the
+existing CD-i and Photo CD sector readers remain unchanged; compressed,
+encrypted, unsafe-path, and multi-CUE archives are rejected explicitly.
 
 Next action: resolve the five cumulative B-picture decode failures (including
 two captured during The 7th Guest's branched third play), then turn gameplay into repeatable long-run
@@ -169,7 +200,10 @@ and nominal white is 235. VMPEG YCbCr conversion therefore produces internal
 studio-range RGB; only frontend texture upload and CLI PNG creation expand to
 desktop 0..255. Interlace `SM=1` supplies distinct PA odd/even rows that must be
 retained and woven. Noninterlace `SM=0` duplicates one field into both host
-rows; `FD`/PAL Standard top-bottom border handling applies only there.
+rows. The 20-line top and bottom display-file masks for 625/50 Compatibility
+Mode apply in both scan modes under MCD212 tables 5-6 and 5-7; masked lines do
+not consume display-file or DCA data. The same core geometry controls the
+frontend aperture.
 The MCD212 hardware cursor is a live overlay, not part of either retained base
 field. Composite the current cursor over both progressive host rows after the
 base fields are woven; baking an animated cursor pattern into alternating

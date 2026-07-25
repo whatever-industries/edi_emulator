@@ -311,6 +311,9 @@ struct Args {
     /// Initial player video standard (default: PAL).
     #[arg(long, value_enum)]
     video_standard: Option<VideoStandardArg>,
+    /// Start with blank player storage and do not save it (diagnostics).
+    #[arg(long, hide = true)]
+    ephemeral_nvram: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -734,7 +737,15 @@ fn app_data_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
-fn configured_nvram_path(board_name: &str, pal: bool, dvc_inserted: bool) -> Option<PathBuf> {
+fn configured_nvram_path(
+    board_name: &str,
+    pal: bool,
+    dvc_inserted: bool,
+    persistent: bool,
+) -> Option<PathBuf> {
+    if !persistent {
+        return None;
+    }
     let standard = if pal { "pal" } else { "ntsc" };
     let cartridge = if dvc_inserted { "vmpeg" } else { "base" };
     app_data_dir().map(|dir| dir.join(format!("{board_name}-{standard}-{cartridge}.nvr")))
@@ -1098,6 +1109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         disc,
         dvc_rom,
         video_standard,
+        ephemeral_nvram,
     } = Args::parse();
     let image = if let Some(path) = &rom {
         std::fs::read(path)?
@@ -1188,6 +1200,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         model.board.name,
         model.video == cdi_core::VideoStandard::Pal,
         dvc_inserted,
+        !ephemeral_nvram,
     );
     let saved_nvram = load_nvram(nvram_path.as_deref(), machine.bus.nvram.len());
     machine.bus.nvram.copy_from_slice(&saved_nvram);
@@ -1248,6 +1261,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 nvram_path,
                 model.board.name.to_owned(),
                 initial_archive_guard,
+                !ephemeral_nvram,
             )
         }
     })?;
@@ -1447,6 +1461,7 @@ fn emu_loop(
     mut nvram_path: Option<PathBuf>,
     mut nvram_board_name: String,
     mut disc_archive_guard: Option<Arc<tempfile::TempDir>>,
+    persistent_nvram: bool,
 ) {
     let mut next_frame_deadline = Instant::now();
     let mut fps_window_start = Instant::now();
@@ -1505,6 +1520,7 @@ fn emu_loop(
                                         &nvram_board_name,
                                         pal,
                                         shared.dvc_inserted.load(Ordering::Relaxed),
+                                        persistent_nvram,
                                     );
                                     switch_nvram_store(
                                         &mut machine,
@@ -1575,6 +1591,7 @@ fn emu_loop(
                                         model.board.name,
                                         model.video == cdi_core::VideoStandard::Pal,
                                         shared.dvc_inserted.load(Ordering::Relaxed),
+                                        persistent_nvram,
                                     );
                                     if rebuilt_nvram_path == nvram_path {
                                         // Keep changes newer than the last periodic
@@ -1641,6 +1658,7 @@ fn emu_loop(
                                 &nvram_board_name,
                                 shared.pal.load(Ordering::Relaxed),
                                 true,
+                                persistent_nvram,
                             );
                             switch_nvram_store(
                                 &mut machine,
@@ -1673,6 +1691,7 @@ fn emu_loop(
                                 &nvram_board_name,
                                 shared.pal.load(Ordering::Relaxed),
                                 true,
+                                persistent_nvram,
                             );
                             switch_nvram_store(
                                 &mut machine,
@@ -1698,6 +1717,7 @@ fn emu_loop(
                         &nvram_board_name,
                         shared.pal.load(Ordering::Relaxed),
                         false,
+                        persistent_nvram,
                     );
                     switch_nvram_store(&mut machine, &mut nvram_path, &mut nvram_mirror, new_path);
                     machine.reset();
@@ -1710,6 +1730,7 @@ fn emu_loop(
                         &nvram_board_name,
                         pal,
                         shared.dvc_inserted.load(Ordering::Relaxed),
+                        persistent_nvram,
                     );
                     switch_nvram_store(&mut machine, &mut nvram_path, &mut nvram_mirror, new_path);
                     machine.set_video_standard(standard);
@@ -4274,7 +4295,7 @@ impl eframe::App for App {
 #[cfg(test)]
 mod tests {
     use super::{
-        backup_nvram, controller_deflection, controller_dpad_deflection,
+        backup_nvram, configured_nvram_path, controller_deflection, controller_dpad_deflection,
         controller_stick_deflection, cycle_library_focus, display_aperture, fill_audio, fit_aspect,
         library_dpad_direction, library_pad_action, load_nvram, parental_passcode, pointer_mapping,
         presentation_aspect, region_is_pal, screenshot_dimensions, screenshot_image, write_nvram,
@@ -4292,6 +4313,11 @@ mod tests {
         write_nvram(Some(&path), &[5, 6, 7, 8]).unwrap();
         assert_eq!(load_nvram(Some(&path), 4), [5, 6, 7, 8]);
         assert_eq!(load_nvram(Some(&path), 8), [0; 8]);
+    }
+
+    #[test]
+    fn ephemeral_nvram_has_no_host_path() {
+        assert_eq!(configured_nvram_path("mono1", true, true, false), None);
     }
 
     #[test]

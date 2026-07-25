@@ -836,9 +836,21 @@ impl Mpeg1VideoDecoder {
             } else {
                 VIDEO_DCT_SIZE_CHROMINANCE
             };
-            let dct_size = self.buffer.read_vlc(dct_table)? as usize;
+            let dct_size = self.buffer.read_vlc(dct_table).or_else(|| {
+                log::debug!(
+                    "mpeg1: missing intra DCT size at bit={}",
+                    self.buffer.bit_index
+                );
+                None
+            })? as usize;
             let coefficient = if dct_size != 0 {
-                let differential = self.buffer.read(dct_size)? as i32;
+                let differential = self.buffer.read(dct_size).or_else(|| {
+                    log::debug!(
+                        "mpeg1: truncated intra DC differential at bit={}",
+                        self.buffer.bit_index
+                    );
+                    None
+                })? as i32;
                 if differential & (1 << (dct_size - 1)) != 0 {
                     predictor + differential
                 } else {
@@ -857,28 +869,67 @@ impl Mpeg1VideoDecoder {
         }
 
         loop {
-            let coefficient = self.buffer.read_vlc_uint(VIDEO_DCT_COEFF)?;
-            if coefficient == 0x0001 && n > 0 && self.buffer.read1()? == 0 {
+            let coefficient = self.buffer.read_vlc_uint(VIDEO_DCT_COEFF).or_else(|| {
+                log::debug!(
+                    "mpeg1: invalid or truncated DCT coefficient at bit={}",
+                    self.buffer.bit_index
+                );
+                None
+            })?;
+            if coefficient == 0x0001
+                && n > 0
+                && self.buffer.read1().or_else(|| {
+                    log::debug!("mpeg1: truncated end-of-block bit");
+                    None
+                })? == 0
+            {
                 break;
             }
             let (run, mut level) = if coefficient == 0xFFFF {
-                let run = self.buffer.read(6)? as usize;
-                let byte = self.buffer.read(8)? as i32;
+                let run = self.buffer.read(6).or_else(|| {
+                    log::debug!("mpeg1: truncated DCT escape run");
+                    None
+                })? as usize;
+                let byte = self.buffer.read(8).or_else(|| {
+                    log::debug!("mpeg1: truncated DCT escape level");
+                    None
+                })? as i32;
                 let level = match byte {
-                    0 => self.buffer.read(8)? as i32,
-                    128 => self.buffer.read(8)? as i32 - 256,
+                    0 => self.buffer.read(8).or_else(|| {
+                        log::debug!("mpeg1: truncated extended positive DCT level");
+                        None
+                    })? as i32,
+                    128 => {
+                        self.buffer.read(8).or_else(|| {
+                            log::debug!("mpeg1: truncated extended negative DCT level");
+                            None
+                        })? as i32
+                            - 256
+                    }
                     129..=255 => byte - 256,
                     _ => byte,
                 };
                 (run, level)
             } else {
                 let run = usize::from(coefficient >> 8);
-                let level =
-                    i32::from(coefficient & 0xFF) * if self.buffer.read1()? != 0 { -1 } else { 1 };
+                let level = i32::from(coefficient & 0xFF)
+                    * if self.buffer.read1().or_else(|| {
+                        log::debug!("mpeg1: truncated DCT sign bit");
+                        None
+                    })? != 0
+                    {
+                        -1
+                    } else {
+                        1
+                    };
                 (run, level)
             };
-            n = n.checked_add(run)?;
+            n = n.checked_add(run).or_else(|| {
+                log::debug!("mpeg1: DCT run overflow");
+                None
+            })?;
             if n >= 64 {
+                log::debug!("mpeg1: DCT run exceeds block at coefficient {n}");
                 return None;
             }
             let dezigzagged = usize::from(VIDEO_ZIG_ZAG[n] & 63);
@@ -1262,7 +1313,11 @@ mod tests {
         let bytes = std::fs::read(path).expect("read MPEG-1 fixture");
         let mut decoder = Mpeg1VideoDecoder::default();
         let mut frames = Vec::new();
-        for chunk in bytes.chunks(997) {
+        let chunk_size = std::env::var("CDI_MPEG1_CHUNK")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(997);
+        for chunk in bytes.chunks(chunk_size) {
             decoder.feed(chunk);
             frames.extend(decoder.decode_available(10_000));
         }

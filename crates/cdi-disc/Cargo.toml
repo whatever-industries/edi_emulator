@@ -8,6 +8,9 @@ rust-version.workspace = true
 
 [dependencies]
 log.workspace = true
+serde.workspace = true
+sha1.workspace = true
+cdi-os9 = { path = "../cdi-os9" }
 
 [lints]
 workspace = true

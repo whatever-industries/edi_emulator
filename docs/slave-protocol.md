@@ -137,8 +137,8 @@ The launch mode is not returned by the `F4` test-plug query. Dynamic tracing
 and disassembly of `cdapdriv` in the CD-i 220 F2 BIOS (`0x42D3D2` response
 handler) show this sequence:
 
-1. On an ordinary boot, the BIOS sends four bytes `B0 00 00 00` on ch3.
-   The normal HLE reply is `B0 00 02 15`.
+1. On an ordinary native CD-i boot, the BIOS sends four bytes
+   `B0 00 00 00` on ch3. The HLE reply is `B0 00 02 15`.
 2. ch2 `0x8A` resets the host while the SLAVE retains its launch state.
 3. The restarted BIOS repeats the B0 query. A retained-mode reply of
    `B0 00 42 15` has bit 6 set in the third byte.
@@ -147,6 +147,23 @@ handler) show this sequence:
 5. The SLAVE replies `B1 00 00 00`; the low 24 bits are the disc base
    (`00:00:00` here). The BIOS then reads the disc application from LBA 17
    onward and transfers control to it.
+
+The low three bits of B0 byte 2 are the disc-type code later returned by
+`cdapdriv` GetStat `$55`. Native CD-i is type `2`; CD-ROM XA Bridge/White
+Book VCD is type `4`. Bit 6 is independent retained-disc state, so a retained
+bridge disc is reported as `B0 00 44 15`. The VMPEG `vcd` module tests
+GetStat `$55` for bit `0x400`, writes `1` to `$E01000`, and adjusts the
+MCD251 horizontal origin when type 4 is present.
+
+`DiscImage` derives type 4 from the disc itself rather than its filename: the
+Mode-2 Form-1 primary volume descriptor at LBA 16 must have the ISO header
+`01 CD001 01`, system identifier `CD-RTOS CD-BRIDGE`, and CD-XA application
+signature `CD-XA001`. Accused and Addams Family Values VCD traces confirmed
+that type 4 makes both select the White Book 13.5 MHz sample-rate-converter
+path. Automatic exposure on insertion remains disabled, however, because the
+MCD251 sample-origin semantics are not implemented yet: exposing the native
+path centers Accused but shifts Addams. The classifier and SLAVE response are
+retained as tested prerequisites, not used as a presentation workaround.
 
 This exchange was verified with CD Shoot: after the reset, the BIOS consumes
 the retained `B0`, sends `B1`, loads the disc modules, starts Mode-2 streaming,
@@ -172,6 +189,31 @@ requirements are tracked in `icdia-archive-assessment.md`. In particular,
 packets emitted only for motion or button transitions. This corroborates the
 relative frontend/HLE integration used here, while the SLAVE's host-side
 four-byte accumulated-coordinate response remains firmware-derived behavior.
+
+## Live media-change delivery
+
+The firmware's SERVO receive path copies a complete four-byte packet to
+`$99..$9C` and sets work flag `$54.7` when ch3 command `0xFA` has enabled
+`$63.7`. The host IRQ read path at `0x02D8` then exposes those four bytes on
+channel 3. Consequently, a live drive transition is an unsolicited `B0`
+packet on the same channel and in the same form as the explicit `B0` query;
+it is not the unrelated channel-1 byte `0x3B`.
+
+`SlaveHle` now keeps media presence separately from the disc-type code.
+Power-on attachment only establishes the state used by an explicit query.
+Changing media in a running machine queues an asynchronous drive-status
+packet until the BIOS enables X-Bus notifications and the preceding ch3
+response has been consumed. Replacing one mounted image queues an empty-drive
+packet followed by the new-medium packet, modeling the physical remove/insert
+transition without resetting the 68070 from the frontend. CDIC drive-backed
+transport is stopped at the same boundary while its host-visible register
+interface remains intact.
+
+The settled HLE packets retain the BIOS-verified Mono-I encoding:
+`B0 00 00 15` for no medium and `B0 00 02 15` for native CD-i media. A
+retained PLAY launch still adds bit 6 (`B0 00 42 15`). The lower-level
+open/close/spin-up phases observed on real SERVO links remain future
+transport-state work.
 
 ### ch2 payload forms (`0x048D..0x0511`)
 
@@ -211,6 +253,6 @@ four-byte accumulated-coordinate response remains firmware-derived behavior.
 
 1. Trace main-loop consumers of `$55/$5A/$5D/$63` (search the disasm) to
    map flag → behavior (motor via SCI to SERVO, status byte enqueue).
-2. Decode the SERVO response that produces B0 bit 6 and the exact meaning of
-   B0's low status nibble, then replace the retained-mode HLE shortcut with
-   that state transition.
+2. Decode the lower-level SERVO transition that produces B0 bit 6, then
+   replace the retained-mode HLE shortcut with the complete transport state
+   machine.

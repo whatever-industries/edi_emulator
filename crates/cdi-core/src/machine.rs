@@ -8,14 +8,26 @@
 
 use cdi_scc68070::bus::{Bus68k, FnCode, WaitTicks};
 use cdi_scc68070::Peripherals;
+use std::collections::VecDeque;
 
 use cdi_disc::DiscImage;
 
 use crate::board::{DeviceKind, ModelDef, VideoStandard};
 use crate::cdic::Cdic;
+use crate::diagnostics::{
+    CpuDiagnosticSnapshot, DiagnosticProbe, DisplayProvenanceSnapshot,
+    DmaChannelDiagnosticSnapshot, DmaDiagnosticSnapshot, InterruptDiagnosticSnapshot,
+    MachineDiagnosticEvent, MachineDiagnosticSnapshot, Mcd212DiagnosticSnapshot,
+};
 use crate::dvc::{DvcConfig, DvcKind, DvcStats, Vmpeg};
 use crate::mcd212::Mcd212;
 use crate::slave::SlaveHle;
+
+/// A word transfer in SCC68070 single-address DMA occupies approximately six
+/// 15 MHz CPU clocks. The data sheet specifies 2.98 million transfers/s with
+/// a 35 MHz crystal (section 8.1), or about twelve crystal clocks per transfer;
+/// CLKOUT is half the crystal rate.
+const DMA_SINGLE_ADDRESS_WORD_CYCLES: u64 = 6;
 
 const PAGE_SHIFT: u32 = 12;
 const PAGE_COUNT: usize = 1 << (24 - PAGE_SHIFT); // 4096 pages / 16 MB
@@ -120,6 +132,8 @@ pub struct MachineBus {
     pub disc: Option<DiscImage>,
     /// Optional Digital Video Cartridge. M3 supports the VMPEG variant.
     pub dvc: Option<Vmpeg>,
+    /// SCC68070-clock budget for the asynchronous DMAREQ2 transfer engine.
+    dvc_dma_cycles: u64,
 }
 
 impl MachineBus {
@@ -203,6 +217,7 @@ impl MachineBus {
             cdic: Cdic::new(),
             disc: None,
             dvc: None,
+            dvc_dma_cycles: 0,
         };
         bus.build_page_table();
         Ok(bus)
@@ -250,15 +265,18 @@ impl MachineBus {
         if let Some(dvc) = &mut self.dvc {
             dvc.reset();
         }
+        self.dvc_dma_cycles = 0;
     }
 
     pub fn attach_dvc(&mut self, config: DvcConfig) -> Result<(), String> {
         self.dvc = Some(Vmpeg::new(config)?);
+        self.dvc_dma_cycles = 0;
         Ok(())
     }
 
     pub fn detach_dvc(&mut self) {
         self.dvc = None;
+        self.dvc_dma_cycles = 0;
         self.periph.in5_line = false;
     }
 
@@ -423,12 +441,21 @@ impl MachineBus {
             .set_dma0_memory_address(start.wrapping_add(count * 2));
     }
 
-    /// Service one handshake-paced word on SCC68070 DMA channel 1
-    /// (external DMAREQ2/DMAACK2) when VMPEG requests it.
-    fn service_dvc_dma(&mut self) {
+    /// Advance SCC68070 DMA channel 2 (the second register block) by elapsed
+    /// 15 MHz clocks while VMPEG asserts DMAREQ2. This keeps DMA throughput
+    /// independent of CPU instruction count without making an entire sector
+    /// appear at the transfer register instantaneously.
+    fn service_dvc_dma(&mut self, elapsed_cycles: u64) -> u64 {
         let requested = self.dvc.as_ref().is_some_and(Vmpeg::dma_requested);
-        if !requested || !self.periph.dma1_active() {
-            return;
+        if !self.periph.dma1_active() {
+            self.dvc_dma_cycles = 0;
+            return 0;
+        }
+        if !requested {
+            // Do not accumulate an arbitrarily large credit while the device
+            // has deasserted DMAREQ2 for FIFO backpressure.
+            self.dvc_dma_cycles = self.dvc_dma_cycles.min(DMA_SINGLE_ADDRESS_WORD_CYCLES - 1);
+            return 0;
         }
         if self.periph.dma1_operation_control() & 0x80 != 0 {
             log::warn!("vmpeg: unsupported device-to-memory DMA channel-1 transfer");
@@ -436,23 +463,39 @@ impl MachineBus {
             if let Some(dvc) = &mut self.dvc {
                 dvc.finish_dma();
             }
-            return;
+            return 0;
         }
 
-        let address = self.periph.dma1_memory_address();
-        let word = u16::from_be_bytes([
-            self.raw_read8(address),
-            self.raw_read8(address.wrapping_add(1)),
-        ]);
-        if let Some(dvc) = &mut self.dvc {
-            dvc.push_dma_word(word);
-        }
-        self.periph.advance_dma1_word();
-        if !self.periph.dma1_active() {
+        self.dvc_dma_cycles = self.dvc_dma_cycles.saturating_add(elapsed_cycles);
+        let burst = !self.periph.dma1_cycle_steal();
+        let mut words = 0u64;
+        while self.dvc_dma_cycles >= DMA_SINGLE_ADDRESS_WORD_CYCLES {
+            self.dvc_dma_cycles -= DMA_SINGLE_ADDRESS_WORD_CYCLES;
+            let address = self.periph.dma1_memory_address();
+            let word = u16::from_be_bytes([
+                self.raw_read8(address),
+                self.raw_read8(address.wrapping_add(1)),
+            ]);
             if let Some(dvc) = &mut self.dvc {
-                dvc.finish_dma();
+                dvc.push_dma_word(word);
+            }
+            words += 1;
+            self.periph.advance_dma1_word();
+            if !self.periph.dma1_active() {
+                if let Some(dvc) = &mut self.dvc {
+                    dvc.finish_dma();
+                }
+                break;
+            }
+            if !self.dvc.as_ref().is_some_and(Vmpeg::dma_requested) {
+                self.dvc_dma_cycles = self.dvc_dma_cycles.min(DMA_SINGLE_ADDRESS_WORD_CYCLES - 1);
+                break;
+            }
+            if !burst {
+                break;
             }
         }
+        words
     }
 
     fn raw_read8(&mut self, addr: u32) -> u8 {
@@ -499,6 +542,7 @@ impl MachineBus {
 pub struct Machine {
     pub cpu: cdi_scc68070::Cpu,
     pub bus: MachineBus,
+    diagnostic_events: Option<(usize, VecDeque<MachineDiagnosticEvent>, DiagnosticProbe)>,
 }
 
 impl Machine {
@@ -518,6 +562,7 @@ impl Machine {
         let mut m = Self {
             cpu: cdi_scc68070::Cpu::new(),
             bus,
+            diagnostic_events: None,
         };
         m.reset();
         Ok(m)
@@ -564,6 +609,210 @@ impl Machine {
         self.cpu.reset(&mut self.bus);
     }
 
+    /// Enable bounded transition events. A zero capacity disables capture.
+    /// Diagnostics are observational and do not alter device timing.
+    pub fn enable_diagnostics(&mut self, capacity: usize) {
+        if capacity == 0 {
+            self.diagnostic_events = None;
+            return;
+        }
+        self.diagnostic_events = Some((
+            capacity,
+            VecDeque::with_capacity(capacity.min(4096)),
+            self.diagnostic_probe(),
+        ));
+    }
+
+    /// Return a deterministic read-only snapshot of the current machine.
+    pub fn diagnostic_snapshot(&self) -> MachineDiagnosticSnapshot {
+        let geometry = self.bus.mcd212.display_geometry();
+        let pixel_count = geometry.raster_width * geometry.raster_height;
+        MachineDiagnosticSnapshot {
+            cpu: CpuDiagnosticSnapshot {
+                d: self.cpu.d,
+                a: self.cpu.a,
+                pc: self.cpu.pc,
+                sr: self.cpu.sr,
+                stopped: self.cpu.stopped,
+                pending_ipl: self.cpu.pending_ipl,
+                cycles: self.cpu.cycles,
+                exceptions: self.cpu.exceptions_taken,
+            },
+            interrupts: InterruptDiagnosticSnapshot {
+                pending_ipl: self.bus.periph.pending_ipl(),
+                slave_in2: self.bus.periph.in2_line,
+                cdic_in4: self.bus.periph.in4_line,
+                dvc_in5: self.bus.periph.in5_line,
+            },
+            dma: DmaDiagnosticSnapshot {
+                cdic_channel: DmaChannelDiagnosticSnapshot {
+                    status: self.bus.periph.dma0_status(),
+                    channel_control: self.bus.periph.dma0_channel_control(),
+                    memory_address: self.bus.periph.dma0_memory_address(),
+                    transfer_count: self.bus.periph.dma0_transfer_count(),
+                    operation_control: self.bus.periph.dma0_operation_control(),
+                    active: self.bus.periph.dma0_active(),
+                },
+                dvc_channel: DmaChannelDiagnosticSnapshot {
+                    status: self.bus.periph.dma1_status(),
+                    channel_control: self.bus.periph.dma1_channel_control(),
+                    memory_address: self.bus.periph.dma1_memory_address(),
+                    transfer_count: self.bus.periph.dma1_transfer_count(),
+                    operation_control: self.bus.periph.dma1_operation_control(),
+                    active: self.bus.periph.dma1_active(),
+                },
+            },
+            cdic: self.bus.cdic.diagnostic_snapshot(),
+            slave: self.bus.slave.diagnostic_snapshot(),
+            mcd212: Mcd212DiagnosticSnapshot {
+                geometry,
+                csrw: self.bus.mcd212.csrw,
+                csrr: self.bus.mcd212.csrr,
+                dcr: self.bus.mcd212.dcr,
+                vsr: self.bus.mcd212.vsr,
+                ddr: self.bus.mcd212.ddr,
+                dcp: self.bus.mcd212.dcp,
+                dca: self.bus.mcd212.dca,
+                image_coding_method: self.bus.mcd212.image_coding_method,
+                transparency_control: self.bus.mcd212.transparency_control,
+                plane_order: self.bus.mcd212.plane_order,
+                dyuv_absolute_start: self.bus.mcd212.dyuv_abs_start,
+                cursor_position: self.bus.mcd212.cursor_position,
+                cursor_control: self.bus.mcd212.cursor_control,
+                frame_count: self.bus.mcd212.frame_count,
+            },
+            display_provenance: DisplayProvenanceSnapshot {
+                cdic_buffer_hash: diagnostic_hash_bytes(&self.bus.cdic.ram),
+                plane_a_hash: self
+                    .bus
+                    .ram
+                    .first()
+                    .map_or(0, |plane| diagnostic_hash_bytes(plane)),
+                plane_b_hash: self
+                    .bus
+                    .ram
+                    .get(1)
+                    .map_or(0, |plane| diagnostic_hash_bytes(plane)),
+                raster_hash: diagnostic_hash_pixels(
+                    &self.bus.mcd212.framebuffer()
+                        [..pixel_count.min(self.bus.mcd212.framebuffer().len())],
+                ),
+            },
+            dvc: self.dvc_stats(),
+            dvc_registers: self.bus.dvc.as_ref().map(Vmpeg::register_snapshot),
+            disc_inserted: self.bus.disc.is_some(),
+        }
+    }
+
+    /// Drain captured events in occurrence order.
+    pub fn take_diagnostic_events(&mut self) -> Vec<MachineDiagnosticEvent> {
+        self.diagnostic_events
+            .as_mut()
+            .map(|(_, events, _)| events.drain(..).collect())
+            .unwrap_or_default()
+    }
+
+    fn diagnostic_probe(&self) -> DiagnosticProbe {
+        let cdic = self.bus.cdic.diagnostic_snapshot();
+        let dvc = self.dvc_stats().unwrap_or_default();
+        DiagnosticProbe {
+            frame: self.bus.mcd212.frame_count,
+            cdic_mode: cdic.disc_mode,
+            cdic_lba: cdic.current_lba,
+            cdic_state: [
+                cdic.command,
+                cdic.audio_buffer,
+                cdic.x_buffer,
+                cdic.z_buffer,
+                cdic.data_buffer,
+            ],
+            cdic_interrupt: cdic.interrupt_asserted,
+            dvc_errors: [
+                dvc.demux_errors,
+                dvc.video_errors,
+                dvc.audio_errors,
+                dvc.video_underflow_events,
+                dvc.audio_underflow_events,
+                dvc.stream_errors,
+            ],
+        }
+    }
+
+    fn push_diagnostic_event(&mut self, event: MachineDiagnosticEvent) {
+        let Some((capacity, events, _)) = &mut self.diagnostic_events else {
+            return;
+        };
+        if events.len() == *capacity {
+            events.pop_front();
+        }
+        events.push_back(event);
+    }
+
+    fn sample_diagnostics(&mut self) {
+        let current = self.diagnostic_probe();
+        let Some((_, _, previous)) = &self.diagnostic_events else {
+            return;
+        };
+        let previous = *previous;
+        if current.frame != previous.frame {
+            let geometry = self.bus.mcd212.display_geometry();
+            let pixel_count = geometry.raster_width * geometry.raster_height;
+            self.push_diagnostic_event(MachineDiagnosticEvent::Frame {
+                cycle: self.cpu.cycles,
+                frame: current.frame,
+                geometry,
+                plane_a_hash: self
+                    .bus
+                    .ram
+                    .first()
+                    .map_or(0, |plane| diagnostic_hash_bytes(plane)),
+                plane_b_hash: self
+                    .bus
+                    .ram
+                    .get(1)
+                    .map_or(0, |plane| diagnostic_hash_bytes(plane)),
+                raster_hash: diagnostic_hash_pixels(
+                    &self.bus.mcd212.framebuffer()
+                        [..pixel_count.min(self.bus.mcd212.framebuffer().len())],
+                ),
+            });
+        }
+        if (current.cdic_mode, current.cdic_lba) != (previous.cdic_mode, previous.cdic_lba) {
+            self.push_diagnostic_event(MachineDiagnosticEvent::DiscPosition {
+                cycle: self.cpu.cycles,
+                mode: current.cdic_mode,
+                lba: current.cdic_lba,
+            });
+        }
+        if (current.cdic_state, current.cdic_interrupt)
+            != (previous.cdic_state, previous.cdic_interrupt)
+        {
+            self.push_diagnostic_event(MachineDiagnosticEvent::CdicState {
+                cycle: self.cpu.cycles,
+                command: current.cdic_state[0],
+                audio_buffer: current.cdic_state[1],
+                x_buffer: current.cdic_state[2],
+                z_buffer: current.cdic_state[3],
+                data_buffer: current.cdic_state[4],
+                interrupt_asserted: current.cdic_interrupt,
+            });
+        }
+        if current.dvc_errors != previous.dvc_errors {
+            self.push_diagnostic_event(MachineDiagnosticEvent::DvcCounters {
+                cycle: self.cpu.cycles,
+                demux_errors: current.dvc_errors[0],
+                video_errors: current.dvc_errors[1],
+                audio_errors: current.dvc_errors[2],
+                video_underflows: current.dvc_errors[3],
+                audio_underflows: current.dvc_errors[4],
+                stream_errors: current.dvc_errors[5],
+            });
+        }
+        if let Some((_, _, stored)) = &mut self.diagnostic_events {
+            *stored = current;
+        }
+    }
+
     /// Reset the 68070 and all host-side devices while preserving the
     /// independently powered SLAVE MCU state that requested the reset.
     fn reset_host_preserving_slave(&mut self) {
@@ -585,14 +834,18 @@ impl Machine {
         bus.slave.tick(cycles);
         if bus.slave.take_host_reset_request() {
             log::debug!("machine: SLAVE requested host reset");
+            self.push_diagnostic_event(MachineDiagnosticEvent::HostReset {
+                cycle: self.cpu.cycles,
+            });
             self.reset_host_preserving_slave();
+            self.sample_diagnostics();
             return cycles;
         }
         if let Some(atten) = bus.slave.take_attenuation() {
             bus.cdic.set_attenuation(atten);
         }
         bus.cdic.tick(cycles, bus.disc.as_ref());
-        bus.service_dvc_dma();
+        bus.service_dvc_dma(cycles);
         if let Some(dvc) = &mut bus.dvc {
             dvc.tick(cycles);
         }
@@ -611,12 +864,33 @@ impl Machine {
         bus.periph.in4_line = bus.cdic.int_line();
         bus.periph.in5_line = bus.dvc.as_ref().is_some_and(Vmpeg::irq);
         bus.periph.set_int1(bus.mcd212.int_line());
+        self.sample_diagnostics();
         cycles
     }
 
-    /// Insert a disc image (or remove it with `None`).
+    /// Set the disc present at power-on/reset (or remove it with `None`).
+    ///
+    /// This is intended for construction and restoration. For a live player,
+    /// use [`Machine::change_disc`] so the SLAVE reports a drive event.
     pub fn set_disc(&mut self, disc: Option<DiscImage>) {
+        // DiscImage can identify CD-ROM XA Bridge media, and SlaveHle can
+        // report its native type-4 status. Do not expose that status here
+        // until the MCD251 sample-rate-converter origin is implemented:
+        // enabling the guest's White Book path without those Xo semantics
+        // fixes one title's placement while shifting another.
         self.bus.cdic.set_disc_layout(disc.as_ref());
+        self.bus.slave.set_disc_present(disc.is_some());
+        self.bus.disc = disc;
+    }
+
+    /// Replace media in a running player without resetting the machine.
+    ///
+    /// The CDIC transport is stopped and the SLAVE forwards the same B0
+    /// drive-status packet that its SERVO link supplies on real hardware.
+    pub fn change_disc(&mut self, disc: Option<DiscImage>) {
+        let replacing = self.bus.disc.is_some() && disc.is_some();
+        self.bus.cdic.media_changed(disc.as_ref());
+        self.bus.slave.notify_disc_change(disc.is_some(), replacing);
         self.bus.disc = disc;
     }
 
@@ -645,6 +919,20 @@ impl Machine {
         }
         mixed
     }
+}
+
+fn diagnostic_hash_bytes(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xCBF2_9CE4_8422_2325u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01B3)
+    })
+}
+
+fn diagnostic_hash_pixels(pixels: &[u32]) -> u64 {
+    pixels.iter().fold(0xCBF2_9CE4_8422_2325u64, |hash, pixel| {
+        pixel.to_be_bytes().into_iter().fold(hash, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01B3)
+        })
+    })
 }
 
 impl Bus68k for MachineBus {
@@ -753,6 +1041,7 @@ mod tests {
         // NOP at the reset PC so Machine::step can reach the reset latch.
         rom[0x4B8..0x4BA].copy_from_slice(&[0x4E, 0x71]);
         let mut m = Machine::new(&CDI220B, rom).unwrap();
+        m.bus.slave.set_disc_present(true);
         m.bus.slave.write(2, 0x8A);
         m.step();
         assert_eq!(m.cpu.pc, 0x0040_04B8);
@@ -765,6 +1054,82 @@ mod tests {
         assert_eq!(m.bus.slave.read(3), 0x00);
         assert_eq!(m.bus.slave.read(3), 0x42);
         assert_eq!(m.bus.slave.read(3), 0x15);
+    }
+
+    #[test]
+    fn diagnostics_disabled_and_enabled_execute_identically() {
+        let mut rom = vec![0u8; 512 * 1024];
+        rom[..8].copy_from_slice(&[0x00, 0x00, 0x15, 0x00, 0x00, 0x40, 0x04, 0xB8]);
+        for instruction in rom[0x4B8..0x5B8].chunks_exact_mut(2) {
+            instruction.copy_from_slice(&[0x4E, 0x71]);
+        }
+        let mut plain = Machine::new(&CDI220B, rom.clone()).unwrap();
+        let mut observed = Machine::new(&CDI220B, rom).unwrap();
+        observed.enable_diagnostics(32);
+        for _ in 0..64 {
+            plain.step();
+            observed.step();
+        }
+        assert_eq!(plain.cpu.d, observed.cpu.d);
+        assert_eq!(plain.cpu.a, observed.cpu.a);
+        assert_eq!(plain.cpu.pc, observed.cpu.pc);
+        assert_eq!(plain.cpu.sr, observed.cpu.sr);
+        assert_eq!(plain.cpu.cycles, observed.cpu.cycles);
+        assert_eq!(
+            plain.bus.mcd212.frame_count,
+            observed.bus.mcd212.frame_count
+        );
+        assert_eq!(
+            plain.bus.mcd212.framebuffer(),
+            observed.bus.mcd212.framebuffer()
+        );
+    }
+
+    #[test]
+    fn diagnostic_event_buffer_discards_oldest_entries_at_capacity() {
+        let mut rom = vec![0u8; 512 * 1024];
+        rom[..8].copy_from_slice(&[0x00, 0x00, 0x15, 0x00, 0x00, 0x40, 0x04, 0xB8]);
+        let mut machine = Machine::new(&CDI220B, rom).unwrap();
+        machine.enable_diagnostics(2);
+        for frame in 1..=3 {
+            machine.push_diagnostic_event(MachineDiagnosticEvent::Frame {
+                cycle: frame,
+                frame,
+                geometry: machine.bus.mcd212.display_geometry(),
+                plane_a_hash: 0,
+                plane_b_hash: 0,
+                raster_hash: 0,
+            });
+        }
+        let events = machine.take_diagnostic_events();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            events[0],
+            MachineDiagnosticEvent::Frame { frame: 2, .. }
+        ));
+        assert!(matches!(
+            events[1],
+            MachineDiagnosticEvent::Frame { frame: 3, .. }
+        ));
+    }
+
+    #[test]
+    fn provenance_hashes_identify_the_first_damaged_storage_stage() {
+        let mut rom = vec![0u8; 512 * 1024];
+        rom[..8].copy_from_slice(&[0x00, 0x00, 0x15, 0x00, 0x00, 0x40, 0x04, 0xB8]);
+        let mut machine = Machine::new(&CDI220B, rom).unwrap();
+        let baseline = machine.diagnostic_snapshot().display_provenance;
+
+        machine.bus.cdic.ram[17] = 1;
+        let cdic_changed = machine.diagnostic_snapshot().display_provenance;
+        assert_ne!(cdic_changed.cdic_buffer_hash, baseline.cdic_buffer_hash);
+        assert_eq!(cdic_changed.plane_a_hash, baseline.plane_a_hash);
+
+        machine.bus.ram[0][23] = 1;
+        let plane_changed = machine.diagnostic_snapshot().display_provenance;
+        assert_ne!(plane_changed.plane_a_hash, baseline.plane_a_hash);
+        assert_eq!(plane_changed.plane_b_hash, baseline.plane_b_hash);
+        assert_eq!(plane_changed.raster_hash, baseline.raster_hash);
     }
 
     #[test]
@@ -805,12 +1170,77 @@ mod tests {
         }
         m.raw_write8(0xE0_40C0, 0x80);
         m.raw_write8(0xE0_40C1, 0x00);
-        while m.periph.dma1_active() {
-            m.service_dvc_dma();
-        }
+        assert_eq!(m.service_dvc_dma(5 * DMA_SINGLE_ADDRESS_WORD_CYCLES), 5);
         let stats = m.dvc.as_ref().unwrap().stats();
         assert_eq!(stats.dma_words, 5);
         assert_eq!(stats.video_pes_packets, 1);
         assert_eq!(m.periph.read8(0x4040) & 0x80, 0x80);
+    }
+
+    #[test]
+    fn vmpeg_dma_cycle_steal_transfers_one_word_per_service() {
+        let mut m = machine();
+        m.attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
+            .unwrap();
+        for (i, byte) in [0x12, 0x34, 0x56, 0x78].into_iter().enumerate() {
+            m.raw_write8(0x3000 + i as u32, byte);
+        }
+        for (offset, value) in [
+            (0x404A, 0x00),
+            (0x404B, 0x02),
+            (0x404C, 0x00),
+            (0x404D, 0x00),
+            (0x404E, 0x30),
+            (0x404F, 0x00),
+            (0x4044, 0x80),
+            (0x4045, 0x12),
+            (0x4047, 0x80),
+        ] {
+            m.periph.write8(offset, value);
+        }
+        m.raw_write8(0xE0_40C0, 0x80);
+        m.raw_write8(0xE0_40C1, 0x00);
+
+        assert_eq!(m.service_dvc_dma(10 * DMA_SINGLE_ADDRESS_WORD_CYCLES), 1);
+        assert_eq!(m.periph.dma1_transfer_count(), 1);
+        assert_eq!(m.dvc.as_ref().unwrap().stats().dma_words, 1);
+
+        assert_eq!(m.service_dvc_dma(0), 1);
+        assert_eq!(m.periph.dma1_transfer_count(), 0);
+        assert_eq!(m.dvc.as_ref().unwrap().stats().dma_words, 2);
+    }
+
+    #[test]
+    fn vmpeg_dma_burst_is_clock_paced() {
+        let mut m = machine();
+        m.attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
+            .unwrap();
+        for i in 0..8 {
+            m.raw_write8(0x3000 + i, i as u8);
+        }
+        for (offset, value) in [
+            (0x404A, 0x00),
+            (0x404B, 0x04),
+            (0x404C, 0x00),
+            (0x404D, 0x00),
+            (0x404E, 0x30),
+            (0x404F, 0x00),
+            (0x4044, 0x00),
+            (0x4045, 0x12),
+            (0x4047, 0x80),
+        ] {
+            m.periph.write8(offset, value);
+        }
+        m.raw_write8(0xE0_40C0, 0x80);
+        m.raw_write8(0xE0_40C1, 0x00);
+
+        assert_eq!(m.service_dvc_dma(DMA_SINGLE_ADDRESS_WORD_CYCLES - 1), 0);
+        assert_eq!(m.periph.dma1_transfer_count(), 4);
+        assert_eq!(m.service_dvc_dma(1), 1);
+        assert_eq!(m.periph.dma1_transfer_count(), 3);
+        assert_eq!(m.service_dvc_dma(2 * DMA_SINGLE_ADDRESS_WORD_CYCLES), 2);
+        assert_eq!(m.periph.dma1_transfer_count(), 1);
+        assert_eq!(m.service_dvc_dma(DMA_SINGLE_ADDRESS_WORD_CYCLES), 1);
+        assert_eq!(m.periph.dma1_transfer_count(), 0);
     }
 }

@@ -66,6 +66,26 @@ enum DiscMode {
     Toc,
 }
 
+/// Read-only CDIC state used by deterministic compatibility diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+pub struct CdicDiagnosticSnapshot {
+    pub command: u16,
+    /// 0 idle, 1 Mode 1, 2 Mode 2, 3 CDDA, 4 TOC.
+    pub disc_mode: u8,
+    pub current_lba: u32,
+    pub selected_file: u16,
+    pub selected_channels: u32,
+    pub audio_channel: u16,
+    pub audio_buffer: u16,
+    pub x_buffer: u16,
+    pub z_buffer: u16,
+    pub data_buffer: u16,
+    pub interrupt_vector: u16,
+    pub interrupt_asserted: bool,
+    pub queued_audio_samples: usize,
+}
+
 /// XA-ADPCM prediction filter coefficients.
 const XA_FILTER_COEF: [[i32; 2]; 4] = [
     [0x000, 0x000],
@@ -183,6 +203,31 @@ impl Cdic {
         self.int_line
     }
 
+    pub fn diagnostic_snapshot(&self) -> CdicDiagnosticSnapshot {
+        let disc_mode = match self.disc_mode {
+            DiscMode::Idle => 0,
+            DiscMode::Mode1 => 1,
+            DiscMode::Mode2 => 2,
+            DiscMode::Cdda => 3,
+            DiscMode::Toc => 4,
+        };
+        CdicDiagnosticSnapshot {
+            command: self.command,
+            disc_mode,
+            current_lba: self.curr_lba,
+            selected_file: self.file,
+            selected_channels: self.channel,
+            audio_channel: self.audio_channel,
+            audio_buffer: self.audio_buffer,
+            x_buffer: self.x_buffer,
+            z_buffer: self.z_buffer,
+            data_buffer: self.data_buffer,
+            interrupt_vector: self.interrupt_vector,
+            interrupt_asserted: self.int_line,
+            queued_audio_samples: self.audio_out.len(),
+        }
+    }
+
     /// IN4 interrupt-acknowledge vector.
     pub fn intack(&self) -> u8 {
         (self.interrupt_vector & 0xFF) as u8
@@ -201,6 +246,15 @@ impl Cdic {
                 150
             }
         });
+    }
+
+    /// Stop drive-backed transport when the mounted medium changes without
+    /// resetting the host or the CDIC register interface.
+    pub fn media_changed(&mut self, disc: Option<&DiscImage>) {
+        self.cancel_disc_read();
+        self.audio_out.clear();
+        self.xa_last = [0; 4];
+        self.set_disc_layout(disc);
     }
 
     fn update_interrupt_state(&mut self) {

@@ -12,6 +12,8 @@ env_logger.workspace = true
 clap.workspace = true
 sha2.workspace = true
 png.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 cdi-core = { path = "../cdi-core" }
 cdi-os9 = { path = "../cdi-os9" }
 cdi-disc = { version = "0.1.0", path = "../cdi-disc" }

@@ -67,15 +67,17 @@ impl ExternalVideo<'_> {
 
         // X-display is expressed in 15 MHz output-sample positions. The
         // MCD212 framebuffer follows C2PIX at twice that rate, so each
-        // position occupies two 30 MHz raster pixels. The VCD converter
-        // expands 352 decoded samples over the 384-sample base span.
+        // position occupies two 30 MHz raster pixels. The White Book sample
+        // rate converter changes the MPEG output from 15 MHz to 13.5 MHz
+        // (Philips Interactive Engineer 96/05), hence 9 source samples per
+        // 20 framebuffer pixels.
         let display_x = self.display_x.saturating_mul(2);
         if raster_x < display_x {
             return self.border;
         }
         let relative_x = raster_x - display_x;
         let source_relative_x = if self.vcd_clock {
-            relative_x.saturating_mul(11) / 24
+            relative_x.saturating_mul(9) / 20
         } else {
             relative_x / 2
         };
@@ -150,6 +152,7 @@ impl DvcConfig {
 
 /// Counters exposed to headless/front-end diagnostics.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
 pub struct DvcStats {
     pub dma_words: u64,
     pub direct_words: u64,
@@ -187,6 +190,55 @@ pub struct DvcStats {
     pub playing: u64,
     pub video_visible: u64,
     pub stream_errors: u64,
+    pub current_video_width: u64,
+    pub current_video_height: u64,
+    pub current_video_rgb_min: u64,
+    pub current_video_rgb_max: u64,
+    pub current_video_frame_hash: u64,
+    pub video_display_x: u64,
+    pub video_display_y: u64,
+    pub video_window_x: u64,
+    pub video_window_y: u64,
+    pub video_window_width: u64,
+    pub video_window_height: u64,
+    pub vcd_pixel_clock_13_5: u64,
+}
+
+/// Read-only VMPEG register/state snapshot for deterministic diagnostics.
+///
+/// Values are sampled without invoking the register read side effects used by
+/// the native driver (notably ISR acknowledge-on-read).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+pub struct DvcRegisterSnapshot {
+    pub fma_command: u16,
+    pub fma_status: u16,
+    pub fma_stream: u16,
+    pub fma_vector: u16,
+    pub fma_isr: u16,
+    pub fma_ier: u16,
+    pub fmv_system_status: u16,
+    pub fmv_ier: u16,
+    pub fmv_isr: u16,
+    pub fmv_timer: u16,
+    pub fmv_decoder_command: u16,
+    pub fmv_video_data_command: u16,
+    pub fmv_decoding_timestamp: u16,
+    pub fmv_pictures_in_fifo: u16,
+    pub fmv_system_command: u16,
+    pub fmv_video_command: u16,
+    pub fmv_stream: u16,
+    pub fmv_vector: u16,
+    pub dclk: u32,
+    pub timer_counter: u16,
+    pub dma_target: u8,
+    pub decoder_enabled: bool,
+    pub video_armed: bool,
+    pub playing: bool,
+    pub video_visible: bool,
+    pub video_underflow_reported: bool,
+    pub video_sequence_end_seen: bool,
+    pub video_iso_end_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -513,6 +565,7 @@ pub struct Vmpeg {
     audio_start_dclk: Option<u32>,
     audio_clock_anchor: Option<(u64, u32)>,
     audio_underflow_reported: bool,
+    audio_underflow_after_eoi_ack: bool,
     video_armed: bool,
     playing: bool,
     video_visible: bool,
@@ -588,6 +641,7 @@ impl Vmpeg {
             audio_start_dclk: None,
             audio_clock_anchor: None,
             audio_underflow_reported: false,
+            audio_underflow_after_eoi_ack: false,
             video_armed: false,
             playing: false,
             video_visible: false,
@@ -662,6 +716,7 @@ impl Vmpeg {
         self.audio_start_dclk = None;
         self.audio_clock_anchor = None;
         self.audio_underflow_reported = false;
+        self.audio_underflow_after_eoi_ack = false;
         self.video_armed = false;
         self.playing = false;
         self.video_visible = false;
@@ -680,6 +735,11 @@ impl Vmpeg {
         self.video_decoder.reset();
         self.video_frames.clear();
         self.current_video_frame = None;
+        self.stats.current_video_width = 0;
+        self.stats.current_video_height = 0;
+        self.stats.current_video_rgb_min = 0;
+        self.stats.current_video_rgb_max = 0;
+        self.stats.current_video_frame_hash = 0;
         self.video_cycle_accum = 0;
         self.video_cycles_per_frame = CLOCK_HZ / 25;
         self.last_picture_due_dclk = None;
@@ -698,7 +758,51 @@ impl Vmpeg {
         stats.queued_audio_samples = self.mp2.pcm.len() as u64 / 2;
         stats.playing = u64::from(self.playing);
         stats.video_visible = u64::from(self.video_visible);
+        stats.video_display_x = u64::from(Self::word(&self.fmv_regs, 0x76));
+        stats.video_display_y = u64::from(Self::word(&self.fmv_regs, 0x74));
+        stats.video_window_x = u64::from(Self::word(&self.fmv_regs, 0x7E));
+        stats.video_window_y = u64::from(Self::word(&self.fmv_regs, 0x7C));
+        stats.video_window_width = u64::from(Self::word(&self.fmv_regs, 0x7A));
+        stats.video_window_height = u64::from(Self::word(&self.fmv_regs, 0x78));
+        stats.vcd_pixel_clock_13_5 = u64::from(self.vcd_pixel_clock_13_5);
         stats
+    }
+
+    pub fn register_snapshot(&self) -> DvcRegisterSnapshot {
+        DvcRegisterSnapshot {
+            fma_command: Self::word(&self.fma_regs, FMA_CMD),
+            fma_status: Self::word(&self.fma_regs, 0x02),
+            fma_stream: Self::word(&self.fma_regs, FMA_STREAM),
+            fma_vector: Self::word(&self.fma_regs, FMA_IVEC),
+            fma_isr: Self::word(&self.fma_regs, FMA_ISR),
+            fma_ier: Self::word(&self.fma_regs, FMA_IER),
+            fmv_system_status: Self::word(&self.fmv_regs, 0x5E),
+            fmv_ier: Self::word(&self.fmv_regs, FMV_IER),
+            fmv_isr: Self::word(&self.fmv_regs, FMV_ISR),
+            fmv_timer: Self::word(&self.fmv_regs, FMV_TIMER),
+            fmv_decoder_command: Self::word(&self.fmv_regs, 0x88),
+            fmv_video_data_command: Self::word(&self.fmv_regs, 0x8C),
+            fmv_decoding_timestamp: Self::word(&self.fmv_regs, 0xA0),
+            fmv_pictures_in_fifo: Self::word(&self.fmv_regs, 0xA4),
+            fmv_system_command: Self::word(&self.fmv_regs, FMV_SYSCMD),
+            fmv_video_command: Self::word(&self.fmv_regs, FMV_VIDCMD),
+            fmv_stream: Self::word(&self.fmv_regs, FMV_STREAM),
+            fmv_vector: Self::word(&self.fmv_regs, FMV_IVEC),
+            dclk: self.dclk,
+            timer_counter: self.timer_counter,
+            dma_target: match self.dma_target {
+                None => 0,
+                Some(DmaTarget::Video) => 1,
+                Some(DmaTarget::Audio) => 2,
+            },
+            decoder_enabled: self.decoder_enabled,
+            video_armed: self.video_armed,
+            playing: self.playing,
+            video_visible: self.video_visible,
+            video_underflow_reported: self.video_underflow_reported,
+            video_sequence_end_seen: self.video_sequence_end_seen,
+            video_iso_end_pending: self.video_iso_end_pending,
+        }
     }
 
     /// Enable or disable capture of the current VMPEG play's elementary
@@ -710,6 +814,11 @@ impl Vmpeg {
 
     pub fn captured_video_es(&self) -> Option<&[u8]> {
         self.captured_video_es.as_deref()
+    }
+
+    /// Read-only native-driver RAM for local diagnostic capture.
+    pub fn extension_ram(&self) -> &[u8] {
+        &self.extension_ram
     }
 
     pub fn irq(&self) -> bool {
@@ -750,6 +859,7 @@ impl Vmpeg {
         match self.dma_target.take() {
             Some(DmaTarget::Video) => {
                 let program_ends = self.video_demux.stats.program_ends;
+                let video_packets = self.video_demux.stats.video_packets;
                 let input_len = self.video_input.len();
                 let iso_end_offset = self
                     .video_input
@@ -760,6 +870,14 @@ impl Vmpeg {
                 self.video_demux.selected_video_stream =
                     Some((Self::word(&self.fmv_regs, FMV_STREAM) & 0x0F) as u8);
                 self.video_demux.feed(&self.video_input);
+                log::debug!(
+                    "vmpeg: video DMA completed: {input_len} bytes, stream {}, {} PES packet(s)",
+                    Self::word(&self.fmv_regs, FMV_STREAM) & 0x0F,
+                    self.video_demux
+                        .stats
+                        .video_packets
+                        .saturating_sub(video_packets),
+                );
                 self.video_input.clear();
                 if self.video_armed {
                     if let Some(scr) = self.video_demux.last_scr {
@@ -970,16 +1088,7 @@ impl Vmpeg {
                 self.audio_out.push(self.mp2.pcm.pop_front().unwrap_or(0));
                 self.audio_out.push(self.mp2.pcm.pop_front().unwrap_or(0));
             }
-            if self.mp2.pcm.is_empty()
-                && self.stats.decoded_audio_frames != 0
-                && !self.audio_underflow_reported
-            {
-                let status = Self::word(&self.fma_regs, 0x02);
-                Self::set_word(&mut self.fma_regs, 0x02, (status | 0x0008) & !0x0010);
-                Self::or_word(&mut self.fma_regs, FMA_ISR, 0x0008);
-                self.audio_underflow_reported = true;
-                self.stats.audio_underflow_events += 1;
-            }
+            self.raise_pending_audio_underflow();
         }
 
         if self.playing {
@@ -1072,6 +1181,29 @@ impl Vmpeg {
             self.last_picture_due_dclk = None;
             log::debug!("vmpeg: last picture displayed at DCLK {}", self.dclk);
         }
+        self.stats.current_video_width = frame.width as u64;
+        self.stats.current_video_height = frame.height as u64;
+        self.stats.current_video_rgb_min = frame
+            .pixels
+            .iter()
+            .map(|pixel| pixel & 0x00FF_FFFF)
+            .min()
+            .unwrap_or_default() as u64;
+        self.stats.current_video_rgb_max = frame
+            .pixels
+            .iter()
+            .map(|pixel| pixel & 0x00FF_FFFF)
+            .max()
+            .unwrap_or_default() as u64;
+        self.stats.current_video_frame_hash =
+            frame
+                .pixels
+                .iter()
+                .fold(0xCBF2_9CE4_8422_2325u64, |hash, pixel| {
+                    pixel.to_be_bytes().into_iter().fold(hash, |hash, byte| {
+                        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01B3)
+                    })
+                });
         self.current_video_frame = Some(frame);
         self.stats.presented_video_frames += 1;
         Self::or_word(&mut self.fmv_regs, FMV_ISR, 0x0004);
@@ -1225,7 +1357,8 @@ impl Vmpeg {
                 }
                 let value = self.fma_regs[offset];
                 if offset == FMA_ISR + 1 {
-                    Self::set_word(&mut self.fma_regs, FMA_ISR, 0);
+                    let acknowledged = Self::word(&self.fma_regs, FMA_ISR);
+                    self.acknowledge_fma_isr(acknowledged);
                 }
                 Some(value)
             }
@@ -1342,6 +1475,7 @@ impl Vmpeg {
                         .saturating_add(self.mp2.errors);
                     self.mp2.reset();
                     self.audio_underflow_reported = false;
+                    self.audio_underflow_after_eoi_ack = false;
                     self.audio_iso_end_reported = false;
                 }
                 if value & 0x0002 != 0 {
@@ -1357,7 +1491,7 @@ impl Vmpeg {
                     self.audio_underflow_reported = false;
                 }
             }
-            FMA_ISR => Self::set_word(&mut self.fma_regs, FMA_ISR, 0),
+            FMA_ISR => self.acknowledge_fma_isr(value),
             _ => {}
         }
     }
@@ -1492,6 +1626,40 @@ impl Vmpeg {
         if self.audio_demux.audio.len() >= 4 {
             let header: Vec<u8> = self.audio_demux.audio.iter().take(4).copied().collect();
             self.fma_regs[0x14..0x18].copy_from_slice(&header);
+        }
+    }
+
+    fn acknowledge_fma_isr(&mut self, acknowledged: u16) {
+        Self::set_word(&mut self.fma_regs, FMA_ISR, 0);
+        if acknowledged & 0x0001 != 0 && self.audio_iso_end_reported {
+            // Native madriv reports EOI and the subsequent empty compressed
+            // input buffer as distinct CD-RTOS signals. The host MP2 decoder
+            // can drain its PCM queue before the ISO-end pack arrives, so an
+            // earlier underflow must not consume the post-EOI transition.
+            self.audio_underflow_after_eoi_ack = true;
+            self.audio_underflow_reported = false;
+            self.raise_pending_audio_underflow();
+        }
+    }
+
+    fn raise_pending_audio_underflow(&mut self) {
+        if self.audio_enabled
+            && self.mp2.pcm.is_empty()
+            && self.stats.decoded_audio_frames != 0
+            && !self.audio_underflow_reported
+        {
+            let post_eoi = self.audio_underflow_after_eoi_ack;
+            self.audio_underflow_after_eoi_ack = false;
+            let status = Self::word(&self.fma_regs, 0x02);
+            Self::set_word(&mut self.fma_regs, 0x02, (status | 0x0008) & !0x0010);
+            Self::or_word(&mut self.fma_regs, FMA_ISR, 0x0008);
+            self.audio_underflow_reported = true;
+            self.stats.audio_underflow_events += 1;
+            log::debug!(
+                "vmpeg: audio underflow at DCLK {}{}",
+                self.dclk,
+                if post_eoi { " after EOI" } else { "" }
+            );
         }
     }
 
@@ -1662,6 +1830,33 @@ mod tests {
     }
 
     #[test]
+    fn white_book_clock_expands_345_samples_across_the_active_raster() {
+        let frame = DecodedVideoFrame {
+            width: 352,
+            height: 1,
+            pixels: (0..352).map(|value| value as u32 + 1).collect(),
+            first_in_sequence: false,
+            first_in_group: false,
+            last_in_sequence: false,
+        };
+        let video = ExternalVideo {
+            frame: &frame,
+            display_x: 0,
+            display_y: 0,
+            window_x: 7,
+            window_y: 0,
+            window_width: 345,
+            window_height: 1,
+            vcd_clock: true,
+            border: 0,
+        };
+
+        assert_eq!(video.pixel(0, 0), 8);
+        assert_eq!(video.pixel(766, 0), 352);
+        assert_eq!(video.pixel(767, 0), 0);
+    }
+
+    #[test]
     fn impeg_is_recognized_but_not_attached() {
         let config = DvcConfig::new(DvcKind::Impeg, vec![0; VMPEG_FULL_ROM_SIZE]).unwrap();
         assert!(Vmpeg::new(config).unwrap_err().contains("deferred to M4"));
@@ -1792,6 +1987,50 @@ mod tests {
         assert_eq!(dvc.read8(0xE0_4063), Some(0x00));
         assert_eq!(Vmpeg::word(&dvc.fmv_regs, FMV_ISR), 0x0020);
         assert_eq!(dvc.stats.video_underflow_events, 1);
+    }
+
+    #[test]
+    fn audio_underflow_follows_eoi_as_a_separate_interrupt() {
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+        dvc.audio_enabled = true;
+        dvc.stats.decoded_audio_frames = 1;
+
+        // The PCM FIFO may drain before the system-stream ISO end reaches
+        // the audio decoder. Native madriv ignores this early underflow until
+        // it has observed EOI.
+        dvc.tick(1);
+        assert_eq!(Vmpeg::word(&dvc.fma_regs, FMA_ISR), 0x0008);
+        assert_eq!(dvc.read8(0xE0_301A), Some(0x00));
+        assert_eq!(dvc.read8(0xE0_301B), Some(0x08));
+        assert_eq!(Vmpeg::word(&dvc.fma_regs, FMA_ISR), 0);
+
+        dvc.signal_audio_program_end();
+        assert_eq!(Vmpeg::word(&dvc.fma_regs, FMA_ISR), 0x0001);
+        assert_eq!(dvc.read8(0xE0_301A), Some(0x00));
+        assert_eq!(dvc.read8(0xE0_301B), Some(0x01));
+
+        // EOI acknowledgement must expose a new underflow transition even
+        // when an earlier empty-FIFO interrupt was already acknowledged.
+        assert_eq!(Vmpeg::word(&dvc.fma_regs, FMA_ISR), 0x0008);
+    }
+
+    #[test]
+    fn audio_underflow_waits_for_queued_pcm_after_eoi_acknowledgement() {
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+        dvc.audio_enabled = true;
+        dvc.stats.decoded_audio_frames = 1;
+        dvc.mp2.pcm.extend([1, 1]);
+
+        dvc.signal_audio_program_end();
+        assert_eq!(dvc.read8(0xE0_301A), Some(0x00));
+        assert_eq!(dvc.read8(0xE0_301B), Some(0x01));
+        assert_eq!(Vmpeg::word(&dvc.fma_regs, FMA_ISR), 0);
+
+        dvc.mp2.pcm.clear();
+        dvc.tick(1);
+        assert_eq!(Vmpeg::word(&dvc.fma_regs, FMA_ISR), 0x0008);
     }
 
     #[test]

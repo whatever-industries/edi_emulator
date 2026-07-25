@@ -111,6 +111,7 @@ pub const FB_HEIGHT: usize = 560;
 /// as height/width from Philips TSA-003 (TN 093): 1.025 on Philips 625-line
 /// players and 1.225 on Philips 525-line players.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
 pub struct DisplayGeometry {
     pub raster_width: usize,
     pub raster_height: usize,

@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "requirement": "MCD212 display aperture follows live hardware mode",
+      "subsystem": "mcd212",
+      "status": "implemented-tested",
+      "specification": [
+        "MCD212 section 5.8 and tables 5-1 through 5-7",
+        "Green Book V.2.2, V.2.3, V.4.8"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212::DisplayGeometry",
+        "cdi_core::mcd212::Mcd212::display_geometry"
+      ],
+      "tests": [
+        "mcd212::tests::display_geometry_follows_the_specification_matrix",
+        "mcd212::tests::pal_compatibility_masks_do_not_consume_dca_slots_in_either_scan_mode"
+      ],
+      "known_gaps": []
+    },
+    {
+      "requirement": "Disc inventory maps Green Book and ISO/VCD files to real-time sector/channel coding",
+      "subsystem": "disc-cdfm",
+      "status": "partial",
+      "specification": [
+        "Green Book III.4.3",
+        "Green Book V.6.2 and V.6.3",
+        "Green Book VII CDFM SS_Play PCB/CIL/PCL"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_disc::DiscImage::inspect",
+        "cdi_disc::inspect_cue"
+      ],
+      "tests": [
+        "inventory::tests::parses_green_book_directory_records",
+        "inventory::tests::identifies_mpeg_sequence_headers_without_retaining_payload"
+      ],
+      "known_gaps": [
+        "Guest PCB/CIL/PCL destination tracing",
+        "UCM drawmap provenance",
+        "Contextual RL3/RL7/CLUT/DYUV preview"
+      ]
+    },
+    {
+      "requirement": "Bounded deterministic machine evidence is observational",
+      "subsystem": "diagnostics",
+      "status": "implemented-tested",
+      "specification": [],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::Machine::diagnostic_snapshot",
+        "cdi_core::Machine::enable_diagnostics"
+      ],
+      "tests": [
+        "machine::tests::diagnostics_disabled_and_enabled_execute_identically",
+        "machine::tests::diagnostic_event_buffer_discards_oldest_entries_at_capacity",
+        "machine::tests::provenance_hashes_identify_the_first_damaged_storage_stage"
+      ],
+      "known_gaps": [
+        "Guest PCB/CIL/PCL semantic decoding and destination labels",
+        "Audio hash timeline"
+      ]
+    }
+  ]
+}

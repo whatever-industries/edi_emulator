@@ -4,6 +4,9 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
+
+mod diagnose;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum VideoStandardArg {
@@ -105,9 +108,18 @@ enum Command {
         /// CUE sheet of a disc image to insert.
         #[arg(long)]
         disc: Option<PathBuf>,
+        /// Insert `--disc` into an already-running player at this instruction
+        /// instead of presenting it at power-on. This reproduces the
+        /// frontend's live media-change path.
+        #[arg(long, requires = "disc")]
+        disc_at: Option<u64>,
         /// Optional VMPEG/IMPEG Digital Video Cartridge firmware ROM.
         #[arg(long)]
         dvc_rom: Option<PathBuf>,
+        /// Restore an 8 KiB Mono-I NVRAM image before boot. Intended for
+        /// deterministic compatibility comparisons; the file is not updated.
+        #[arg(long)]
+        nvram: Option<PathBuf>,
         /// Click the pointer at "x,y" (device coords 0-767,0-559) at 60% of
         /// the run, e.g. --click 588,265 hits the shell's PLAY CD-I button.
         #[arg(long)]
@@ -130,9 +142,15 @@ enum Command {
         /// Write the final plane-A/plane-B video RAM to a diagnostic directory.
         #[arg(long)]
         dump_video_ram: Option<PathBuf>,
+        /// Write the VMPEG extension RAM containing native driver modules.
+        #[arg(long, hide = true)]
+        dump_dvc_ram: Option<PathBuf>,
         /// Print the SHA-256 of the final framebuffer.
         #[arg(long)]
         hash: bool,
+        /// Write deterministic machine snapshots/events for `diagnose run`.
+        #[arg(long, hide = true)]
+        diagnostics: Option<PathBuf>,
     },
     /// Inspect a CUE/BIN disc image: TOC, layout, and CD-i label detection.
     Disc {
@@ -141,7 +159,27 @@ enum Command {
         /// Also walk the ISO 9660 tree and list files with their extents.
         #[arg(long)]
         files: bool,
+        /// Write the complete Green Book/RTF metadata inventory as JSON.
+        #[arg(long)]
+        inventory_json: Option<PathBuf>,
     },
+    /// Evidence-driven compatibility incident and experiment workflow.
+    Diagnose {
+        #[command(subcommand)]
+        command: diagnose::DiagnoseCommand,
+    },
+}
+
+#[derive(Serialize)]
+struct BootDiagnosticEvidence {
+    schema_version: u32,
+    instructions: u64,
+    snapshot: cdi_core::MachineDiagnosticSnapshot,
+    events: Vec<cdi_core::MachineDiagnosticEvent>,
+    framebuffer_sha256: String,
+    audio_sha256: String,
+    audio_frames: u64,
+    disc: Option<cdi_disc::DiscInventory>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -155,14 +193,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             instructions,
             trace,
             disc,
+            disc_at,
             dvc_rom,
+            nvram,
             click,
             click_at,
             click_events,
             screenshot,
             dump_vmpeg_es,
             dump_video_ram,
+            dump_dvc_ram,
             hash,
+            diagnostics,
         } => boot(
             &rom,
             model.as_deref(),
@@ -170,20 +212,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             instructions,
             trace,
             disc.as_deref(),
+            disc_at,
             dvc_rom.as_deref(),
+            nvram.as_deref(),
             click.as_deref(),
             click_at,
             click_events,
             screenshot.as_deref(),
             dump_vmpeg_es.as_deref(),
             dump_video_ram.as_deref(),
+            dump_dvc_ram.as_deref(),
             hash,
+            diagnostics.as_deref(),
         ),
-        Command::Disc { cue, files } => disc_info(&cue, files),
+        Command::Disc {
+            cue,
+            files,
+            inventory_json,
+        } => disc_info(&cue, files, inventory_json.as_deref()),
+        Command::Diagnose { command } => diagnose::execute(command),
     }
 }
 
-fn disc_info(cue: &std::path::Path, files: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn disc_info(
+    cue: &std::path::Path,
+    files: bool,
+    inventory_json: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use cdi_disc::sector::{has_sync, Mode2Subheader, SectorHeader};
 
     let disc = cdi_disc::DiscImage::load(cue)?;
@@ -230,6 +285,16 @@ fn disc_info(cue: &std::path::Path, files: bool) -> Result<(), Box<dyn std::erro
 
     if files {
         list_iso_files(&disc)?;
+    }
+    if let Some(path) = inventory_json {
+        let inventory = cdi_disc::inspect_cue(cue)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut bytes = serde_json::to_vec_pretty(&inventory)?;
+        bytes.push(b'\n');
+        std::fs::write(path, bytes)?;
+        println!("Disc inventory written to {}", path.display());
     }
     Ok(())
 }
@@ -317,14 +382,18 @@ fn boot(
     instructions: u64,
     trace: bool,
     disc: Option<&std::path::Path>,
+    disc_at: Option<u64>,
     dvc_rom: Option<&std::path::Path>,
+    nvram: Option<&std::path::Path>,
     click: Option<&str>,
     click_at: Option<u64>,
     mut click_events: Vec<ClickEvent>,
     screenshot: Option<&std::path::Path>,
     dump_vmpeg_es: Option<&std::path::Path>,
     dump_video_ram: Option<&std::path::Path>,
+    dump_dvc_ram: Option<&std::path::Path>,
     hash: bool,
+    diagnostics: Option<&std::path::Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let click_pos: Option<(i32, i32)> = click.map(|s| {
         let mut it = s.split(',');
@@ -368,11 +437,34 @@ fn boot(
         })
         .transpose()?;
     let mut machine = cdi_core::Machine::with_dvc(&model, image, dvc)?;
+    if let Some(path) = nvram {
+        let data = std::fs::read(path)?;
+        if data.len() != machine.bus.nvram.len() {
+            return Err(format!(
+                "{}: expected {} NVRAM bytes, found {}",
+                path.display(),
+                machine.bus.nvram.len(),
+                data.len()
+            )
+            .into());
+        }
+        machine.bus.nvram.copy_from_slice(&data);
+        println!("NVRAM restored from {}", path.display());
+    }
+    if diagnostics.is_some() {
+        machine.enable_diagnostics(50_000);
+    }
     if dump_vmpeg_es.is_some() {
         if let Some(dvc) = &mut machine.bus.dvc {
             dvc.set_video_es_capture(true);
         }
     }
+    let disc_inventory = if diagnostics.is_some() {
+        disc.map(cdi_disc::inspect_cue).transpose()?
+    } else {
+        None
+    };
+    let mut delayed_disc = None;
     if let Some(cue) = disc {
         let disc_image = cdi_disc::DiscImage::load(cue)?;
         println!(
@@ -380,7 +472,11 @@ fn boot(
             disc_image.tracks().len(),
             disc_image.leadout_msf()
         );
-        machine.set_disc(Some(disc_image));
+        if disc_at.is_some() {
+            delayed_disc = Some(disc_image);
+        } else {
+            machine.set_disc(Some(disc_image));
+        }
     }
     println!(
         "Reset: ssp={:#010x} pc={:#010x}",
@@ -388,6 +484,7 @@ fn boot(
     );
     let mut uart_log: Vec<u8> = Vec::new();
     let mut audio_samples: u64 = 0;
+    let mut audio_hasher = sha2::Sha256::new();
     if let Some((x, y)) = click_pos {
         click_events.push(ClickEvent {
             at: click_at.unwrap_or(instructions.saturating_mul(3) / 5),
@@ -400,6 +497,10 @@ fn boot(
     click_events.sort_by_key(|event| event.at);
     let mut click_event_index = 0usize;
     for i in 0..instructions {
+        if disc_at == Some(i) {
+            machine.change_disc(delayed_disc.take());
+            println!("Live disc insertion at instruction {i}");
+        }
         if trace {
             println!(
                 "{i:>8} pc={:#010x} sr={:#06x} d0={:#010x} a7={:#010x}",
@@ -427,7 +528,11 @@ fn boot(
             }
         }
         machine.step();
-        audio_samples += machine.take_audio().len() as u64 / 2;
+        let audio = machine.take_audio();
+        audio_samples += audio.len() as u64 / 2;
+        for sample in audio {
+            audio_hasher.update(sample.to_be_bytes());
+        }
         let out = machine.take_uart_output();
         if !out.is_empty() {
             use std::io::Write;
@@ -544,13 +649,15 @@ fn boot(
 
     let (width, height) = (geometry.raster_width, geometry.raster_height);
     let fb = machine.bus.mcd212.framebuffer();
+    use sha2::{Digest, Sha256};
+    let mut framebuffer_hasher = Sha256::new();
+    for px in &fb[..width * height] {
+        framebuffer_hasher.update(px.to_be_bytes());
+    }
+    let framebuffer_sha256 = format!("{:x}", framebuffer_hasher.finalize());
+    let audio_sha256 = format!("{:x}", audio_hasher.finalize());
     if hash {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        for px in &fb[..width * height] {
-            hasher.update(px.to_be_bytes());
-        }
-        println!("Framebuffer SHA-256: {:x}", hasher.finalize());
+        println!("Framebuffer SHA-256: {framebuffer_sha256}");
     }
     if let Some(out_path) = screenshot {
         let mut rgb = Vec::with_capacity(width * height * 3);
@@ -591,6 +698,39 @@ fn boot(
         std::fs::write(out_dir.join("plane-a.bin"), plane_a)?;
         std::fs::write(out_dir.join("plane-b.bin"), plane_b)?;
         println!("Video RAM written to {}", out_dir.display());
+    }
+    if let Some(out_path) = dump_dvc_ram {
+        let bytes = machine
+            .bus
+            .dvc
+            .as_ref()
+            .ok_or("--dump-dvc-ram requires an attached VMPEG cartridge")?
+            .extension_ram();
+        std::fs::write(out_path, bytes)?;
+        println!(
+            "DVC extension RAM written to {} ({} bytes)",
+            out_path.display(),
+            bytes.len()
+        );
+    }
+    if let Some(path) = diagnostics {
+        let evidence = BootDiagnosticEvidence {
+            schema_version: 1,
+            instructions,
+            snapshot: machine.diagnostic_snapshot(),
+            events: machine.take_diagnostic_events(),
+            framebuffer_sha256,
+            audio_sha256,
+            audio_frames: audio_samples,
+            disc: disc_inventory,
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut bytes = serde_json::to_vec_pretty(&evidence)?;
+        bytes.push(b'\n');
+        std::fs::write(path, bytes)?;
+        println!("Diagnostics written to {}", path.display());
     }
     Ok(())
 }

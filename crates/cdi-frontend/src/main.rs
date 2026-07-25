@@ -47,9 +47,9 @@ fn configure_ui(ctx: &egui::Context) {
     style.visuals.extreme_bg_color = egui::Color32::from_rgb(9, 10, 12);
     style.visuals.selection.bg_fill = UI_ACCENT;
     style.visuals.widgets.inactive.weak_bg_fill = UI_SURFACE;
-    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, UI_BORDER);
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, UI_BORDER);
     style.visuals.widgets.hovered.weak_bg_fill = UI_SURFACE_HOVER;
-    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, UI_ACCENT);
+    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, UI_ACCENT);
     style.visuals.widgets.active.weak_bg_fill = UI_ACCENT;
     ctx.set_style(style);
 }
@@ -57,7 +57,7 @@ fn configure_ui(ctx: &egui::Context) {
 fn chrome_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(UI_SURFACE)
-        .stroke(egui::Stroke::new(1.0, UI_BORDER))
+        .stroke(egui::Stroke::new(1.0_f32, UI_BORDER))
         .inner_margin(egui::Margin::symmetric(10, 5))
 }
 
@@ -2528,7 +2528,7 @@ impl App {
             .show(ctx, |ui| {
                 egui::Frame::new()
                     .fill(egui::Color32::from_black_alpha(235))
-                    .stroke(egui::Stroke::new(1.0, UI_BORDER))
+                    .stroke(egui::Stroke::new(1.0_f32, UI_BORDER))
                     .corner_radius(egui::CornerRadius::same(12))
                     .inner_margin(egui::Margin::symmetric(18, 16))
                     .show(ui, |ui| {
@@ -2796,7 +2796,7 @@ impl App {
         ui.add_space(8.0);
         egui::Frame::new()
             .fill(UI_SURFACE)
-            .stroke(egui::Stroke::new(1.0, UI_BORDER))
+            .stroke(egui::Stroke::new(1.0_f32, UI_BORDER))
             .corner_radius(egui::CornerRadius::same(10))
             .inner_margin(egui::Margin::symmetric(14, 12))
             .show(ui, |ui| match self.settings_tab {
@@ -2917,7 +2917,7 @@ impl App {
         if self.reset_nvram_confirmation {
             egui::Frame::new()
                 .fill(PARENTAL_PASSCODE_BACKGROUND)
-                .stroke(egui::Stroke::new(1.0, PARENTAL_PASSCODE_COLOR))
+                .stroke(egui::Stroke::new(1.0_f32, PARENTAL_PASSCODE_COLOR))
                 .corner_radius(egui::CornerRadius::same(6))
                 .inner_margin(egui::Margin::symmetric(10, 8))
                 .show(ui, |ui| {

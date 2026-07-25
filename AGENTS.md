@@ -66,10 +66,10 @@ and non-looping gameplay audio. The modern hybrid retains all current work but
 temporarily restores the pre-regression SCC68070 timing behavior. Applying the
 Philips section-6.2 timing batch while devices advance only after a complete
 instruction breaks that sequence; the four timing assertions are quarantined
-on `codex/7g-core-audit`, not deleted or treated as disproven. Two brief black
-flashes replace authored transition animations and remain a separate deferred
-incident. The slight sizzling heard in the historical executable is absent
-from the modern audit hybrid.
+in the current `main` baseline, not deleted or treated as disproven. Two brief
+black flashes replace authored transition animations and remain a separate
+deferred incident. The slight sizzling heard in the historical executable is
+absent from the modern audit hybrid.
 
 Use the live checklist and source ledger in `docs/mpeg-dvc-plan.md`. The next
 unchecked action is to reconcile datasheet SCC68070 timing with
@@ -77,6 +77,17 @@ whole-machine/device scheduling while preserving the seven-stage transition.
 After that, resolve five rare B-picture failures and cover long-run A/V drift,
 pause/continue, stream switching, repeated transitions, and the cake puzzle.
 Update that document's status and next action whenever a checkpoint is reached.
+
+## Git and build workflow
+
+- Commit completed work directly to `main` unless the user explicitly requests
+  another branch.
+- If a temporary branch is necessary, merge it into `main`, push `main`, and
+  delete the temporary local and remote branch before handoff.
+- Build release artifacts only after the corresponding `main` push succeeds,
+  so every delivered build comes from the published `main` revision.
+- Continue asking before commits unless the active request explicitly
+  authorizes them.
 
 ## Required verification
 

@@ -105,8 +105,12 @@ On 2026-07-25 the user manually verified the committed modern audit baseline
 - The Naked Gun 2 1/2 releases its copyright clip and reaches the disc menu.
 - Alien Gate accepts pointer input and its firing audio does not repeat or
   loop.
+- Merlin's Apprentice (Europe) works well as the PAL/50 Hz base-graphics
+  check.
+- The Apprentice (USA) works well as the NTSC/60 Hz base-graphics check.
 
 These results validate the retained CDIC sound-map completion, masked VMPEG
 VSYNC/release path, and SLAVE/input behavior under the legacy SCC68070 timing
-baseline. The only outstanding manual gate before timing/scheduling
-reconstruction is one ordinary PAL and one ordinary NTSC base-graphics title.
+baseline. Together with the accepted seven-stage The 7th Guest run, every
+manual neighboring-title gate required before timing/scheduling
+reconstruction now passes.

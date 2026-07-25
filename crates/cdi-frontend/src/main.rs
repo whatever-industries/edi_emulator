@@ -9,6 +9,7 @@ mod disc_profiles;
 mod store_zip;
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -410,6 +411,57 @@ struct DiscOverride {
 /// Disc library slots, in UI order. CD-BGM is a CD-i-based background-music
 /// format the player handles like an ordinary CD-i disc.
 const LIBRARY_SLOTS: [&str; 4] = ["Philips CD-i", "Photo CD", "Video CD", "CD-BGM"];
+const LIBRARY_FOCUS_COUNT: usize = LIBRARY_SLOTS.len() + 1;
+const LIBRARY_OPEN_FOCUS: usize = LIBRARY_SLOTS.len();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibraryPadAction {
+    PreviousTab,
+    NextTab,
+    PreviousDisc,
+    NextDisc,
+    Activate,
+    Back,
+}
+
+fn library_pad_action(
+    button: gilrs::Button,
+    primary: gilrs::Button,
+    secondary: gilrs::Button,
+) -> Option<LibraryPadAction> {
+    use gilrs::Button;
+    match button {
+        Button::LeftTrigger | Button::LeftTrigger2 => Some(LibraryPadAction::PreviousTab),
+        Button::RightTrigger | Button::RightTrigger2 => Some(LibraryPadAction::NextTab),
+        Button::DPadUp => Some(LibraryPadAction::PreviousDisc),
+        Button::DPadDown => Some(LibraryPadAction::NextDisc),
+        Button::South => Some(LibraryPadAction::Activate),
+        Button::East => Some(LibraryPadAction::Back),
+        other if other == primary => Some(LibraryPadAction::Activate),
+        other if other == secondary => Some(LibraryPadAction::Back),
+        _ => None,
+    }
+}
+
+fn cycle_library_focus(current: usize, forward: bool) -> usize {
+    if forward {
+        (current + 1) % LIBRARY_FOCUS_COUNT
+    } else {
+        (current + LIBRARY_FOCUS_COUNT - 1) % LIBRARY_FOCUS_COUNT
+    }
+}
+
+/// Normalize either a mapped D-pad button or an unmapped hat Y axis into a
+/// vertical Library direction. Gilrs reports up as positive Y.
+fn library_dpad_direction(axis_y: f32, up_button: bool, down_button: bool) -> i8 {
+    let up = up_button || axis_y > 0.5;
+    let down = down_button || axis_y < -0.5;
+    match (up, down) {
+        (true, false) => -1,
+        (false, true) => 1,
+        _ => 0,
+    }
+}
 
 /// One disc found while scanning the configured library folders.
 struct LibraryEntry {
@@ -490,6 +542,63 @@ fn controller_deflection(
         egui::Vec2::ZERO
     };
     selected.clamp(egui::vec2(-1.0, -1.0), egui::vec2(1.0, 1.0))
+}
+
+/// Apply a continuous radial deadzone to a stick. Values just beyond the
+/// deadzone start near zero instead of jumping directly to the raw input.
+fn controller_stick_deflection(stick: egui::Vec2, deadzone: f32) -> egui::Vec2 {
+    let magnitude = stick.length();
+    let deadzone = deadzone.clamp(0.0, 0.99);
+    if magnitude <= deadzone || magnitude == 0.0 {
+        return egui::Vec2::ZERO;
+    }
+
+    let scaled = (magnitude.min(1.0) - deadzone) / (1.0 - deadzone);
+    stick / magnitude * scaled
+}
+
+/// Merge a controller's D-pad buttons and hat axes into one screen-space
+/// direction. Some macOS controller mappings (including 8BitDo modes) expose
+/// the D-pad only as `DPadX`/`DPadY`, while others expose buttons. Buttons
+/// take precedence on an axis so two opposing held directions remain neutral.
+fn controller_dpad_deflection(
+    axis_x: f32,
+    axis_y: f32,
+    left: bool,
+    right: bool,
+    up: bool,
+    down: bool,
+) -> (egui::Vec2, bool) {
+    const AXIS_THRESHOLD: f32 = 0.5;
+
+    let horizontal_buttons_active = left || right;
+    let vertical_buttons_active = up || down;
+    let horizontal_axis_active = axis_x.abs() > AXIS_THRESHOLD;
+    let vertical_axis_active = axis_y.abs() > AXIS_THRESHOLD;
+
+    let x = if horizontal_buttons_active {
+        i32::from(right) as f32 - i32::from(left) as f32
+    } else if horizontal_axis_active {
+        axis_x.signum()
+    } else {
+        0.0
+    };
+    let y = if vertical_buttons_active {
+        i32::from(down) as f32 - i32::from(up) as f32
+    } else if vertical_axis_active {
+        // Gilrs DPadY grows upward; screen Y grows downward.
+        -axis_y.signum()
+    } else {
+        0.0
+    };
+
+    (
+        egui::vec2(x, y),
+        horizontal_buttons_active
+            || vertical_buttons_active
+            || horizontal_axis_active
+            || vertical_axis_active,
+    )
 }
 
 /// Commands for the Photo CD worker thread.
@@ -623,6 +732,38 @@ fn app_data_dir() -> Option<PathBuf> {
     };
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
+}
+
+fn configured_nvram_path(board_name: &str, pal: bool, dvc_inserted: bool) -> Option<PathBuf> {
+    let standard = if pal { "pal" } else { "ntsc" };
+    let cartridge = if dvc_inserted { "vmpeg" } else { "base" };
+    app_data_dir().map(|dir| dir.join(format!("{board_name}-{standard}-{cartridge}.nvr")))
+}
+
+fn load_nvram(path: Option<&std::path::Path>, expected_len: usize) -> Vec<u8> {
+    let Some(path) = path else {
+        return vec![0; expected_len];
+    };
+    match std::fs::read(path) {
+        Ok(saved) if saved.len() == expected_len => {
+            log::info!("nvram restored from {}", path.display());
+            saved
+        }
+        Ok(saved) => {
+            log::warn!(
+                "nvram {}: expected {} bytes, found {}; ignoring",
+                path.display(),
+                expected_len,
+                saved.len()
+            );
+            vec![0; expected_len]
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => vec![0; expected_len],
+        Err(error) => {
+            log::warn!("nvram {}: {error}", path.display());
+            vec![0; expected_len]
+        }
+    }
 }
 
 /// The platform Downloads folder, used as the default screenshot location.
@@ -836,6 +977,8 @@ enum MachineCommand {
         image: Vec<u8>,
         label: String,
     },
+    /// Back up and clear the player's battery-backed storage, then reboot.
+    ResetNvram,
     Reset,
 }
 
@@ -995,31 +1138,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dvc_inserted = dvc.is_some();
     let mut machine = cdi_core::Machine::with_dvc(&model, image, dvc)?;
 
-    // Restore the player's battery-backed SRAM (saved games and player
-    // settings). The timekeeper registers are separate fields, not part of
-    // this buffer, so a stale clock cannot be restored over a fresh one.
-    //
-    // Keyed by board rather than model: every model on a board shares the
-    // same NVRAM chip and CD-RTOS layout, so switching between, say, the
-    // CD-i 200 and 220 keeps your saves, while a different board gets its
-    // own file instead of being handed a layout it cannot read.
-    let nvram_path = app_data_dir().map(|dir| dir.join(format!("{}.nvr", model.board.name)));
-    if let Some(path) = &nvram_path {
-        match std::fs::read(path) {
-            Ok(saved) if saved.len() == machine.bus.nvram.len() => {
-                machine.bus.nvram.copy_from_slice(&saved);
-                log::info!("nvram restored from {}", path.display());
-            }
-            Ok(saved) => log::warn!(
-                "nvram {}: expected {} bytes, found {}; ignoring",
-                path.display(),
-                machine.bus.nvram.len(),
-                saved.len()
-            ),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => log::warn!("nvram {}: {error}", path.display()),
-        }
-    }
     let (initial_disc, initial_archive_guard) = match disc {
         Some(source) => {
             let (cue, guard) = resolve_disc_source(&source)
@@ -1061,6 +1179,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(error) => log::warn!("disc identification failed: {error}"),
         }
     }
+    // Battery-backed SRAM belongs to a physical player configuration. E-Di
+    // can change video standards and add/remove a DVC at runtime, so keeping
+    // one file per board would expose titles to a CSD and application state
+    // generated for different hardware. Configuration-scoped stores preserve
+    // saves normally without requiring destructive resets.
+    let nvram_path = configured_nvram_path(
+        model.board.name,
+        model.video == cdi_core::VideoStandard::Pal,
+        dvc_inserted,
+    );
+    let saved_nvram = load_nvram(nvram_path.as_deref(), machine.bus.nvram.len());
+    machine.bus.nvram.copy_from_slice(&saved_nvram);
     let initial_geometry = machine.bus.mcd212.display_geometry();
     let (fb_w, fb_h) = (
         initial_geometry.raster_width,
@@ -1116,6 +1246,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 emu_shared,
                 audio_producer,
                 nvram_path,
+                model.board.name.to_owned(),
                 initial_archive_guard,
             )
         }
@@ -1289,11 +1420,32 @@ fn fill_audio<T: Copy>(
     }
 }
 
+fn switch_nvram_store(
+    machine: &mut cdi_core::Machine,
+    nvram_path: &mut Option<PathBuf>,
+    nvram_mirror: &mut Vec<u8>,
+    new_path: Option<PathBuf>,
+) {
+    if *nvram_path == new_path {
+        return;
+    }
+    if machine.bus.nvram != *nvram_mirror {
+        if let Err(error) = write_nvram(nvram_path.as_deref(), &machine.bus.nvram) {
+            log::warn!("NVRAM flush before hardware change: {error}");
+        }
+    }
+    let saved = load_nvram(new_path.as_deref(), machine.bus.nvram.len());
+    machine.bus.nvram.copy_from_slice(&saved);
+    nvram_mirror.clone_from(&saved);
+    *nvram_path = new_path;
+}
+
 fn emu_loop(
     mut machine: cdi_core::Machine,
     shared: Arc<Shared>,
     mut audio: Option<Producer<i16>>,
-    nvram_path: Option<PathBuf>,
+    mut nvram_path: Option<PathBuf>,
+    mut nvram_board_name: String,
     mut disc_archive_guard: Option<Arc<tempfile::TempDir>>,
 ) {
     let mut next_frame_deadline = Instant::now();
@@ -1303,6 +1455,11 @@ fn emu_loop(
     // the title actually changed something.
     let mut nvram_mirror = machine.bus.nvram.clone();
     let mut last_nvram_flush = Instant::now();
+    let trace_dvc_composition = std::env::var_os("EDI_DVC_COMPOSITION_TRACE").is_some();
+    let mut traced_dvc_play_events = 0;
+    let mut traced_dvc_visible = 0;
+    let mut next_dvc_frame_trace = 30;
+    let mut awaiting_first_dvc_frame = false;
 
     while shared.running.load(Ordering::Relaxed) {
         if let Some(command) = shared.command.lock().unwrap().take() {
@@ -1312,8 +1469,7 @@ fn emu_loop(
                     archive_guard,
                 } => match cdi_disc::DiscImage::load(&path) {
                     Ok(disc) => {
-                        machine.set_disc(Some(disc));
-                        // Identify the exact pressing before the boot reset.
+                        // Identify the exact pressing before inserting it.
                         // Hashing is intentionally done on the emulation
                         // thread so the GUI remains responsive for large BINs.
                         let identity = match disc_profiles::identify_disc(&path) {
@@ -1345,6 +1501,17 @@ fn emu_loop(
                                 .or_else(|| region_is_pal(&display_name(&path)));
                             if let Some(pal) = pal {
                                 if pal != shared.pal.load(Ordering::Relaxed) {
+                                    let new_path = configured_nvram_path(
+                                        &nvram_board_name,
+                                        pal,
+                                        shared.dvc_inserted.load(Ordering::Relaxed),
+                                    );
+                                    switch_nvram_store(
+                                        &mut machine,
+                                        &mut nvram_path,
+                                        &mut nvram_mirror,
+                                        new_path,
+                                    );
                                     machine.set_video_standard(if pal {
                                         cdi_core::VideoStandard::Pal
                                     } else {
@@ -1354,7 +1521,10 @@ fn emu_loop(
                                 }
                             }
                         }
-                        machine.reset();
+                        // A live drive reports its SERVO status through the
+                        // SLAVE X-Bus channel. Do not throw away the player
+                        // shell boot merely because the user inserted media.
+                        machine.change_disc(Some(disc));
                         *shared.disc_name.lock().unwrap() = Some(display_name(&path));
                         *shared.disc_path.lock().unwrap() = Some(path);
                         *shared.disc_identity.lock().unwrap() = identity;
@@ -1400,8 +1570,38 @@ fn emu_loop(
                                 None
                             };
                             match cdi_core::Machine::with_dvc(&model, image, dvc) {
-                                Ok(rebuilt) => {
+                                Ok(mut rebuilt) => {
+                                    let rebuilt_nvram_path = configured_nvram_path(
+                                        model.board.name,
+                                        model.video == cdi_core::VideoStandard::Pal,
+                                        shared.dvc_inserted.load(Ordering::Relaxed),
+                                    );
+                                    if rebuilt_nvram_path == nvram_path {
+                                        // Keep changes newer than the last periodic
+                                        // flush when the hardware configuration did
+                                        // not change.
+                                        rebuilt.bus.nvram.copy_from_slice(&machine.bus.nvram);
+                                    } else {
+                                        if machine.bus.nvram != nvram_mirror {
+                                            if let Err(error) = write_nvram(
+                                                nvram_path.as_deref(),
+                                                &machine.bus.nvram,
+                                            ) {
+                                                log::warn!(
+                                                    "nvram flush before board change: {error}"
+                                                );
+                                            }
+                                        }
+                                        let saved = load_nvram(
+                                            rebuilt_nvram_path.as_deref(),
+                                            rebuilt.bus.nvram.len(),
+                                        );
+                                        rebuilt.bus.nvram.copy_from_slice(&saved);
+                                        nvram_path = rebuilt_nvram_path;
+                                    }
                                     machine = rebuilt;
+                                    nvram_board_name = model.board.name.to_owned();
+                                    nvram_mirror.clone_from(&machine.bus.nvram);
                                     // Restore the disc across the rebuild.
                                     let disc_path = shared.disc_path.lock().unwrap().clone();
                                     if let Some(path) = disc_path {
@@ -1437,6 +1637,18 @@ fn emu_loop(
                         });
                     match result {
                         Ok(kind) => {
+                            let new_path = configured_nvram_path(
+                                &nvram_board_name,
+                                shared.pal.load(Ordering::Relaxed),
+                                true,
+                            );
+                            switch_nvram_store(
+                                &mut machine,
+                                &mut nvram_path,
+                                &mut nvram_mirror,
+                                new_path,
+                            );
+                            machine.reset();
                             *shared.dvc_path.lock().unwrap() = Some(path.clone());
                             shared.dvc_inserted.store(true, Ordering::Relaxed);
                             *shared.dvc_status.lock().unwrap() =
@@ -1457,6 +1669,18 @@ fn emu_loop(
                         });
                     match result {
                         Ok(kind) => {
+                            let new_path = configured_nvram_path(
+                                &nvram_board_name,
+                                shared.pal.load(Ordering::Relaxed),
+                                true,
+                            );
+                            switch_nvram_store(
+                                &mut machine,
+                                &mut nvram_path,
+                                &mut nvram_mirror,
+                                new_path,
+                            );
+                            machine.reset();
                             *shared.dvc_path.lock().unwrap() = None;
                             shared.dvc_inserted.store(true, Ordering::Relaxed);
                             *shared.dvc_status.lock().unwrap() =
@@ -1470,17 +1694,60 @@ fn emu_loop(
                 }
                 MachineCommand::DetachDvc => {
                     machine.detach_dvc();
+                    let new_path = configured_nvram_path(
+                        &nvram_board_name,
+                        shared.pal.load(Ordering::Relaxed),
+                        false,
+                    );
+                    switch_nvram_store(&mut machine, &mut nvram_path, &mut nvram_mirror, new_path);
+                    machine.reset();
                     shared.dvc_inserted.store(false, Ordering::Relaxed);
                     *shared.dvc_status.lock().unwrap() = "DVC removed".to_owned();
                 }
                 MachineCommand::SetVideoStandard(standard) => {
-                    machine.set_video_standard(standard);
                     let pal = standard == cdi_core::VideoStandard::Pal;
+                    let new_path = configured_nvram_path(
+                        &nvram_board_name,
+                        pal,
+                        shared.dvc_inserted.load(Ordering::Relaxed),
+                    );
+                    switch_nvram_store(&mut machine, &mut nvram_path, &mut nvram_mirror, new_path);
+                    machine.set_video_standard(standard);
                     shared.pal.store(pal, Ordering::Relaxed);
                     *shared.status.lock().unwrap() = format!(
                         "Machine reset — {}",
                         if pal { "PAL (50 Hz)" } else { "NTSC (60 Hz)" }
                     );
+                }
+                MachineCommand::ResetNvram => {
+                    match backup_nvram(nvram_path.as_deref(), &machine.bus.nvram) {
+                        Ok(backup) => {
+                            machine.bus.nvram.fill(0);
+                            nvram_mirror.fill(0);
+                            machine.reset();
+                            match write_nvram(nvram_path.as_deref(), &machine.bus.nvram) {
+                                Ok(()) => {
+                                    *shared.status.lock().unwrap() = backup.map_or_else(
+                                        || "Player storage reset".to_owned(),
+                                        |path| {
+                                            format!(
+                                                "Player storage reset — backup: {}",
+                                                path.display()
+                                            )
+                                        },
+                                    );
+                                }
+                                Err(error) => {
+                                    *shared.status.lock().unwrap() =
+                                        format!("Player storage reset, but save failed: {error}");
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            *shared.status.lock().unwrap() =
+                                format!("Player storage backup failed; reset cancelled: {error}");
+                        }
+                    }
                 }
                 MachineCommand::Reset => {
                     machine.reset();
@@ -1520,6 +1787,57 @@ fn emu_loop(
         while machine.bus.mcd212.frame_count < target_frame && steps < 3_000_000 {
             machine.step();
             steps += 1;
+        }
+
+        if trace_dvc_composition {
+            let snapshot = machine.diagnostic_snapshot();
+            if let Some(dvc) = snapshot.dvc {
+                let (raster_min, raster_max) = machine
+                    .bus
+                    .mcd212
+                    .framebuffer()
+                    .iter()
+                    .map(|pixel| pixel & 0x00FF_FFFF)
+                    .fold((u32::MAX, 0), |(min, max), pixel| {
+                        (min.min(pixel), max.max(pixel))
+                    });
+                if dvc.play_events != traced_dvc_play_events {
+                    traced_dvc_play_events = dvc.play_events;
+                    awaiting_first_dvc_frame = true;
+                    next_dvc_frame_trace = dvc.presented_video_frames.saturating_add(30);
+                    log_dvc_composition("play", &snapshot.mcd212, &dvc, raster_min, raster_max);
+                }
+                if dvc.video_visible != traced_dvc_visible {
+                    traced_dvc_visible = dvc.video_visible;
+                    log_dvc_composition(
+                        "visibility",
+                        &snapshot.mcd212,
+                        &dvc,
+                        raster_min,
+                        raster_max,
+                    );
+                }
+                if awaiting_first_dvc_frame && dvc.current_video_frame_hash != 0 {
+                    awaiting_first_dvc_frame = false;
+                    log_dvc_composition(
+                        "first-frame",
+                        &snapshot.mcd212,
+                        &dvc,
+                        raster_min,
+                        raster_max,
+                    );
+                }
+                if dvc.presented_video_frames >= next_dvc_frame_trace {
+                    log_dvc_composition(
+                        "frame-sample",
+                        &snapshot.mcd212,
+                        &dvc,
+                        raster_min,
+                        raster_max,
+                    );
+                    next_dvc_frame_trace = dvc.presented_video_frames.saturating_add(30);
+                }
+            }
         }
 
         let fast_forward = shared.fast_forward.load(Ordering::Relaxed);
@@ -1581,25 +1899,100 @@ fn emu_loop(
             last_nvram_flush = Instant::now();
             if machine.bus.nvram != nvram_mirror {
                 nvram_mirror.copy_from_slice(&machine.bus.nvram);
-                write_nvram(nvram_path.as_deref(), &nvram_mirror);
+                if let Err(error) = write_nvram(nvram_path.as_deref(), &nvram_mirror) {
+                    log::warn!("nvram save: {error}");
+                }
             }
         }
     }
 
     if machine.bus.nvram != nvram_mirror {
-        write_nvram(nvram_path.as_deref(), &machine.bus.nvram);
+        if let Err(error) = write_nvram(nvram_path.as_deref(), &machine.bus.nvram) {
+            log::warn!("final nvram save: {error}");
+        }
     }
 }
 
-/// Write battery-backed SRAM out, replacing any previous contents.
-fn write_nvram(path: Option<&std::path::Path>, data: &[u8]) {
+fn log_dvc_composition(
+    event: &str,
+    mcd212: &cdi_core::diagnostics::Mcd212DiagnosticSnapshot,
+    dvc: &cdi_core::DvcStats,
+    raster_min: u32,
+    raster_max: u32,
+) {
+    log::info!(
+        "DVC composition {event}: play={} visible={} presented={} frame={}x{} rgb={}..{} \
+         hash={:016x} display=({}, {}) window=({}, {}) {}x{} ICM={:08x} TCR={:08x} \
+         POR={:08x} raster={}x{} rgb={raster_min}..{raster_max} active=({}, {}) {}x{}",
+        dvc.play_events,
+        dvc.video_visible,
+        dvc.presented_video_frames,
+        dvc.current_video_width,
+        dvc.current_video_height,
+        dvc.current_video_rgb_min,
+        dvc.current_video_rgb_max,
+        dvc.current_video_frame_hash,
+        dvc.video_display_x,
+        dvc.video_display_y,
+        dvc.video_window_x,
+        dvc.video_window_y,
+        dvc.video_window_width,
+        dvc.video_window_height,
+        mcd212.image_coding_method,
+        mcd212.transparency_control,
+        mcd212.plane_order,
+        mcd212.geometry.raster_width,
+        mcd212.geometry.raster_height,
+        mcd212.geometry.active_x,
+        mcd212.geometry.active_y,
+        mcd212.geometry.active_width,
+        mcd212.geometry.active_height,
+    );
+}
+
+/// Write battery-backed SRAM atomically, replacing any previous contents.
+fn write_nvram(path: Option<&std::path::Path>, data: &[u8]) -> Result<(), String> {
     let Some(path) = path else {
-        return;
+        return Ok(());
     };
-    match std::fs::write(path, data) {
-        Ok(()) => log::debug!("nvram saved to {}", path.display()),
-        Err(error) => log::warn!("nvram save to {}: {error}", path.display()),
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        format!(
+            "create temporary NVRAM file in {}: {error}",
+            parent.display()
+        )
+    })?;
+    temporary
+        .write_all(data)
+        .map_err(|error| format!("write temporary NVRAM file: {error}"))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("sync temporary NVRAM file: {error}"))?;
+    temporary
+        .persist(path)
+        .map_err(|error| format!("replace {}: {}", path.display(), error.error))?;
+    log::debug!("nvram saved to {}", path.display());
+    Ok(())
+}
+
+fn backup_nvram(path: Option<&std::path::Path>, data: &[u8]) -> Result<Option<PathBuf>, String> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    if data.iter().all(|&byte| byte == 0) {
+        return Ok(None);
     }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| format!("system clock: {error}"))?
+        .as_secs();
+    let backup = path.with_extension(format!("nvr.backup-{timestamp}"));
+    std::fs::write(&backup, data)
+        .map_err(|error| format!("write backup {}: {error}", backup.display()))?;
+    Ok(Some(backup))
 }
 
 struct App {
@@ -1607,6 +2000,7 @@ struct App {
     texture: Option<egui::TextureHandle>,
     last_frame_no: u64,
     settings_open: bool,
+    reset_nvram_confirmation: bool,
     show_fps: bool,
     smooth_scaling: bool,
     crt_aspect: bool,
@@ -1651,6 +2045,18 @@ struct App {
     show_library: bool,
     /// Selected format tab in the library view (index into [`LIBRARY_SLOTS`]).
     library_tab: usize,
+    /// Controller focus across the four format tabs plus Open .cue.
+    library_focus: usize,
+    /// Controller-selected row within the active format.
+    library_selection: usize,
+    /// Last mapped D-pad/hat direction, for edge-triggered row navigation.
+    library_dpad_y: i8,
+    /// Host-side controller menu shown over the current title.
+    quick_menu_open: bool,
+    /// Selected quick-menu row: Library or Return to Current Title.
+    quick_menu_selection: usize,
+    /// Last D-pad/hat direction, for edge-triggered quick-menu navigation.
+    quick_menu_dpad_y: i8,
     /// Measured width of the library tab strip, used to center it next frame.
     library_strip_w: f32,
     /// Current window title, so it is only pushed when the disc changes.
@@ -1698,6 +2104,7 @@ impl App {
             texture: None,
             last_frame_no: 0,
             settings_open: false,
+            reset_nvram_confirmation: false,
             show_fps: prefs.show_fps,
             smooth_scaling: prefs.smooth_scaling,
             crt_aspect: prefs.crt_aspect,
@@ -1757,6 +2164,12 @@ impl App {
             // passed on the command line.
             show_library: !has_initial_disc && prefs.libraries.iter().flatten().next().is_some(),
             library_tab: 0,
+            library_focus: 0,
+            library_selection: 0,
+            library_dpad_y: 0,
+            quick_menu_open: false,
+            quick_menu_selection: 0,
+            quick_menu_dpad_y: 0,
             library_strip_w: 0.0,
             window_title: APP_NAME.to_owned(),
             save_dir: prefs.save_dir.clone(),
@@ -1893,8 +2306,15 @@ impl App {
         if !self.library.iter().any(|e| e.category == self.library_tab) {
             if let Some(entry) = self.library.first() {
                 self.library_tab = entry.category;
+                self.library_focus = entry.category;
             }
         }
+        let visible_count = self
+            .library
+            .iter()
+            .filter(|entry| entry.category == self.library_tab)
+            .count();
+        self.library_selection = self.library_selection.min(visible_count.saturating_sub(1));
     }
 
     /// Draw the disc-library browser and return a disc to load if clicked.
@@ -1946,15 +2366,21 @@ impl App {
                         }
                         if ui.selectable_label(selected == slot, text).clicked() {
                             selected = slot;
+                            self.library_focus = slot;
+                            self.library_selection = 0;
                         }
                     }
                 });
                 ui.add_space(GROUP_GAP);
                 let open = squircle().show(ui, |ui| {
                     if ui
-                        .selectable_label(false, egui::RichText::new("Open .cue").size(15.0))
+                        .selectable_label(
+                            self.library_focus == LIBRARY_OPEN_FOCUS,
+                            egui::RichText::new("Open .cue").size(15.0),
+                        )
                         .clicked()
                     {
+                        self.library_focus = LIBRARY_OPEN_FOCUS;
                         open_clicked = true;
                     }
                 });
@@ -1997,19 +2423,28 @@ impl App {
                     ui.vertical_centered(|ui| {
                         ui.set_max_width(col_w);
                         ui.add_space(4.0);
-                        for entry in self.library.iter().filter(|e| e.category == selected) {
+                        for (row, entry) in self
+                            .library
+                            .iter()
+                            .filter(|e| e.category == selected)
+                            .enumerate()
+                        {
                             let row_h = 30.0;
                             let (rect, resp) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), row_h),
                                 egui::Sense::click(),
                             );
                             let hovered = resp.hovered();
-                            if hovered {
+                            let controller_selected =
+                                self.library_focus == selected && row == self.library_selection;
+                            if hovered || controller_selected {
                                 ui.painter().rect_filled(
                                     rect,
                                     egui::CornerRadius::same(5),
                                     hover_fill,
                                 );
+                            }
+                            if hovered {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
                             ui.painter().text(
@@ -2017,9 +2452,15 @@ impl App {
                                 egui::Align2::LEFT_CENTER,
                                 &entry.title,
                                 egui::FontId::proportional(15.0),
-                                if hovered { text_strong } else { text_normal },
+                                if hovered || controller_selected {
+                                    text_strong
+                                } else {
+                                    text_normal
+                                },
                             );
                             if resp.clicked() {
+                                self.library_focus = selected;
+                                self.library_selection = row;
                                 load_path = Some(entry.cue.clone());
                             }
                         }
@@ -2042,6 +2483,76 @@ impl App {
         }
         ctx.request_repaint_after(Duration::from_millis(50));
         load_path
+    }
+
+    fn enter_library_from_quick_menu(&mut self) {
+        self.quick_menu_open = false;
+        self.show_library = true;
+        self.shared.audio_suppressed.store(true, Ordering::Relaxed);
+        self.scan_libraries();
+        self.library_focus = self.library_tab;
+        self.library_selection = 0;
+        self.library_dpad_y = 0;
+    }
+
+    fn paint_quick_menu(&mut self, ctx: &egui::Context) {
+        if !self.quick_menu_open {
+            return;
+        }
+
+        let mut chosen = None;
+        egui::Area::new(egui::Id::new("controller_quick_menu"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(egui::Color32::from_black_alpha(235))
+                    .stroke(egui::Stroke::new(1.0, UI_BORDER))
+                    .corner_radius(egui::CornerRadius::same(12))
+                    .inner_margin(egui::Margin::symmetric(18, 16))
+                    .show(ui, |ui| {
+                        ui.set_width(280.0);
+                        ui.vertical_centered(|ui| {
+                            ui.heading("E-Di");
+                            ui.add_space(10.0);
+                            for (row, label) in ["Go to Library", "Return to Current Title"]
+                                .iter()
+                                .enumerate()
+                            {
+                                let selected = self.quick_menu_selection == row;
+                                let response =
+                                    ui.add_sized(
+                                        [260.0, 38.0],
+                                        egui::Button::new(
+                                            egui::RichText::new(*label)
+                                                .size(15.0)
+                                                .color(egui::Color32::WHITE),
+                                        )
+                                        .fill(if selected { UI_ACCENT } else { UI_SURFACE }),
+                                    );
+                                if response.hovered() {
+                                    self.quick_menu_selection = row;
+                                }
+                                if response.clicked() {
+                                    chosen = Some(row);
+                                }
+                                ui.add_space(4.0);
+                            }
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new("D-pad · A select · B or Start close")
+                                    .size(11.0)
+                                    .color(UI_MUTED_TEXT),
+                            );
+                        });
+                    });
+            });
+
+        match chosen {
+            Some(0) => self.enter_library_from_quick_menu(),
+            Some(1) => self.quick_menu_open = false,
+            _ => {}
+        }
     }
 
     fn texture_options(&self) -> egui::TextureOptions {
@@ -2378,6 +2889,35 @@ impl App {
             "Region names the market a model was sold into and only sets the default video standard below — the same ROM shipped in 50 Hz and 60 Hz players. Changing the ROM resets the machine and keeps the disc.",
         );
         ui.separator();
+        ui.heading("Player Storage");
+        ui.label(
+            "Battery-backed CD-i memory stores saved games, high scores, and player settings.",
+        );
+        if self.reset_nvram_confirmation {
+            egui::Frame::new()
+                .fill(PARENTAL_PASSCODE_BACKGROUND)
+                .stroke(egui::Stroke::new(1.0, PARENTAL_PASSCODE_COLOR))
+                .corner_radius(egui::CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(10, 8))
+                .show(ui, |ui| {
+                    ui.label("Clear saved games, high scores, and settings for this CD-i board?");
+                    ui.weak("E-Di creates a timestamped backup first, then restarts the title.");
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            self.reset_nvram_confirmation = false;
+                        }
+                        if ui.button("Back Up and Reset").clicked() {
+                            *self.shared.command.lock().unwrap() = Some(MachineCommand::ResetNvram);
+                            self.reset_nvram_confirmation = false;
+                            self.settings_open = false;
+                        }
+                    });
+                });
+        } else if ui.button("Reset Player Storage…").clicked() {
+            self.reset_nvram_confirmation = true;
+        }
+        ui.weak("Resetting first creates a recoverable backup, then restarts the current title.");
+        ui.separator();
         ui.heading("Audio");
         let mut muted = self.shared.muted.load(Ordering::Relaxed);
         if ui.checkbox(&mut muted, "Mute audio").changed() {
@@ -2673,7 +3213,7 @@ impl App {
                     ui.add(
                         egui::Slider::new(&mut self.pad_speed, 1.0..=20.0).text("Pointer speed"),
                     );
-                    ui.checkbox(&mut self.pad_analog_enabled, "Enable D-pad and left stick");
+                    ui.checkbox(&mut self.pad_analog_enabled, "Enable left analog stick");
                     ui.add_enabled(
                         self.pad_analog_enabled,
                         egui::Slider::new(&mut self.pad_deadzone, 0.0..=0.5).text("Stick deadzone"),
@@ -2707,9 +3247,9 @@ impl App {
                         self.pad_rebind = None;
                     }
                     ui.weak(if self.pad_analog_enabled {
-                        "D-pad input takes priority over stick drift."
+                        "The D-pad is always active and takes priority over stick drift."
                     } else {
-                        "D-pad-only movement is enabled."
+                        "D-pad movement remains active; the left stick is disabled."
                     });
                     ui.weak("Controller layouts are auto-detected.");
                 }
@@ -2761,17 +3301,122 @@ impl App {
         input.buttons = self.game_buttons | self.pad_buttons | self.kb_buttons;
     }
 
+    /// Handle controller navigation while the Library owns the central view.
+    /// Button-press events provide natural edge triggering, so held triggers
+    /// and D-pad directions cannot race through several tabs or rows.
+    fn poll_library_gamepad(&mut self) -> Option<PathBuf> {
+        let gilrs = self.gamepad.as_mut()?;
+        let mut actions = Vec::new();
+        while let Some(event) = gilrs.next_event() {
+            if let gilrs::EventType::ButtonPressed(button, _) = event.event {
+                if let Some(action) = library_pad_action(button, self.pad_button1, self.pad_button2)
+                {
+                    // D-pad buttons and unmapped D-pad hat axes share the
+                    // state path below, avoiding a double step on pads which
+                    // expose both representations.
+                    if !matches!(
+                        action,
+                        LibraryPadAction::PreviousDisc | LibraryPadAction::NextDisc
+                    ) {
+                        actions.push(action);
+                    }
+                }
+            }
+        }
+        let dpad_y = gilrs
+            .gamepads()
+            .map(|(_, pad)| {
+                library_dpad_direction(
+                    pad.value(gilrs::Axis::DPadY),
+                    pad.is_pressed(gilrs::Button::DPadUp),
+                    pad.is_pressed(gilrs::Button::DPadDown),
+                )
+            })
+            .find(|&direction| direction != 0)
+            .unwrap_or(0);
+        if dpad_y != self.library_dpad_y {
+            if dpad_y < 0 {
+                actions.push(LibraryPadAction::PreviousDisc);
+            } else if dpad_y > 0 {
+                actions.push(LibraryPadAction::NextDisc);
+            }
+            self.library_dpad_y = dpad_y;
+        }
+
+        let mut load_path = None;
+        let mut open_disc = false;
+        for action in actions {
+            match action {
+                LibraryPadAction::PreviousTab | LibraryPadAction::NextTab => {
+                    self.library_focus = cycle_library_focus(
+                        self.library_focus,
+                        action == LibraryPadAction::NextTab,
+                    );
+                    self.library_selection = 0;
+                    if self.library_focus < LIBRARY_SLOTS.len() {
+                        self.library_tab = self.library_focus;
+                    }
+                }
+                LibraryPadAction::PreviousDisc | LibraryPadAction::NextDisc => {
+                    if self.library_focus >= LIBRARY_SLOTS.len() {
+                        continue;
+                    }
+                    let count = self
+                        .library
+                        .iter()
+                        .filter(|entry| entry.category == self.library_tab)
+                        .count();
+                    if count == 0 {
+                        self.library_selection = 0;
+                    } else if action == LibraryPadAction::NextDisc {
+                        self.library_selection = (self.library_selection + 1) % count;
+                    } else {
+                        self.library_selection = (self.library_selection + count - 1) % count;
+                    }
+                }
+                LibraryPadAction::Activate => {
+                    if self.library_focus == LIBRARY_OPEN_FOCUS {
+                        open_disc = true;
+                    } else {
+                        load_path = self
+                            .library
+                            .iter()
+                            .filter(|entry| entry.category == self.library_tab)
+                            .nth(self.library_selection)
+                            .map(|entry| entry.cue.clone());
+                    }
+                }
+                LibraryPadAction::Back => {
+                    self.show_library = false;
+                    self.shared.audio_suppressed.store(false, Ordering::Relaxed);
+                }
+            }
+        }
+        self.pad_buttons = 0;
+        self.pad_frac = egui::Vec2::ZERO;
+        if open_disc {
+            self.open_disc();
+        }
+        load_path
+    }
+
     /// Poll connected gamepads and translate them onto the CD-i pointer:
     /// left stick and d-pad move, two configurable buttons map to CD-i
     /// buttons 1/2.
-    fn poll_gamepad(&mut self) {
+    fn poll_gamepad(&mut self, ctx: &egui::Context) {
         let Some(gilrs) = self.gamepad.as_mut() else {
             return;
         };
         // Drain the event queue so cached gamepad state stays current; a
         // pending rebind captures the first button press seen here.
+        let mut start_pressed = false;
+        let mut activate_pressed = false;
+        let mut back_pressed = false;
         while let Some(event) = gilrs.next_event() {
             if let gilrs::EventType::ButtonPressed(button, _) = event.event {
+                start_pressed |= button == gilrs::Button::Start;
+                activate_pressed |= button == self.pad_button1 || button == gilrs::Button::South;
+                back_pressed |= button == self.pad_button2 || button == gilrs::Button::East;
                 match self.pad_rebind {
                     Some(0) => {
                         self.pad_button1 = button;
@@ -2787,36 +3432,37 @@ impl App {
         }
 
         let deadzone = self.pad_deadzone;
+        let mut menu_dpad_y = 0;
         let mut stick_deflection = egui::Vec2::ZERO;
         let mut dpad_deflection = egui::Vec2::ZERO;
         let mut dpad_active = false;
         let mut buttons = 0u8;
         for (_id, pad) in gilrs.gamepads() {
-            let x = pad.value(gilrs::Axis::LeftStickX);
-            let y = pad.value(gilrs::Axis::LeftStickY);
-            if x.abs() > deadzone {
-                stick_deflection.x += x;
+            if menu_dpad_y == 0 {
+                menu_dpad_y = library_dpad_direction(
+                    pad.value(gilrs::Axis::DPadY),
+                    pad.is_pressed(gilrs::Button::DPadUp),
+                    pad.is_pressed(gilrs::Button::DPadDown),
+                );
             }
-            if y.abs() > deadzone {
-                // Stick up moves the pointer up (screen Y grows downward).
-                stick_deflection.y -= y;
-            }
-            if pad.is_pressed(gilrs::Button::DPadLeft) {
-                dpad_deflection.x -= 1.0;
-                dpad_active = true;
-            }
-            if pad.is_pressed(gilrs::Button::DPadRight) {
-                dpad_deflection.x += 1.0;
-                dpad_active = true;
-            }
-            if pad.is_pressed(gilrs::Button::DPadUp) {
-                dpad_deflection.y -= 1.0;
-                dpad_active = true;
-            }
-            if pad.is_pressed(gilrs::Button::DPadDown) {
-                dpad_deflection.y += 1.0;
-                dpad_active = true;
-            }
+
+            // Stick up moves the pointer up (screen Y grows downward).
+            let stick = egui::vec2(
+                pad.value(gilrs::Axis::LeftStickX),
+                -pad.value(gilrs::Axis::LeftStickY),
+            );
+            stick_deflection += controller_stick_deflection(stick, deadzone);
+
+            let (dpad, active) = controller_dpad_deflection(
+                pad.value(gilrs::Axis::DPadX),
+                pad.value(gilrs::Axis::DPadY),
+                pad.is_pressed(gilrs::Button::DPadLeft),
+                pad.is_pressed(gilrs::Button::DPadRight),
+                pad.is_pressed(gilrs::Button::DPadUp),
+                pad.is_pressed(gilrs::Button::DPadDown),
+            );
+            dpad_deflection += dpad;
+            dpad_active |= active;
             if pad.is_pressed(self.pad_button1) {
                 buttons |= 1;
             }
@@ -2824,6 +3470,40 @@ impl App {
                 buttons |= 2;
             }
         }
+
+        if start_pressed && !self.show_library {
+            self.quick_menu_open = !self.quick_menu_open;
+            self.quick_menu_selection = 0;
+            self.quick_menu_dpad_y = menu_dpad_y;
+            if self.quick_menu_open && self.mouse_captured {
+                self.set_mouse_capture(ctx, false);
+            }
+        } else if self.quick_menu_open {
+            if menu_dpad_y != self.quick_menu_dpad_y {
+                if menu_dpad_y != 0 {
+                    self.quick_menu_selection ^= 1;
+                }
+                self.quick_menu_dpad_y = menu_dpad_y;
+            }
+            if back_pressed {
+                self.quick_menu_open = false;
+            } else if activate_pressed {
+                if self.quick_menu_selection == 0 {
+                    self.enter_library_from_quick_menu();
+                } else {
+                    self.quick_menu_open = false;
+                }
+            }
+        }
+
+        if self.quick_menu_open {
+            self.pad_buttons = 0;
+            self.pad_frac = egui::Vec2::ZERO;
+            let mut input = self.shared.input.lock().unwrap();
+            input.buttons = 0;
+            return;
+        }
+
         // Don't feed the press being captured for a rebind into the game.
         if self.pad_rebind.is_some() {
             buttons = 0;
@@ -3255,6 +3935,11 @@ impl eframe::App for App {
                 .store(self.show_library, Ordering::Relaxed);
             if self.show_library {
                 self.scan_libraries();
+                self.library_focus = self.library_tab;
+                self.library_selection = 0;
+                self.library_dpad_y = 0;
+                self.pad_buttons = 0;
+                self.pad_frac = egui::Vec2::ZERO;
                 if self.mouse_captured {
                     self.set_mouse_capture(ctx, false);
                 }
@@ -3366,8 +4051,13 @@ impl eframe::App for App {
         // Library browser replaces the central view while active; the
         // emulation keeps running underneath.
         if self.show_library {
-            let load_path = self.paint_library(ctx);
-            if let Some(path) = load_path {
+            let controller_path = self.poll_library_gamepad();
+            if !self.show_library {
+                ctx.request_repaint();
+                return;
+            }
+            let mouse_path = self.paint_library(ctx);
+            if let Some(path) = controller_path.or(mouse_path) {
                 self.load_disc_path(path);
             }
             return;
@@ -3558,6 +4248,8 @@ impl eframe::App for App {
                 }
             });
 
+        self.paint_quick_menu(ctx);
+
         // Hold-to-fast-forward. Ignored while a text field or a pending
         // rebind wants the keyboard.
         let fast_forward = !ctx.wants_keyboard_input()
@@ -3567,8 +4259,13 @@ impl eframe::App for App {
             .fast_forward
             .store(fast_forward, Ordering::Relaxed);
 
-        self.poll_keyboard(ctx);
-        self.poll_gamepad();
+        if !self.quick_menu_open {
+            self.poll_keyboard(ctx);
+        } else {
+            self.kb_buttons = 0;
+            self.kb_frac = egui::Vec2::ZERO;
+        }
+        self.poll_gamepad(ctx);
 
         ctx.request_repaint_after(Duration::from_millis(10));
     }
@@ -3577,11 +4274,35 @@ impl eframe::App for App {
 #[cfg(test)]
 mod tests {
     use super::{
-        controller_deflection, display_aperture, fill_audio, fit_aspect, parental_passcode,
-        pointer_mapping, presentation_aspect, region_is_pal, screenshot_dimensions,
-        screenshot_image, DiscOverride, DisplayAperture, DisplayArea, SharedFrame,
+        backup_nvram, controller_deflection, controller_dpad_deflection,
+        controller_stick_deflection, cycle_library_focus, display_aperture, fill_audio, fit_aspect,
+        library_dpad_direction, library_pad_action, load_nvram, parental_passcode, pointer_mapping,
+        presentation_aspect, region_is_pal, screenshot_dimensions, screenshot_image, write_nvram,
+        DiscOverride, DisplayAperture, DisplayArea, LibraryPadAction, SharedFrame,
+        LIBRARY_OPEN_FOCUS,
     };
     use cdi_core::mcd212::DisplayGeometry;
+
+    #[test]
+    fn nvram_write_is_replaceable_and_wrong_sizes_start_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mono1.nvr");
+        write_nvram(Some(&path), &[1, 2, 3, 4]).unwrap();
+        assert_eq!(load_nvram(Some(&path), 4), [1, 2, 3, 4]);
+        write_nvram(Some(&path), &[5, 6, 7, 8]).unwrap();
+        assert_eq!(load_nvram(Some(&path), 4), [5, 6, 7, 8]);
+        assert_eq!(load_nvram(Some(&path), 8), [0; 8]);
+    }
+
+    #[test]
+    fn nvram_reset_backup_preserves_nonempty_storage() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mono1.nvr");
+        let data = [0xDE, 0xAD, 0xC0, 0xDE];
+        let backup = backup_nvram(Some(&path), &data).unwrap().unwrap();
+        assert_eq!(std::fs::read(backup).unwrap(), data);
+        assert_eq!(backup_nvram(Some(&path), &[0; 4]).unwrap(), None);
+    }
 
     #[test]
     fn suppressed_audio_is_silent_and_drains_queued_samples() {
@@ -3638,6 +4359,113 @@ mod tests {
     fn opposing_dpad_directions_do_not_fall_through_to_stick() {
         let stopped = controller_deflection(egui::vec2(0.8, 0.6), egui::Vec2::ZERO, true, true);
         assert_eq!(stopped, egui::Vec2::ZERO);
+    }
+
+    #[test]
+    fn controller_reads_dpad_hat_axes_in_screen_coordinates() {
+        let (up_right, active) = controller_dpad_deflection(1.0, 1.0, false, false, false, false);
+        assert!(active);
+        assert_eq!(up_right, egui::vec2(1.0, -1.0));
+
+        let (down_left, active) =
+            controller_dpad_deflection(-1.0, -1.0, false, false, false, false);
+        assert!(active);
+        assert_eq!(down_left, egui::vec2(-1.0, 1.0));
+    }
+
+    #[test]
+    fn controller_dpad_buttons_override_hat_axis_per_axis() {
+        let (opposed, active) = controller_dpad_deflection(1.0, 0.0, true, true, false, false);
+        assert!(active);
+        assert_eq!(opposed, egui::Vec2::ZERO);
+    }
+
+    #[test]
+    fn library_triggers_cycle_all_tabs_and_open_cue() {
+        assert_eq!(cycle_library_focus(0, false), LIBRARY_OPEN_FOCUS);
+        assert_eq!(cycle_library_focus(LIBRARY_OPEN_FOCUS, true), 0);
+        assert_eq!(
+            library_pad_action(
+                gilrs::Button::LeftTrigger2,
+                gilrs::Button::South,
+                gilrs::Button::East,
+            ),
+            Some(LibraryPadAction::PreviousTab)
+        );
+        assert_eq!(
+            library_pad_action(
+                gilrs::Button::RightTrigger,
+                gilrs::Button::South,
+                gilrs::Button::East,
+            ),
+            Some(LibraryPadAction::NextTab)
+        );
+    }
+
+    #[test]
+    fn library_dpad_and_face_buttons_have_edge_triggered_actions() {
+        assert_eq!(
+            library_pad_action(
+                gilrs::Button::DPadUp,
+                gilrs::Button::South,
+                gilrs::Button::East,
+            ),
+            Some(LibraryPadAction::PreviousDisc)
+        );
+        assert_eq!(
+            library_pad_action(
+                gilrs::Button::DPadDown,
+                gilrs::Button::South,
+                gilrs::Button::East,
+            ),
+            Some(LibraryPadAction::NextDisc)
+        );
+        assert_eq!(
+            library_pad_action(
+                gilrs::Button::South,
+                gilrs::Button::South,
+                gilrs::Button::East,
+            ),
+            Some(LibraryPadAction::Activate)
+        );
+        assert_eq!(
+            library_pad_action(
+                gilrs::Button::East,
+                gilrs::Button::South,
+                gilrs::Button::East,
+            ),
+            Some(LibraryPadAction::Back)
+        );
+    }
+
+    #[test]
+    fn library_accepts_dpad_hat_axes_and_mapped_buttons() {
+        assert_eq!(library_dpad_direction(1.0, false, false), -1);
+        assert_eq!(library_dpad_direction(-1.0, false, false), 1);
+        assert_eq!(library_dpad_direction(0.0, true, false), -1);
+        assert_eq!(library_dpad_direction(0.0, false, true), 1);
+        assert_eq!(library_dpad_direction(0.0, true, true), 0);
+        assert_eq!(library_dpad_direction(0.2, false, false), 0);
+    }
+
+    #[test]
+    fn controller_stick_deadzone_has_no_step_discontinuity() {
+        assert_eq!(
+            controller_stick_deflection(egui::vec2(0.15, 0.0), 0.15),
+            egui::Vec2::ZERO
+        );
+        let just_outside = controller_stick_deflection(egui::vec2(0.16, 0.0), 0.15);
+        assert!(just_outside.x > 0.0);
+        assert!(just_outside.x < 0.02);
+        assert_eq!(just_outside.y, 0.0);
+    }
+
+    #[test]
+    fn controller_stick_deadzone_preserves_direction_and_full_scale() {
+        let diagonal = controller_stick_deflection(egui::vec2(0.6, 0.8), 0.2);
+        assert!((diagonal.length() - 1.0).abs() < f32::EPSILON);
+        assert!((diagonal.x - 0.6).abs() < f32::EPSILON);
+        assert!((diagonal.y - 0.8).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -7,12 +7,18 @@
 //! talks to it over four byte channels at `$310000` (odd bytes). Responses
 //! are delivered after a delay and raise IN2 (autovector 26).
 
+use std::collections::VecDeque;
+
 /// CPU cycles (15 MHz domain) per microsecond.
 const CYCLES_PER_US: u64 = 15;
 /// Response latency used by MAME for most queries (100 µs).
 const READBACK_DELAY: u64 = 100 * CYCLES_PER_US;
 /// Input poll cadence (60 Hz).
 const POLL_INTERVAL: u64 = 15_000_000 / 60;
+/// `cdapdriv` disc-type field for a native CD-i disc.
+const DISC_TYPE_CDI: u8 = 0x02;
+/// `cdapdriv` disc-type field for a CD-ROM XA Bridge disc.
+const DISC_TYPE_CD_ROM_XA_BRIDGE: u8 = 0x04;
 
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
@@ -47,6 +53,13 @@ pub struct SlaveHle {
     /// The retained-RAM launch mode selected by ch2 0x8A. In this mode the
     /// drive-status packet advertises the follow-up B1 disc-base response.
     disc_boot_mode: bool,
+    /// Bits 0-2 of byte 2 in the four-byte B0 drive-status response.
+    /// `cdapdriv` exposes these through GetStat $55.
+    disc_type_code: u8,
+    /// Whether a medium is currently present in the drive.
+    disc_present: bool,
+    /// SERVO drive-status packets waiting for the host's X-Bus channel.
+    pending_drive_status: VecDeque<[u8; 4]>,
     /// Firmware `$59.1`, toggled by ch2 0x88. It enables the two-byte
     /// parameter form armed by ch2 0x90.
     transport_adjust_enabled: bool,
@@ -78,6 +91,28 @@ pub struct SlaveHle {
     poll_countdown: u64,
 }
 
+/// Read-only SLAVE transport/input state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+pub struct SlaveDiagnosticSnapshot {
+    pub irq_asserted: bool,
+    pub polling_active: bool,
+    pub pointer_interrupt_enabled: bool,
+    pub xbus_interrupt_enabled: bool,
+    pub input_x: i32,
+    pub input_y: i32,
+    pub device_x: i32,
+    pub device_y: i32,
+    pub buttons: u8,
+    pub disc_boot_mode: bool,
+    pub disc_present: bool,
+    pub disc_type_code: u8,
+    pub pending_drive_status: usize,
+    pub boot_status: u8,
+    pub video_status: u8,
+    pub host_reset_pending: bool,
+}
+
 impl SlaveHle {
     pub fn new(version: &str, pal: bool) -> Self {
         // The model files give the version as hex byte pairs: "3231" ->
@@ -102,6 +137,9 @@ impl SlaveHle {
             boot_status: 0,
             host_reset_requested: false,
             disc_boot_mode: false,
+            disc_type_code: DISC_TYPE_CDI,
+            disc_present: false,
+            pending_drive_status: VecDeque::new(),
             transport_adjust_enabled: false,
             transport_parameter_bytes: 0,
             transport_repeat_delay: 0x0A,
@@ -130,10 +168,17 @@ impl SlaveHle {
     }
 
     pub fn reset(&mut self) {
-        let (version, video_status) = (self.version, self.video_status);
+        let (version, video_status, disc_type_code, disc_present) = (
+            self.version,
+            self.video_status,
+            self.disc_type_code,
+            self.disc_present,
+        );
         *self = Self {
             version,
             video_status,
+            disc_type_code,
+            disc_present,
             ..Self::new("", true)
         };
     }
@@ -141,6 +186,27 @@ impl SlaveHle {
     /// Current IN2 line state.
     pub fn irq(&self) -> bool {
         self.irq_asserted
+    }
+
+    pub fn diagnostic_snapshot(&self) -> SlaveDiagnosticSnapshot {
+        SlaveDiagnosticSnapshot {
+            irq_asserted: self.irq_asserted,
+            polling_active: self.polling_active,
+            pointer_interrupt_enabled: self.pointer_interrupt_enable,
+            xbus_interrupt_enabled: self.xbus_interrupt_enable,
+            input_x: self.input_x,
+            input_y: self.input_y,
+            device_x: self.device_x,
+            device_y: self.device_y,
+            buttons: self.input_buttons,
+            disc_boot_mode: self.disc_boot_mode,
+            disc_present: self.disc_present,
+            disc_type_code: self.disc_type_code,
+            pending_drive_status: self.pending_drive_status.len(),
+            boot_status: self.boot_status,
+            video_status: self.video_status,
+            host_reset_pending: self.host_reset_requested,
+        }
     }
 
     /// Latest audio-attenuation payload (L→L, L→R, R→R, R→L), if updated.
@@ -151,6 +217,64 @@ impl SlaveHle {
     /// Consume a host-reset request raised by ch2 command 0x8A.
     pub fn take_host_reset_request(&mut self) -> bool {
         std::mem::take(&mut self.host_reset_requested)
+    }
+
+    /// Set the drive-status disc type from the inserted medium's volume
+    /// descriptor. VMPEG's native `vcd` module requires the XA Bridge type
+    /// before enabling its White Book 13.5 MHz sample-rate converter.
+    pub fn set_cd_rom_xa_bridge(&mut self, bridge: bool) {
+        self.disc_type_code = if bridge {
+            DISC_TYPE_CD_ROM_XA_BRIDGE
+        } else {
+            DISC_TYPE_CDI
+        };
+    }
+
+    /// Set the medium present at power-on/reset without generating a hotplug
+    /// notification. Use [`SlaveHle::notify_disc_change`] for a live drive.
+    pub fn set_disc_present(&mut self, present: bool) {
+        self.disc_present = present;
+        self.disc_boot_mode = false;
+        self.pending_drive_status.clear();
+    }
+
+    /// Forward a live SERVO media transition to the host's X-Bus channel.
+    ///
+    /// Replacing one mounted image represents the physical remove/insert
+    /// sequence as two packets even when the frontend operation is atomic.
+    /// Delivery waits until the BIOS enables ch3 command `FA` and until the
+    /// previous ch3 response has been consumed.
+    pub fn notify_disc_change(&mut self, present: bool, replacing: bool) {
+        self.disc_boot_mode = false;
+        if replacing {
+            self.pending_drive_status
+                .push_back([0xB0, 0x00, 0x00, 0x15]);
+        }
+        self.disc_present = present;
+        self.pending_drive_status
+            .push_back(self.drive_status_packet());
+        self.service_drive_status_notification();
+    }
+
+    fn drive_status_packet(&self) -> [u8; 4] {
+        let flags = if self.disc_present {
+            self.disc_type_code | if self.disc_boot_mode { 0x40 } else { 0x00 }
+        } else {
+            0
+        };
+        [0xB0, 0x00, flags, 0x15]
+    }
+
+    fn service_drive_status_notification(&mut self) {
+        if !self.xbus_interrupt_enable
+            || self.channels[3].count != 0
+            || self.irq_countdown.is_some()
+        {
+            return;
+        }
+        if let Some(packet) = self.pending_drive_status.pop_front() {
+            self.prepare_readback(Some(READBACK_DELAY), 3, 4, packet, 0xB0);
+        }
     }
 
     /// Frontend input: absolute pointer position (0..767, 0..559) + buttons.
@@ -203,6 +327,7 @@ impl SlaveHle {
 
     /// Advance time; fires delayed response IRQs and input polling.
     pub fn tick(&mut self, cycles: u64) {
+        self.service_drive_status_notification();
         if let Some(remaining) = self.irq_countdown {
             if remaining <= cycles {
                 self.irq_asserted = true;
@@ -454,12 +579,11 @@ impl SlaveHle {
                         // Request Disc Status: door closed, no disc errors.
                         // Retained launch mode sets the driver's disc-base
                         // available bit, prompting its B1 follow-up query.
-                        let flags = if self.disc_boot_mode { 0x42 } else { 0x02 };
                         self.prepare_readback(
                             Some(15_000_000 / 4),
                             3,
                             4,
-                            [0xB0, 0x00, flags, 0x15],
+                            self.drive_status_packet(),
                             0xB0,
                         );
                     }
@@ -524,6 +648,7 @@ impl SlaveHle {
                 0xFA => {
                     self.xbus_interrupt_enable = true;
                     self.in_index = 0;
+                    self.service_drive_status_notification();
                 }
                 0xF9 | 0xFB..=0xFD => {
                     // Undocumented queries used by the disc-play flow;
@@ -709,6 +834,7 @@ mod tests {
     #[test]
     fn retained_disc_boot_changes_drive_status_and_answers_disc_base() {
         let mut s = SlaveHle::new("3231", true);
+        s.set_disc_present(true);
         s.write(2, 0x8A);
         assert!(s.take_host_reset_request());
 
@@ -729,6 +855,84 @@ mod tests {
         assert_eq!(
             [s.read(3), s.read(3), s.read(3), s.read(3)],
             [0xB1, 0x00, 0x00, 0x00]
+        );
+    }
+
+    #[test]
+    fn xa_bridge_disc_type_is_reported_and_survives_reset() {
+        let mut s = SlaveHle::new("3231", true);
+        s.set_cd_rom_xa_bridge(true);
+        s.set_disc_present(true);
+        s.reset();
+        s.write(2, 0x8A);
+        assert!(s.take_host_reset_request());
+
+        for byte in [0xB0, 0, 0, 0] {
+            s.write(3, byte);
+        }
+        s.tick(15_000_000 / 4);
+        assert_eq!(
+            [s.read(3), s.read(3), s.read(3), s.read(3)],
+            [0xB0, 0x00, 0x44, 0x15]
+        );
+    }
+
+    #[test]
+    fn disc_status_distinguishes_an_empty_drive_from_inserted_media() {
+        let mut s = SlaveHle::new("3231", true);
+        for byte in [0xB0, 0, 0, 0] {
+            s.write(3, byte);
+        }
+        s.tick(15_000_000 / 4);
+        assert_eq!(
+            [s.read(3), s.read(3), s.read(3), s.read(3)],
+            [0xB0, 0x00, 0x00, 0x15]
+        );
+
+        s.set_disc_present(true);
+        for byte in [0xB0, 0, 0, 0] {
+            s.write(3, byte);
+        }
+        s.tick(15_000_000 / 4);
+        assert_eq!(
+            [s.read(3), s.read(3), s.read(3), s.read(3)],
+            [0xB0, 0x00, 0x02, 0x15]
+        );
+    }
+
+    #[test]
+    fn live_media_change_waits_for_xbus_enable() {
+        let mut s = SlaveHle::new("3231", true);
+        s.notify_disc_change(true, false);
+        s.tick(READBACK_DELAY);
+        assert!(!s.irq());
+        assert_eq!(s.read(3), 0xFF);
+
+        s.write(3, 0xFA);
+        s.tick(READBACK_DELAY);
+        assert!(s.irq());
+        assert_eq!(
+            [s.read(3), s.read(3), s.read(3), s.read(3)],
+            [0xB0, 0x00, 0x02, 0x15]
+        );
+    }
+
+    #[test]
+    fn live_disc_swap_reports_removal_then_insertion() {
+        let mut s = SlaveHle::new("3231", true);
+        s.set_disc_present(true);
+        s.write(3, 0xFA);
+        s.notify_disc_change(true, true);
+
+        s.tick(READBACK_DELAY);
+        assert_eq!(
+            [s.read(3), s.read(3), s.read(3), s.read(3)],
+            [0xB0, 0x00, 0x00, 0x15]
+        );
+        s.tick(READBACK_DELAY);
+        assert_eq!(
+            [s.read(3), s.read(3), s.read(3), s.read(3)],
+            [0xB0, 0x00, 0x02, 0x15]
         );
     }
 

@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://e-di.invalid/schemas/compatibility-incident-v1.json",
+  "title": "E-Di compatibility incident",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "symptom",
+    "expected",
+    "status",
+    "components",
+    "scenario",
+    "hypotheses",
+    "experiments",
+    "manual_verification"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "title": { "type": "string" },
+    "symptom": { "type": "string" },
+    "expected": { "type": "string" },
+    "status": { "type": "string" },
+    "components": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "disc_fingerprint": { "type": ["string", "null"] },
+    "scenario": { "type": "object" },
+    "hypotheses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "hardware_explanation",
+          "supporting_evidence",
+          "contradicting_evidence",
+          "falsifying_test",
+          "citations"
+        ]
+      }
+    },
+    "experiments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "context",
+          "hypothesis_id",
+          "strategy",
+          "symbols",
+          "assumptions",
+          "expected",
+          "actual",
+          "outcome",
+          "regressions",
+          "improvements",
+          "reverted",
+          "evidence_quality",
+          "confidence",
+          "applicability"
+        ],
+        "properties": {
+          "outcome": {
+            "enum": [
+              "hypothesis-falsified",
+              "implementation-failed",
+              "blocked-by-prerequisite",
+              "regression-causing",
+              "partial",
+              "inconclusive",
+              "confirmed",
+              "superseded"
+            ]
+          }
+        }
+      }
+    },
+    "manual_verification": { "type": "array" }
+  }
+}

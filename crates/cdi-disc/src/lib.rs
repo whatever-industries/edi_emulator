@@ -9,11 +9,17 @@
 
 pub mod cuesheet;
 pub mod image;
+pub mod inventory;
 pub mod scramble;
 pub mod sector;
 
 pub use cuesheet::{parse_cue, CueFile, CueTrack, TrackMode};
 pub use image::{DiscImage, TrackInfo};
+pub use inventory::{
+    inspect_cue, CdiFileEntry, CdiVolumeInventory, DiscFingerprint, DiscInventory,
+    IsoVolumeInventory, MpegSequenceInventory, Os9ModuleInventory, RealtimeFileInventory,
+    SectorClassInventory, TrackInventory,
+};
 pub use sector::{Mode2Subheader, SectorHeader};
 
 pub const RAW_SECTOR_SIZE: usize = 2352;

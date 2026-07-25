@@ -1,6 +1,6 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-07-22
+Status date: 2026-07-24
 
 ## Current implementation status
 
@@ -15,6 +15,47 @@ Status date: 2026-07-22
 - [x] M3.9 interlaced field/base-cursor composition and CCIR presentation range
 - [x] M3.10 masked FMV VSYNC status and native release-path completion
 - [ ] M3.11 seamless-branch B-picture recovery (five rare failures remain in the full run)
+
+The specification-driven diagnostic checkpoint adds bounded DVC error,
+underflow, CDIC transport, frame/plane/raster, and audio evidence without
+changing device timing. Payload-free inventories were validated locally on
+The 7th Guest (VMPEG required, 368x176 stream) and a VCD (ISO `CDI`
+application plus three 352x240 `AVSEQ` streams). These are investigative
+inputs for M3.11 and the sustained-MPEG/VCD regression; they do not bypass the
+native CDIC-to-DVC path.
+
+White Book media identification is implemented but its machine integration is
+deferred. `DiscImage` recognizes the LBA-16 Mode-2 Form-1 PVD combination
+`CD-RTOS CD-BRIDGE` plus `CD-XA001`, and the SLAVE can report disc type 4
+instead of native CD-i type 2. Native firmware then selects `$E01000`'s
+13.5 MHz sample-rate converter and applies its MCD251 origin adjustment.
+Accused Netherlands and Addams Family Values UK confirm that classification
+and register path, but also prove that enabling it before implementing the
+MCD251 sample-origin semantics centers Accused while shifting Addams. Machine
+disc insertion therefore retains type 2 for now; the media classifier and HLE
+support remain covered for the later device-level completion.
+
+The Accused warning corruption is a separate transport issue. A direct disc
+reconstruction contains 21,268 bytes while a deterministic emulator capture
+contains 18,964: exactly one 2,304-byte video PES payload is missing. CDIC
+copies LBA 847 into the guest PCL buffer, but LBA 848 reuses that buffer before
+the native firmware submits 847 to VMPEG. The same loss reproduces on the
+pre-investigation revision, so neither the White Book classification nor the
+decoder experiment introduced it. Reducing the diagnostic pump cadence from
+75 to 70 sectors/s prevents the loss but is not a valid hardware correction;
+the incident is deferred pending CDFM/PCL and drive-response timing evidence.
+
+Addams Family Values USA independently exercises the same failure class. Its
+complete first Philips Media clip contains 628,354 elementary-video bytes and
+134 frames over 4.52 seconds; the failing VMPEG play receives only 126,598
+bytes over 0.88 seconds before the native application returns to its
+dirty-disc dialog. The result is identical under PAL and NTSC, and the shared
+VMPEG firmware successfully initializes and decodes the 352x240/29.97 stream,
+falsifying a PAL-only-cartridge explanation. Media-derived XA-Bridge type 4
+improves delivery but does not prevent the dialog. Arbitrary 70/60-sector
+cadence experiments show nonlinear timing sensitivity and were reverted; the
+required fix remains correct 75-sector CDIC/CDFM/PCL handshaking rather than a
+different nominal rate.
 
 Frontend presentation consumes `cdi-core`'s public `DisplayGeometry`, derived
 only from live MCD212 `CF`, `ST`, `FD`, `SM`, field parity, and the player
@@ -52,6 +93,19 @@ two captured during The 7th Guest's branched third play), then turn gameplay int
 A/V-drift, pause/continue, stream-switch, and repeated-transition regressions.
 The known cake-puzzle freeze remains an extended compatibility gate rather
 than an M3 boot blocker.
+
+The apparent v0.1.0-to-v0.2.0 regression in The 7th Guest's post-title video
+was isolated separately. Reverting v0.2.0's relative subcode-Q correction did
+not restore the video, while exact v0.2.0 with blank player storage did.
+Comparing the pre-reset backup with the newly generated filesystem then proved
+all 970 bytes of `/nvr/7th_Guest` data identical. The meaningful difference
+was the generated CSD: the broken saved environment advertised `LI=625`,
+while the working live virtual player regenerated `LI=525:TV`. A physical
+player cannot change its standard while retaining an obsolete hardware
+descriptor, but E-Di's Settings can. The frontend now invalidates only `csd`
+at startup and on virtual-hardware changes so the BIOS recreates it, preserving
+all title saves. This result does not close the B-picture or
+repeated-transition work above.
 
 ## Scope and provenance decisions
 

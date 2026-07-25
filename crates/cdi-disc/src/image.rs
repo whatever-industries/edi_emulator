@@ -18,8 +18,14 @@ use std::sync::Mutex;
 
 use crate::cuesheet::{parse_cue, TrackMode};
 use crate::scramble::descramble_in_place;
-use crate::sector::{has_sync, SectorHeader};
+use crate::sector::{has_sync, Mode2Subheader, SectorHeader};
 use crate::{Msf, RAW_SECTOR_SIZE};
+
+const NORMAL_LBA_BASE: u32 = 150;
+const VOLUME_DESCRIPTOR_LBA: u32 = 16;
+const ISO_PVD_HEADER: &[u8; 8] = b"\x01CD001\x01\x00";
+const CD_RTOS_BRIDGE_SYSTEM_ID: &[u8] = b"CD-RTOS CD-BRIDGE";
+const CD_XA_SIGNATURE: &[u8; 8] = b"CD-XA001";
 
 #[derive(Debug, Clone)]
 pub struct TrackInfo {
@@ -132,6 +138,44 @@ impl DiscImage {
 
     pub fn leadout_msf(&self) -> Msf {
         Msf::from_frames(self.leadout)
+    }
+
+    /// Whether the first volume descriptor identifies a CD-ROM XA Bridge
+    /// disc. White Book Video CD uses this bridge format, and the CD-i drive
+    /// firmware reports it as a distinct disc type to optional DVC firmware.
+    ///
+    /// The identification is media-derived: a Mode-2 Form-1 ISO primary
+    /// volume descriptor with the `CD-RTOS CD-BRIDGE` system identifier and
+    /// the `CD-XA001` application-use signature.
+    pub fn is_cd_rom_xa_bridge(&self) -> bool {
+        let lba_base = self.tracks.first().map_or(NORMAL_LBA_BASE, |track| {
+            if track.region_start == 0 {
+                0
+            } else {
+                NORMAL_LBA_BASE
+            }
+        });
+        let Some(sector) = self.read_sector_data(lba_base + VOLUME_DESCRIPTOR_LBA) else {
+            return false;
+        };
+        let Some(header) = SectorHeader::parse(&sector) else {
+            return false;
+        };
+        if header.mode != 2 {
+            return false;
+        }
+        let Some(subheader) = Mode2Subheader::parse(&sector) else {
+            return false;
+        };
+        if subheader.is_form2() {
+            return false;
+        }
+        let user = &sector[subheader.user_data_range()];
+        user.get(..ISO_PVD_HEADER.len()) == Some(ISO_PVD_HEADER.as_slice())
+            && user
+                .get(8..40)
+                .is_some_and(|system_id| system_id.starts_with(CD_RTOS_BRIDGE_SYSTEM_ID))
+            && user.get(1024..1032) == Some(CD_XA_SIGNATURE.as_slice())
     }
 
     /// The track whose stored region contains `abs`, if any.
@@ -295,5 +339,39 @@ mod tests {
         assert_eq!(disc.read_sector_raw(158).unwrap()[0], 0x22);
         assert_eq!(disc.track_at(159).unwrap().number, 2);
         assert_eq!(disc.track_at(155).unwrap().number, 1);
+    }
+
+    #[test]
+    fn identifies_cd_rom_xa_bridge_from_volume_descriptor() {
+        let dir = temp_dir("xa-bridge");
+        let mut sectors: Vec<_> = (0..20)
+            .map(|i| data_sector(Msf::from_frames(150 + i), 0))
+            .collect();
+        let descriptor = &mut sectors[VOLUME_DESCRIPTOR_LBA as usize];
+        descriptor[16..20].copy_from_slice(&[0, 0, 0x08, 0]);
+        descriptor[20..24].copy_from_slice(&[0, 0, 0x08, 0]);
+        let user = &mut descriptor[24..24 + 2048];
+        user[..8].copy_from_slice(ISO_PVD_HEADER);
+        user[8..8 + CD_RTOS_BRIDGE_SYSTEM_ID.len()].copy_from_slice(CD_RTOS_BRIDGE_SYSTEM_ID);
+        user[1024..1032].copy_from_slice(CD_XA_SIGNATURE);
+        write_bin(&dir, "bridge.bin", &sectors);
+        std::fs::write(
+            dir.join("bridge.cue"),
+            "FILE \"bridge.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        let disc = DiscImage::load(&dir.join("bridge.cue")).unwrap();
+        assert!(disc.is_cd_rom_xa_bridge());
+
+        sectors[VOLUME_DESCRIPTOR_LBA as usize][24 + 1024] = b'X';
+        write_bin(&dir, "plain.bin", &sectors);
+        std::fs::write(
+            dir.join("plain.cue"),
+            "FILE \"plain.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        let disc = DiscImage::load(&dir.join("plain.cue")).unwrap();
+        assert!(!disc.is_cd_rom_xa_bridge());
     }
 }

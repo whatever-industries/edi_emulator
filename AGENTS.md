@@ -5,7 +5,14 @@ Read these files top-to-bottom before changing the emulator:
 1. `docs/slave-protocol.md`
 2. `docs/mpeg-dvc-plan.md`
 3. `docs/display-geometry.md`
-4. `TODO.md`
+4. `docs/debugging-workflow.md`
+5. `TODO.md`
+
+Whenever a compatibility problem is reported, open or resume a diagnostic
+incident using `docs/debugging-workflow.md` before changing emulation
+behavior. Prior failed attempts are contextual evidence, not permanent bans:
+state what prerequisite or evidence changed before repeating an equivalent
+experiment.
 
 The current milestone is M3: emulate the optional 22ER9141 VMPEG Digital
 Video Cartridge on the existing Mono-I/CD-i 220 model. VMPEG is the first

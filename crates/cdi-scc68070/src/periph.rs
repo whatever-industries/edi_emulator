@@ -145,6 +145,18 @@ impl Peripherals {
         self.dma_regs[0x05]
     }
 
+    pub fn dma0_status(&self) -> u8 {
+        self.dma_regs[0x00]
+    }
+
+    pub fn dma0_channel_control(&self) -> u8 {
+        self.dma_regs[0x07]
+    }
+
+    pub fn dma0_active(&self) -> bool {
+        self.dma_regs[0x00] & 0x08 != 0
+    }
+
     // The SCC68070 calls the external request used by VMPEG DMAREQ2, while
     // its programming model exposes it as the second register block at
     // $80004040. Keep the API named `dma1` to match the zero-based register
@@ -160,6 +172,20 @@ impl Peripherals {
 
     pub fn dma1_operation_control(&self) -> u8 {
         self.dma_regs[0x45]
+    }
+
+    /// Device Control Register ERM bit: false selects burst mode, true
+    /// selects cycle-steal mode (SCC68070 April 1993, section 8.5.2).
+    pub fn dma1_cycle_steal(&self) -> bool {
+        self.dma_regs[0x44] & 0x80 != 0
+    }
+
+    pub fn dma1_status(&self) -> u8 {
+        self.dma_regs[0x40]
+    }
+
+    pub fn dma1_channel_control(&self) -> u8 {
+        self.dma_regs[0x47]
     }
 
     pub fn dma1_active(&self) -> bool {

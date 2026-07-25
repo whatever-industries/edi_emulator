@@ -98,6 +98,10 @@ gameplay automatically, and avoid stuttering/looping audio. Applying the
 section-6.2 timing batch while devices advance only at instruction boundaries
 breaks that sequence. The audit therefore quarantines, but does not discard,
 the four timing assertions. See `docs/core-compatibility-audit.md`.
+Manual neighboring checks on the committed audit baseline also pass Earth
+Command sound-map termination, The Naked Gun 2 1/2's copyright-to-menu
+release, and Alien Gate pointer/firing audio. One ordinary PAL and one
+ordinary NTSC base-graphics title remain before scheduling reconstruction.
 
 After the timing/scheduling reconciliation, resolve the five cumulative
 B-picture decode failures (including two captured during The 7th Guest's

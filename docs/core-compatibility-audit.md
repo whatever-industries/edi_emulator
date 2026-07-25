@@ -95,3 +95,18 @@ Every promoted core batch must keep:
 
 The two missing transition animations remain tracked separately and must not
 be confused with the resolved post-title playback and audio regressions.
+
+## Manual neighboring-title validation
+
+On 2026-07-25 the user manually verified the committed modern audit baseline
+(`18beb7f`) against the three highest-risk neighboring regressions:
+
+- Earth Command's menu audio terminates instead of looping.
+- The Naked Gun 2 1/2 releases its copyright clip and reaches the disc menu.
+- Alien Gate accepts pointer input and its firing audio does not repeat or
+  loop.
+
+These results validate the retained CDIC sound-map completion, masked VMPEG
+VSYNC/release path, and SLAVE/input behavior under the legacy SCC68070 timing
+baseline. The only outstanding manual gate before timing/scheduling
+reconstruction is one ordinary PAL and one ordinary NTSC base-graphics title.

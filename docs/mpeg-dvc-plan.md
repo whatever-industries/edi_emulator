@@ -1,6 +1,6 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-07-24
+Status date: 2026-07-25
 
 ## Current implementation status
 
@@ -14,7 +14,9 @@ Status date: 2026-07-24
 - [x] M3.8 repeated-sequence reference continuity and external-video centering
 - [x] M3.9 interlaced field/base-cursor composition and CCIR presentation range
 - [x] M3.10 masked FMV VSYNC status and native release-path completion
-- [ ] M3.11 seamless-branch B-picture recovery (five rare failures remain in the full run)
+- [x] M3.11 seven-stage The 7th Guest transition compatibility reference
+- [ ] M3.12 reconcile SCC68070 datasheet timing with device scheduling
+- [ ] M3.13 seamless-branch B-picture recovery (five rare failures remain in the full run)
 
 The specification-driven diagnostic checkpoint adds bounded DVC error,
 underflow, CDIC transport, frame/plane/raster, and audio evidence without
@@ -88,11 +90,21 @@ is present. Contents are streamed to a guarded temporary directory so the
 existing CD-i and Photo CD sector readers remain unchanged; compressed,
 encrypted, unsafe-path, and multi-CUE archives are rejected explicitly.
 
-Next action: resolve the five cumulative B-picture decode failures (including
-two captured during The 7th Guest's branched third play), then turn gameplay into repeatable long-run
-A/V-drift, pause/continue, stream-switch, and repeated-transition regressions.
-The known cake-puzzle freeze remains an extended compatibility gate rather
-than an M3 boot blocker.
+Next action: reconcile SCC68070 datasheet instruction timing with
+whole-machine/device scheduling while preserving the verified seven-stage
+The 7th Guest transition. The exact `2a1d9038` reference and the modern audit
+hybrid play the pre-title clip, title MPEG, both post-title MPEGs, enter
+gameplay automatically, and avoid stuttering/looping audio. Applying the
+section-6.2 timing batch while devices advance only at instruction boundaries
+breaks that sequence. The audit therefore quarantines, but does not discard,
+the four timing assertions. See `docs/core-compatibility-audit.md`.
+
+After the timing/scheduling reconciliation, resolve the five cumulative
+B-picture decode failures (including two captured during The 7th Guest's
+branched third play), then turn gameplay into repeatable long-run A/V-drift,
+pause/continue, stream-switch, and repeated-transition regressions. The known
+cake-puzzle freeze remains an extended compatibility gate rather than an M3
+boot blocker.
 
 The apparent v0.1.0-to-v0.2.0 regression in The 7th Guest's post-title video
 was isolated separately. Reverting v0.2.0's relative subcode-Q correction did

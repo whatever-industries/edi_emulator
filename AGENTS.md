@@ -6,7 +6,8 @@ Read these files top-to-bottom before changing the emulator:
 2. `docs/mpeg-dvc-plan.md`
 3. `docs/display-geometry.md`
 4. `docs/debugging-workflow.md`
-5. `TODO.md`
+5. `docs/core-compatibility-audit.md`
+6. `TODO.md`
 
 Whenever a compatibility problem is reported, open or resume a diagnostic
 incident using `docs/debugging-workflow.md` before changing emulation
@@ -52,18 +53,28 @@ internal until the frontend/PNG presentation boundary expands it to 0..255.
 The live MCD212 hardware cursor is composited after that weave so animated
 cursor patterns do not remain baked into retained fields, although the user
 still sees combing on The 7th Guest hand and that visual issue is deferred.
-Base-system compatibility also now uses Philips section-6.2 SCC68070 timing
-instead of a four-clock placeholder, and CDIC sound maps interrupt after every
-consumed half so CD-RTOS can refill/terminate them (Earth Command regression).
+CDIC sound maps interrupt after every consumed half so CD-RTOS can
+refill/terminate them (Earth Command regression).
 VMPEG FMV status now latches VSYNC (`ISR $0800`) on every MCD212 frame even
 when the corresponding interrupt is masked. This lets the native release
 routine finish after a short still/video clip; without it The Naked Gun 2 1/2
 stalls on black after its copyright screen, while the corrected run reaches
 the Disc 1 chapter menu.
+The exact historical root `2a1d9038` and a modern hybrid prove The 7th Guest's
+pre-title clip, title MPEG, both post-title MPEGs, automatic gameplay entry,
+and non-looping gameplay audio. The modern hybrid retains all current work but
+temporarily restores the pre-regression SCC68070 timing behavior. Applying the
+Philips section-6.2 timing batch while devices advance only after a complete
+instruction breaks that sequence; the four timing assertions are quarantined
+on `codex/7g-core-audit`, not deleted or treated as disproven. Two brief black
+flashes replace authored transition animations and remain a separate deferred
+incident. The slight sizzling heard in the historical executable is absent
+from the modern audit hybrid.
+
 Use the live checklist and source ledger in `docs/mpeg-dvc-plan.md`. The next
-unchecked action is to resolve five rare B-picture decode failures accumulated
-across The 7th Guest's five-play run (two reproduce by 700 million instructions
-in the branched third play), then cover long-run A/V drift,
+unchecked action is to reconcile datasheet SCC68070 timing with
+whole-machine/device scheduling while preserving the seven-stage transition.
+After that, resolve five rare B-picture failures and cover long-run A/V drift,
 pause/continue, stream switching, repeated transitions, and the cake puzzle.
 Update that document's status and next action whenever a checkpoint is reached.
 

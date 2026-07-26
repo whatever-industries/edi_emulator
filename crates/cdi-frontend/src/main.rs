@@ -995,6 +995,22 @@ enum MachineCommand {
     Reset,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiscLoadAction {
+    /// Let the already-running player shell observe a physical insertion.
+    LiveInsert,
+    /// A running title may ignore a drive event, so boot replacement media.
+    ReplaceAndReset,
+}
+
+fn disc_load_action(has_mounted_disc: bool) -> DiscLoadAction {
+    if has_mounted_disc {
+        DiscLoadAction::ReplaceAndReset
+    } else {
+        DiscLoadAction::LiveInsert
+    }
+}
+
 #[cfg(target_os = "macos")]
 enum NativeMenuAction {
     Open,
@@ -1486,6 +1502,8 @@ fn emu_loop(
                     archive_guard,
                 } => match cdi_disc::DiscImage::load(&path) {
                     Ok(disc) => {
+                        let load_action =
+                            disc_load_action(shared.disc_path.lock().unwrap().is_some());
                         // Identify the exact pressing before inserting it.
                         // Hashing is intentionally done on the emulation
                         // thread so the GUI remains responsive for large BINs.
@@ -1539,10 +1557,21 @@ fn emu_loop(
                                 }
                             }
                         }
-                        // A live drive reports its SERVO status through the
-                        // SLAVE X-Bus channel. Do not throw away the player
-                        // shell boot merely because the user inserted media.
-                        machine.change_disc(Some(disc));
+                        match load_action {
+                            DiscLoadAction::LiveInsert => {
+                                // Preserve the player's initial boot: its
+                                // shell observes the physical insertion
+                                // through the SLAVE X-Bus drive event.
+                                machine.change_disc(Some(disc));
+                            }
+                            DiscLoadAction::ReplaceAndReset => {
+                                // A running title is not required to handle
+                                // replacement media. Attach the new disc as
+                                // power-on state and boot it deterministically.
+                                machine.set_disc(Some(disc));
+                                machine.reset();
+                            }
+                        }
                         *shared.disc_name.lock().unwrap() = Some(display_name(&path));
                         *shared.disc_path.lock().unwrap() = Some(path);
                         *shared.disc_identity.lock().unwrap() = identity;
@@ -1550,9 +1579,6 @@ fn emu_loop(
                         shared.status.lock().unwrap().clear();
                     }
                     Err(error) => {
-                        *shared.disc_name.lock().unwrap() = None;
-                        *shared.disc_path.lock().unwrap() = None;
-                        *shared.disc_identity.lock().unwrap() = None;
                         *shared.status.lock().unwrap() = format!("Open failed: {error}");
                     }
                 },
@@ -4312,10 +4338,11 @@ mod tests {
     use super::{
         backup_nvram, configure_ui, configured_nvram_path, controller_deflection,
         controller_dpad_deflection, controller_stick_deflection, cycle_library_focus,
-        display_aperture, fill_audio, fit_aspect, library_dpad_direction, library_pad_action,
-        load_nvram, parental_passcode, pointer_mapping, presentation_aspect, region_is_pal,
-        screenshot_dimensions, screenshot_image, write_nvram, DiscOverride, DisplayAperture,
-        DisplayArea, LibraryPadAction, SharedFrame, LIBRARY_OPEN_FOCUS, UI_SELECTED_TEXT,
+        disc_load_action, display_aperture, fill_audio, fit_aspect, library_dpad_direction,
+        library_pad_action, load_nvram, parental_passcode, pointer_mapping, presentation_aspect,
+        region_is_pal, screenshot_dimensions, screenshot_image, write_nvram, DiscLoadAction,
+        DiscOverride, DisplayAperture, DisplayArea, LibraryPadAction, SharedFrame,
+        LIBRARY_OPEN_FOCUS, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
 
@@ -4324,6 +4351,12 @@ mod tests {
         let ctx = egui::Context::default();
         configure_ui(&ctx);
         assert_eq!(ctx.style().visuals.selection.stroke.color, UI_SELECTED_TEXT);
+    }
+
+    #[test]
+    fn first_disc_is_inserted_live_but_replacement_media_resets() {
+        assert_eq!(disc_load_action(false), DiscLoadAction::LiveInsert);
+        assert_eq!(disc_load_action(true), DiscLoadAction::ReplaceAndReset);
     }
 
     #[test]

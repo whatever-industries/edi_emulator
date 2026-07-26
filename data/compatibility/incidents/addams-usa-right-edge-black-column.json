@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "addams-usa-right-edge-black-column",
+  "title": "Addams Family Values USA right-edge black column",
+  "symptom": "All observed screens, including MPEG video, have a vertical black line at the right edge and appear shifted left.",
+  "expected": "Base graphics and MPEG video use their programmed hardware windows without a persistent one-sided black column.",
+  "status": "reproduced",
+  "reported_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+  "last_reproduced_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": "Reported and manually reproduced on the current diagnostic working tree; no rendering experiment or correction has been attempted.",
+  "components": [
+    "mcd212",
+    "dvc",
+    "frontend"
+  ],
+  "disc_fingerprint": "dd9adb80a89378d97acfecaf50ce20d0f769c442",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "ntsc",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reproduced",
+      "revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+      "notes": "A persistent vertical black column is visible at the right edge across base screens and MPEG video, making the image appear shifted left."
+    }
+  ]
+}

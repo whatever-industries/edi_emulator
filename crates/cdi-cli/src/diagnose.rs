@@ -47,6 +47,9 @@ pub enum DiagnoseCommand {
         instructions: u64,
         #[arg(long = "click-event")]
         click_events: Vec<String>,
+        /// Confirm that this run reproduced the reported symptom.
+        #[arg(long)]
+        symptom_reproduced: bool,
     },
     /// Locate the first differing event or final snapshot field.
     Compare { left: PathBuf, right: PathBuf },
@@ -60,7 +63,15 @@ pub enum DiagnoseCommand {
         context: Option<PathBuf>,
     },
     /// Generate tailored manual and neighboring regression checks.
-    Verify { incident: PathBuf },
+    Verify {
+        incident: PathBuf,
+        /// Record that the expected behavior passed manual verification.
+        #[arg(long)]
+        accepted: bool,
+        /// Short manual verification note (used with --accepted).
+        #[arg(long)]
+        notes: Option<String>,
+    },
     /// Create a sanitized tracked record after reproduction is confirmed.
     Promote {
         incident: PathBuf,
@@ -79,12 +90,31 @@ pub struct Incident {
     pub symptom: String,
     pub expected: String,
     pub status: String,
+    /// Commit checked out when the incident was first recorded.
+    #[serde(default)]
+    pub reported_revision: Option<String>,
+    /// Most recent commit on which the symptom was reproduced.
+    #[serde(default)]
+    pub last_reproduced_revision: Option<String>,
+    /// Most recent commit on which a human verified the expected behavior.
+    #[serde(default)]
+    pub last_verified_revision: Option<String>,
+    /// `current`, `needs-revalidation`, `historical`, or `untracked`.
+    #[serde(default = "default_evidence_status")]
+    pub evidence_status: String,
+    /// Why earlier evidence may no longer apply to the current build.
+    #[serde(default)]
+    pub revalidation_reason: Option<String>,
     pub components: Vec<String>,
     pub disc_fingerprint: Option<String>,
     pub scenario: Scenario,
     pub hypotheses: Vec<Hypothesis>,
     pub experiments: Vec<Experiment>,
     pub manual_verification: Vec<ManualVerification>,
+}
+
+fn default_evidence_status() -> String {
+    "untracked".to_owned()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -199,6 +229,7 @@ pub fn execute(command: DiagnoseCommand) -> Result<(), Box<dyn std::error::Error
             video_standard,
             instructions,
             click_events,
+            symptom_reproduced,
         } => run(
             &incident,
             &rom,
@@ -208,6 +239,7 @@ pub fn execute(command: DiagnoseCommand) -> Result<(), Box<dyn std::error::Error
             video_standard.as_deref(),
             instructions,
             &click_events,
+            symptom_reproduced,
         ),
         DiagnoseCommand::Compare { left, right } => compare(&left, &right),
         DiagnoseCommand::History {
@@ -215,7 +247,11 @@ pub fn execute(command: DiagnoseCommand) -> Result<(), Box<dyn std::error::Error
             include_local,
             context,
         } => history(&query, include_local, context.as_deref()),
-        DiagnoseCommand::Verify { incident } => verify(&incident),
+        DiagnoseCommand::Verify {
+            incident,
+            accepted,
+            notes,
+        } => verify(&incident, accepted, notes.as_deref()),
         DiagnoseCommand::Promote {
             incident,
             reproduced,
@@ -255,6 +291,11 @@ fn init(
         symptom,
         expected,
         status: "new".to_owned(),
+        reported_revision: git_text(&["rev-parse", "HEAD"]),
+        last_reproduced_revision: None,
+        last_verified_revision: None,
+        evidence_status: "reported-current".to_owned(),
+        revalidation_reason: None,
         components,
         disc_fingerprint: fingerprint,
         scenario: Scenario::default(),
@@ -285,6 +326,7 @@ fn run(
     video_standard: Option<&str>,
     instructions: u64,
     click_events: &[String],
+    symptom_reproduced: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = incident_directory(incident_path);
     let incident_file = directory.join("incident.json");
@@ -336,6 +378,9 @@ fn run(
         input_events: click_events.to_vec(),
     };
     let context = current_context(&incident, dvc_rom, instructions)?;
+    if symptom_reproduced {
+        mark_reproduced(&mut incident, &context.base_revision);
+    }
     write_json(&run_dir.join("context.json"), &context)?;
     write_json(&incident_file, &incident)?;
     write_json(
@@ -500,9 +545,28 @@ fn history(
         if haystack.contains(&query) {
             found += 1;
             println!(
-                "{} [{}] {} — {}",
-                incident.id, incident.status, incident.title, incident.symptom
+                "{} [{}; evidence={}] {} — {}",
+                incident.id,
+                incident.status,
+                incident.evidence_status,
+                incident.title,
+                incident.symptom
             );
+            println!(
+                "  revisions: reported={} reproduced={} verified={}",
+                incident.reported_revision.as_deref().unwrap_or("unknown"),
+                incident
+                    .last_reproduced_revision
+                    .as_deref()
+                    .unwrap_or("never"),
+                incident
+                    .last_verified_revision
+                    .as_deref()
+                    .unwrap_or("never")
+            );
+            if let Some(reason) = &incident.revalidation_reason {
+                println!("  revalidation: {reason}");
+            }
             for (index, experiment) in incident.experiments.iter().enumerate() {
                 let relation = proposed
                     .as_ref()
@@ -526,14 +590,41 @@ fn history(
     Ok(())
 }
 
-fn verify(incident_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+fn verify(
+    incident_path: &Path,
+    accepted: bool,
+    notes: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let directory = incident_directory(incident_path);
-    let incident: Incident = read_json(&directory.join("incident.json"))?;
+    let incident_file = directory.join("incident.json");
+    let mut incident: Incident = read_json(&incident_file)?;
+    if accepted {
+        let revision = git_text(&["rev-parse", "HEAD"]).unwrap_or_else(|| "unborn".to_owned());
+        mark_verified(
+            &mut incident,
+            &revision,
+            notes.unwrap_or("Expected behavior accepted by manual testing."),
+        );
+        write_json(&incident_file, &incident)?;
+    }
     let mut lines = vec![
         format!("# Verification: {}", incident.title),
         String::new(),
         format!("Reported symptom: {}", incident.symptom),
         format!("Expected result: {}", incident.expected),
+        format!(
+            "Revision evidence: reported={}, reproduced={}, verified={}, status={}",
+            incident.reported_revision.as_deref().unwrap_or("unknown"),
+            incident
+                .last_reproduced_revision
+                .as_deref()
+                .unwrap_or("never"),
+            incident
+                .last_verified_revision
+                .as_deref()
+                .unwrap_or("never"),
+            incident.evidence_status
+        ),
         String::new(),
         "## Exact manual check".to_owned(),
         String::new(),
@@ -571,7 +662,12 @@ fn promote(incident_path: &Path, reproduced: bool) -> Result<(), Box<dyn std::er
     }
     let directory = incident_directory(incident_path);
     let mut incident: Incident = read_json(&directory.join("incident.json"))?;
-    incident.status = "reproduced".to_owned();
+    let revision = incident
+        .last_reproduced_revision
+        .clone()
+        .or_else(|| git_text(&["rev-parse", "HEAD"]))
+        .unwrap_or_else(|| "unborn".to_owned());
+    mark_reproduced(&mut incident, &revision);
     validate_id(&incident.id)?;
     std::fs::create_dir_all(TRACKED_ROOT)?;
     let destination = Path::new(TRACKED_ROOT).join(format!("{}.json", incident.id));
@@ -600,8 +696,15 @@ fn report() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|incident| incident.status != "resolved")
     {
         println!(
-            "- {}: {} [{}]",
-            incident.title, incident.symptom, incident.status
+            "- {}: {} [{}; evidence={}; last reproduced={}]",
+            incident.title,
+            incident.symptom,
+            incident.status,
+            incident.evidence_status,
+            incident
+                .last_reproduced_revision
+                .as_deref()
+                .unwrap_or("never")
         );
     }
     Ok(())
@@ -617,6 +720,25 @@ fn classify_context(prior: &ExperimentContext, current: &ExperimentContext) -> C
     } else {
         ContextRelation::Related
     }
+}
+
+fn mark_reproduced(incident: &mut Incident, revision: &str) {
+    incident.status = "reproduced".to_owned();
+    incident.last_reproduced_revision = Some(revision.to_owned());
+    incident.evidence_status = "current".to_owned();
+    incident.revalidation_reason = None;
+}
+
+fn mark_verified(incident: &mut Incident, revision: &str, notes: &str) {
+    incident.status = "resolved".to_owned();
+    incident.last_verified_revision = Some(revision.to_owned());
+    incident.evidence_status = "current".to_owned();
+    incident.revalidation_reason = None;
+    incident.manual_verification.push(ManualVerification {
+        result: "accepted".to_owned(),
+        revision: revision.to_owned(),
+        notes: notes.to_owned(),
+    });
 }
 
 fn neighboring_checks(components: &[String]) -> Vec<&'static str> {
@@ -797,6 +919,73 @@ mod tests {
     }
 
     #[test]
+    fn legacy_incidents_load_with_explicitly_untracked_revision_evidence() {
+        let incident: Incident = serde_json::from_value(serde_json::json!({
+            "schema_version": 1,
+            "id": "legacy",
+            "title": "title",
+            "symptom": "symptom",
+            "expected": "expected",
+            "status": "new",
+            "components": [],
+            "disc_fingerprint": null,
+            "scenario": {
+                "model": null,
+                "video_standard": null,
+                "dvc": null,
+                "instruction_limit": null,
+                "input_events": []
+            },
+            "hypotheses": [],
+            "experiments": [],
+            "manual_verification": []
+        }))
+        .unwrap();
+
+        assert_eq!(incident.reported_revision, None);
+        assert_eq!(incident.last_reproduced_revision, None);
+        assert_eq!(incident.last_verified_revision, None);
+        assert_eq!(incident.evidence_status, "untracked");
+    }
+
+    #[test]
+    fn reproduction_and_manual_acceptance_record_distinct_revisions() {
+        let mut incident = Incident {
+            schema_version: 1,
+            id: "revision-test".into(),
+            title: "title".into(),
+            symptom: "symptom".into(),
+            expected: "expected".into(),
+            status: "new".into(),
+            reported_revision: Some("report".into()),
+            last_reproduced_revision: None,
+            last_verified_revision: None,
+            evidence_status: "reported-current".into(),
+            revalidation_reason: Some("old prerequisite".into()),
+            components: Vec::new(),
+            disc_fingerprint: None,
+            scenario: Scenario::default(),
+            hypotheses: Vec::new(),
+            experiments: Vec::new(),
+            manual_verification: Vec::new(),
+        };
+
+        mark_reproduced(&mut incident, "reproduce");
+        assert_eq!(
+            incident.last_reproduced_revision.as_deref(),
+            Some("reproduce")
+        );
+        assert_eq!(incident.last_verified_revision, None);
+        assert_eq!(incident.status, "reproduced");
+
+        mark_verified(&mut incident, "verify", "manual pass");
+        assert_eq!(incident.last_verified_revision.as_deref(), Some("verify"));
+        assert_eq!(incident.status, "resolved");
+        assert_eq!(incident.manual_verification.len(), 1);
+        assert_eq!(incident.manual_verification[0].notes, "manual pass");
+    }
+
+    #[test]
     fn tracked_incident_schema_has_no_host_path_field() {
         let incident = Incident {
             schema_version: 1,
@@ -805,6 +994,11 @@ mod tests {
             symptom: "symptom".into(),
             expected: "expected".into(),
             status: "reproduced".into(),
+            reported_revision: Some("abc".into()),
+            last_reproduced_revision: Some("abc".into()),
+            last_verified_revision: None,
+            evidence_status: "current".into(),
+            revalidation_reason: None,
             components: vec!["cdic".into()],
             disc_fingerprint: Some("hash".into()),
             scenario: Scenario::default(),

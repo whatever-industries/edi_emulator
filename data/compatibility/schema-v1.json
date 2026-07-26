@@ -11,6 +11,10 @@
     "symptom",
     "expected",
     "status",
+    "reported_revision",
+    "last_reproduced_revision",
+    "last_verified_revision",
+    "evidence_status",
     "components",
     "scenario",
     "hypotheses",
@@ -24,6 +28,19 @@
     "symptom": { "type": "string" },
     "expected": { "type": "string" },
     "status": { "type": "string" },
+    "reported_revision": { "type": ["string", "null"] },
+    "last_reproduced_revision": { "type": ["string", "null"] },
+    "last_verified_revision": { "type": ["string", "null"] },
+    "evidence_status": {
+      "enum": [
+        "reported-current",
+        "current",
+        "needs-revalidation",
+        "historical",
+        "untracked"
+      ]
+    },
+    "revalidation_reason": { "type": ["string", "null"] },
     "components": {
       "type": "array",
       "items": { "type": "string" },

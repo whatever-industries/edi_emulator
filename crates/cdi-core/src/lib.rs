@@ -20,7 +20,8 @@ pub use board::{BoardDef, DeviceKind, ModelDef, VideoStandard};
 pub use diagnostics::{
     CpuDiagnosticSnapshot, DisplayProvenanceSnapshot, DmaChannelDiagnosticSnapshot,
     DmaDiagnosticSnapshot, InterruptDiagnosticSnapshot, MachineDiagnosticEvent,
-    MachineDiagnosticSnapshot, Mcd212DiagnosticSnapshot,
+    MachineDiagnosticSnapshot, Mcd212DiagnosticSnapshot, PclDataKind, PclDiagnosticSnapshot,
+    PclTransition,
 };
 pub use dvc::{DvcConfig, DvcKind, DvcStats, Vmpeg};
 pub use machine::{Machine, MachineBus};

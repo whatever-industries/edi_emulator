@@ -183,8 +183,10 @@ in the material assessed so far, document this private SLAVE/CDAP byte
 protocol; the values above come from firmware and BIOS disassembly plus the
 runtime trace.
 
-The archive contains 187 PDFs; the assessed source map and resulting emulator
-requirements are tracked in `icdia-archive-assessment.md`. In particular,
+The archive contains 187 PDFs. The historical source map is
+`docs/icdia-archive-assessment.md`; current requirements and evidence status
+are tracked in `docs/specification-research.md` and
+`data/compatibility/compliance-matrix.json`. In particular,
 `docs/pointing_devices.pdf` specifies a relative mouse as signed deltas with
 packets emitted only for motion or button transitions. This corroborates the
 relative frontend/HLE integration used here, while the SLAVE's host-side
@@ -214,6 +216,36 @@ The settled HLE packets retain the BIOS-verified Mono-I encoding:
 retained PLAY launch still adds bit 6 (`B0 00 42 15`). The lower-level
 open/close/spin-up phases observed on real SERVO links remain future
 transport-state work.
+
+### Service-manual drive/SERVO contract
+
+The CD-i 205 service manual independently documents the lower-level topology
+at PDF pp. 79-81. The host MC68070 talks to the SLAVE MC68HC05 over its
+address/data bus; the SLAVE talks to a second MC68HC05 drive processor over
+SPI (`SCK`, `MOSI`, `MISO`, `SPISS`). For drive traffic the SLAVE enters a
+“transparent mode”: it validates neither direction and forwards the entire
+four-byte message.
+
+Each message contains one command byte followed by three data bytes. The
+command byte has its high bit set; each data byte has its high bit clear. The
+documented request/reply families are:
+
+| Command | Meaning |
+|---|---|
+| `A0` | CD status |
+| `A1` | absolute time as BCD minute/second/frame |
+| `A2` | BCD track/index |
+| `A3` | drive software version |
+| `A4` | echo the received command |
+| `A5` | drive error, including focus and radial errors |
+| `AB` | service mode command |
+
+This does not replace the firmware-derived channel-3 `B0` CDAP conversation:
+it constrains the missing physical-drive side behind it. A future complete
+transport state machine should preserve the four-byte forwarding boundary,
+model the second drive MCU's status transitions, and let the SLAVE transform
+or expose them exactly as its firmware does. It should not synthesize
+open/close/spin-up timing directly in the frontend.
 
 ### ch2 payload forms (`0x048D..0x0511`)
 
@@ -253,6 +285,8 @@ transport-state work.
 
 1. Trace main-loop consumers of `$55/$5A/$5D/$63` (search the disasm) to
    map flag → behavior (motor via SCI to SERVO, status byte enqueue).
-2. Decode the lower-level SERVO transition that produces B0 bit 6, then
+2. Disassemble the matching SERVO firmware and correlate its four-byte
+   `A0..A5`/`AB` traffic with the service-manual definitions.
+3. Decode the lower-level SERVO transition that produces B0 bit 6, then
    replace the retained-mode HLE shortcut with the complete transport state
    machine.

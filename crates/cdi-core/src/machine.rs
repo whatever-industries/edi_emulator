@@ -18,6 +18,7 @@ use crate::diagnostics::{
     CpuDiagnosticSnapshot, DiagnosticProbe, DisplayProvenanceSnapshot,
     DmaChannelDiagnosticSnapshot, DmaDiagnosticSnapshot, InterruptDiagnosticSnapshot,
     MachineDiagnosticEvent, MachineDiagnosticSnapshot, Mcd212DiagnosticSnapshot,
+    PclOwnershipTracker, RamDiagnosticRegion,
 };
 use crate::dvc::{DvcConfig, DvcKind, DvcStats, Vmpeg};
 use crate::mcd212::Mcd212;
@@ -32,6 +33,33 @@ const DMA_SINGLE_ADDRESS_WORD_CYCLES: u64 = 6;
 const PAGE_SHIFT: u32 = 12;
 const PAGE_COUNT: usize = 1 << (24 - PAGE_SHIFT); // 4096 pages / 16 MB
 const ONCHIP_BASE: u32 = 0x8000_0000;
+
+#[derive(Debug, Clone, Copy)]
+struct DmaDiagnosticObservation {
+    channel: u8,
+    memory_address: u32,
+    bytes: u32,
+    device_address_or_target: u32,
+    to_memory: bool,
+    completed: bool,
+    payload_hash: u64,
+    transport_payload_hash: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DvcDmaDiagnosticInFlight {
+    memory_address: u32,
+    next_address: u32,
+    bytes: u32,
+    target: u32,
+    payload_hash: u64,
+}
+
+#[derive(Debug, Default)]
+struct DmaDiagnosticCapture {
+    pending: Vec<DmaDiagnosticObservation>,
+    dvc_in_flight: Option<DvcDmaDiagnosticInFlight>,
+}
 
 /// Stub identifiers for devices that are not yet implemented; accesses are
 /// logged so BIOS expectations become visible during bring-up.
@@ -134,6 +162,8 @@ pub struct MachineBus {
     pub dvc: Option<Vmpeg>,
     /// SCC68070-clock budget for the asynchronous DMAREQ2 transfer engine.
     dvc_dma_cycles: u64,
+    /// Present only while bounded diagnostics are enabled.
+    dma_diagnostics: Option<DmaDiagnosticCapture>,
 }
 
 impl MachineBus {
@@ -218,6 +248,7 @@ impl MachineBus {
             disc: None,
             dvc: None,
             dvc_dma_cycles: 0,
+            dma_diagnostics: None,
         };
         bus.build_page_table();
         Ok(bus)
@@ -266,6 +297,9 @@ impl MachineBus {
             dvc.reset();
         }
         self.dvc_dma_cycles = 0;
+        if let Some(capture) = &mut self.dma_diagnostics {
+            *capture = DmaDiagnosticCapture::default();
+        }
     }
 
     pub fn attach_dvc(&mut self, config: DvcConfig) -> Result<(), String> {
@@ -416,6 +450,11 @@ impl MachineBus {
         let count = u32::from(self.periph.dma0_transfer_count());
         let to_memory = self.periph.dma0_operation_control() & 0x80 != 0;
         let mut device_at = usize::from(dma_word & 0x3FFF) & !1;
+        let device_start = device_at as u32;
+        let mut payload_hash = DIAGNOSTIC_HASH_OFFSET;
+        let mut transport_payload_hash = DIAGNOSTIC_HASH_OFFSET;
+        let transfer_bytes = count * 2;
+        let transport_skip = if transfer_bytes == 2324 { 12 } else { 0 };
         log::debug!(
             "cdic dma: {} {count} words at mem {start:#010x} dev {device_at:#06x} head {:02x?}",
             if to_memory { "to-mem" } else { "to-dev" },
@@ -427,11 +466,23 @@ impl MachineBus {
             if to_memory {
                 let hi = self.cdic.ram[device_at & 0x3FFF];
                 let lo = self.cdic.ram[(device_at + 1) & 0x3FFF];
+                payload_hash = diagnostic_hash_byte(diagnostic_hash_byte(payload_hash, hi), lo);
+                for (byte_offset, byte) in [(i * 2, hi), (i * 2 + 1, lo)] {
+                    if byte_offset >= transport_skip {
+                        transport_payload_hash = diagnostic_hash_byte(transport_payload_hash, byte);
+                    }
+                }
                 self.raw_write8(mem_addr, hi);
                 self.raw_write8(mem_addr.wrapping_add(1), lo);
             } else {
                 let hi = self.raw_read8(mem_addr);
                 let lo = self.raw_read8(mem_addr.wrapping_add(1));
+                payload_hash = diagnostic_hash_byte(diagnostic_hash_byte(payload_hash, hi), lo);
+                for (byte_offset, byte) in [(i * 2, hi), (i * 2 + 1, lo)] {
+                    if byte_offset >= transport_skip {
+                        transport_payload_hash = diagnostic_hash_byte(transport_payload_hash, byte);
+                    }
+                }
                 self.cdic.ram[device_at & 0x3FFF] = hi;
                 self.cdic.ram[(device_at + 1) & 0x3FFF] = lo;
             }
@@ -439,6 +490,18 @@ impl MachineBus {
         }
         self.periph
             .set_dma0_memory_address(start.wrapping_add(count * 2));
+        if let Some(capture) = &mut self.dma_diagnostics {
+            capture.pending.push(DmaDiagnosticObservation {
+                channel: 0,
+                memory_address: start,
+                bytes: count * 2,
+                device_address_or_target: device_start,
+                to_memory,
+                completed: true,
+                payload_hash,
+                transport_payload_hash,
+            });
+        }
     }
 
     /// Advance SCC68070 DMA channel 2 (the second register block) by elapsed
@@ -449,6 +512,7 @@ impl MachineBus {
         let requested = self.dvc.as_ref().is_some_and(Vmpeg::dma_requested);
         if !self.periph.dma1_active() {
             self.dvc_dma_cycles = 0;
+            self.finish_dvc_dma_diagnostic(false);
             return 0;
         }
         if !requested {
@@ -463,6 +527,7 @@ impl MachineBus {
             if let Some(dvc) = &mut self.dvc {
                 dvc.finish_dma();
             }
+            self.finish_dvc_dma_diagnostic(false);
             return 0;
         }
 
@@ -476,6 +541,7 @@ impl MachineBus {
                 self.raw_read8(address),
                 self.raw_read8(address.wrapping_add(1)),
             ]);
+            self.observe_dvc_dma_word(address, word);
             if let Some(dvc) = &mut self.dvc {
                 dvc.push_dma_word(word);
             }
@@ -485,6 +551,7 @@ impl MachineBus {
                 if let Some(dvc) = &mut self.dvc {
                     dvc.finish_dma();
                 }
+                self.finish_dvc_dma_diagnostic(true);
                 break;
             }
             if !self.dvc.as_ref().is_some_and(Vmpeg::dma_requested) {
@@ -496,6 +563,77 @@ impl MachineBus {
             }
         }
         words
+    }
+
+    fn observe_dvc_dma_word(&mut self, address: u32, word: u16) {
+        let target = self
+            .dvc
+            .as_ref()
+            .map_or(0, |dvc| u32::from(dvc.register_snapshot().dma_target));
+        let Some(capture) = &mut self.dma_diagnostics else {
+            return;
+        };
+        let discontinuity = capture.dvc_in_flight.is_some_and(|in_flight| {
+            in_flight.next_address != address || in_flight.target != target
+        });
+        if discontinuity {
+            let in_flight = capture.dvc_in_flight.take().expect("checked above");
+            capture.pending.push(dvc_dma_observation(in_flight, false));
+        }
+        let in_flight = capture
+            .dvc_in_flight
+            .get_or_insert(DvcDmaDiagnosticInFlight {
+                memory_address: address,
+                next_address: address,
+                bytes: 0,
+                target,
+                payload_hash: DIAGNOSTIC_HASH_OFFSET,
+            });
+        for byte in word.to_be_bytes() {
+            in_flight.payload_hash = diagnostic_hash_byte(in_flight.payload_hash, byte);
+        }
+        in_flight.bytes += 2;
+        in_flight.next_address = address.wrapping_add(2);
+    }
+
+    fn finish_dvc_dma_diagnostic(&mut self, completed: bool) {
+        let Some(capture) = &mut self.dma_diagnostics else {
+            return;
+        };
+        if let Some(in_flight) = capture.dvc_in_flight.take() {
+            capture
+                .pending
+                .push(dvc_dma_observation(in_flight, completed));
+        }
+    }
+
+    fn set_dma_diagnostics_enabled(&mut self, enabled: bool) {
+        self.dma_diagnostics = enabled.then(DmaDiagnosticCapture::default);
+    }
+
+    fn take_dma_diagnostic_observations(&mut self) -> Vec<DmaDiagnosticObservation> {
+        self.dma_diagnostics
+            .as_mut()
+            .map(|capture| std::mem::take(&mut capture.pending))
+            .unwrap_or_default()
+    }
+
+    fn diagnostic_ram_regions(&self) -> Vec<RamDiagnosticRegion<'_>> {
+        let mut regions = Vec::new();
+        if let Some(dvc) = &self.dvc {
+            regions.push(RamDiagnosticRegion {
+                base: 0x00D0_0000,
+                bytes: dvc.extension_ram(),
+            });
+        }
+        regions.extend(self.regions.iter().filter_map(|region| match *region {
+            Region::Ram { block, base, .. } => Some(RamDiagnosticRegion {
+                base,
+                bytes: &self.ram[block],
+            }),
+            _ => None,
+        }));
+        regions
     }
 
     fn raw_read8(&mut self, addr: u32) -> u8 {
@@ -543,6 +681,7 @@ pub struct Machine {
     pub cpu: cdi_scc68070::Cpu,
     pub bus: MachineBus,
     diagnostic_events: Option<(usize, VecDeque<MachineDiagnosticEvent>, DiagnosticProbe)>,
+    pcl_diagnostics: Option<PclOwnershipTracker>,
 }
 
 impl Machine {
@@ -563,6 +702,7 @@ impl Machine {
             cpu: cdi_scc68070::Cpu::new(),
             bus,
             diagnostic_events: None,
+            pcl_diagnostics: None,
         };
         m.reset();
         Ok(m)
@@ -599,6 +739,9 @@ impl Machine {
     }
 
     pub fn reset(&mut self) {
+        if let Some(tracker) = &mut self.pcl_diagnostics {
+            *tracker = PclOwnershipTracker::default();
+        }
         self.bus.reset();
         self.bus.periph.reset();
         self.bus.slave.reset();
@@ -631,8 +774,12 @@ impl Machine {
     pub fn enable_diagnostics(&mut self, capacity: usize) {
         if capacity == 0 {
             self.diagnostic_events = None;
+            self.pcl_diagnostics = None;
+            self.bus.set_dma_diagnostics_enabled(false);
             return;
         }
+        self.bus.set_dma_diagnostics_enabled(true);
+        self.pcl_diagnostics = Some(PclOwnershipTracker::default());
         self.diagnostic_events = Some((
             capacity,
             VecDeque::with_capacity(capacity.min(4096)),
@@ -766,6 +913,7 @@ impl Machine {
     }
 
     fn sample_diagnostics(&mut self) {
+        self.sample_dma_and_pcl_diagnostics();
         let current = self.diagnostic_probe();
         let Some((_, _, previous)) = &self.diagnostic_events else {
             return;
@@ -830,9 +978,63 @@ impl Machine {
         }
     }
 
+    fn sample_dma_and_pcl_diagnostics(&mut self) {
+        if self.diagnostic_events.is_none() {
+            return;
+        }
+        let observations = self.bus.take_dma_diagnostic_observations();
+        if observations.is_empty() {
+            return;
+        }
+        let cycle = self.cpu.cycles;
+        let mut events = Vec::new();
+        {
+            let Some(tracker) = &mut self.pcl_diagnostics else {
+                return;
+            };
+            let regions = self.bus.diagnostic_ram_regions();
+            events.extend(tracker.sample(cycle, &regions));
+            for observation in observations {
+                let (pcl_addresses, mut ownership_events) =
+                    if observation.channel == 0 && observation.to_memory {
+                        tracker.observe_cdic_dma(
+                            cycle,
+                            &regions,
+                            observation.memory_address,
+                            observation.bytes,
+                        )
+                    } else {
+                        (
+                            tracker.matching_buffers(observation.memory_address, observation.bytes),
+                            Vec::new(),
+                        )
+                    };
+                events.append(&mut ownership_events);
+                events.push(MachineDiagnosticEvent::DmaTransfer {
+                    cycle,
+                    channel: observation.channel,
+                    memory_address: observation.memory_address,
+                    bytes: observation.bytes,
+                    device_address_or_target: observation.device_address_or_target,
+                    to_memory: observation.to_memory,
+                    completed: observation.completed,
+                    payload_hash: observation.payload_hash,
+                    transport_payload_hash: observation.transport_payload_hash,
+                    pcl_addresses,
+                });
+            }
+        }
+        for event in events {
+            self.push_diagnostic_event(event);
+        }
+    }
+
     /// Reset the 68070 and all host-side devices while preserving the
     /// independently powered SLAVE MCU state that requested the reset.
     fn reset_host_preserving_slave(&mut self) {
+        if let Some(tracker) = &mut self.pcl_diagnostics {
+            *tracker = PclOwnershipTracker::default();
+        }
         self.bus.reset();
         self.bus.periph.reset();
         self.bus.mcd212.reset();
@@ -938,17 +1140,41 @@ impl Machine {
     }
 }
 
+fn dvc_dma_observation(
+    in_flight: DvcDmaDiagnosticInFlight,
+    completed: bool,
+) -> DmaDiagnosticObservation {
+    DmaDiagnosticObservation {
+        channel: 1,
+        memory_address: in_flight.memory_address,
+        bytes: in_flight.bytes,
+        device_address_or_target: in_flight.target,
+        to_memory: false,
+        completed,
+        payload_hash: in_flight.payload_hash,
+        transport_payload_hash: in_flight.payload_hash,
+    }
+}
+
+const DIAGNOSTIC_HASH_OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
+const DIAGNOSTIC_HASH_PRIME: u64 = 0x0000_0100_0000_01B3;
+
+fn diagnostic_hash_byte(hash: u64, byte: u8) -> u64 {
+    (hash ^ u64::from(byte)).wrapping_mul(DIAGNOSTIC_HASH_PRIME)
+}
+
 fn diagnostic_hash_bytes(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xCBF2_9CE4_8422_2325u64, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01B3)
+    bytes.iter().fold(DIAGNOSTIC_HASH_OFFSET, |hash, byte| {
+        diagnostic_hash_byte(hash, *byte)
     })
 }
 
 fn diagnostic_hash_pixels(pixels: &[u32]) -> u64 {
-    pixels.iter().fold(0xCBF2_9CE4_8422_2325u64, |hash, pixel| {
-        pixel.to_be_bytes().into_iter().fold(hash, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01B3)
-        })
+    pixels.iter().fold(DIAGNOSTIC_HASH_OFFSET, |hash, pixel| {
+        pixel
+            .to_be_bytes()
+            .into_iter()
+            .fold(hash, diagnostic_hash_byte)
     })
 }
 
@@ -1188,6 +1414,7 @@ mod tests {
         let mut m = machine();
         m.attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
             .unwrap();
+        m.set_dma_diagnostics_enabled(true);
         let packet = [0x00, 0x00, 0x01, 0xE0, 0x00, 0x04, 0x0F, b'a', b'b', b'c'];
         for (i, byte) in packet.iter().copied().enumerate() {
             m.raw_write8(0x3000 + i as u32, byte);
@@ -1211,6 +1438,14 @@ mod tests {
         assert_eq!(stats.dma_words, 5);
         assert_eq!(stats.video_pes_packets, 1);
         assert_eq!(m.periph.read8(0x4040) & 0x80, 0x80);
+        let observations = m.take_dma_diagnostic_observations();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].memory_address, 0x3000);
+        assert_eq!(observations[0].bytes, packet.len() as u32);
+        assert_eq!(
+            observations[0].transport_payload_hash,
+            diagnostic_hash_bytes(&packet)
+        );
     }
 
     #[test]

@@ -7,7 +7,8 @@ Read these files top-to-bottom before changing the emulator:
 3. `docs/display-geometry.md`
 4. `docs/debugging-workflow.md`
 5. `docs/core-compatibility-audit.md`
-6. `TODO.md`
+6. `docs/specification-research.md`
+7. `TODO.md`
 
 Whenever a compatibility problem is reported, open or resume a diagnostic
 incident using `docs/debugging-workflow.md` before changing emulation

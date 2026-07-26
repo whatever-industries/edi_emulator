@@ -5,6 +5,12 @@ reported. Its purpose is to locate the first inaccurate emulation stage and
 make a generalized device correction. Diagnostics are observational: they
 must never select crops, delays, status values, or title behavior.
 
+Consult `docs/specification-research.md` before forming a new hardware
+hypothesis. Its compliance matrix distinguishes normative specifications,
+Philips implementation notes, historical errata, and weaker observational
+evidence. A document finding is not itself authorization to change behavior:
+it still needs a falsifying test against the affected device boundary.
+
 ## Start and reproduce
 
 1. Search `diagnose history` for the title, symptom, and affected components.
@@ -19,6 +25,11 @@ must never select crops, delays, status values, or title behavior.
      --disc "/local/path/title.cue"
    ```
 
+   `diagnose init` records the exact current Git commit as
+   `reported_revision`. If the report was made against an older or unknown
+   build, replace that field with the known commit or explicitly record
+   `unknown-pre-REVISION`; never silently assign a guessed commit.
+
 3. Record competing hardware hypotheses in `incident.json`. Every hypothesis
    needs supporting evidence, contradicting evidence, a falsifying test, and
    specification/firmware/reference citations.
@@ -32,6 +43,18 @@ must never select crops, delays, status values, or title behavior.
      --rom roms/cdi220b.rom --disc "/local/path/title.cue" \
      --video-standard pal --instructions 1000000
    ```
+
+   A successful run captures evidence but does not by itself prove that the
+   symptom occurred. Pass `--symptom-reproduced` only after inspecting the run;
+   that records `last_reproduced_revision` and marks the evidence current.
+   Manual acceptance is recorded explicitly:
+
+   ```sh
+   cargo run -p cdi-cli -- diagnose verify INCIDENT \
+     --accepted --notes "Expected behavior confirmed in the requested pass"
+   ```
+
+   This records `last_verified_revision` at the checked-out commit.
 
 5. Compare the two `evidence.json` files. If they diverge before the reported
    symptom, first investigate the nondeterminism.
@@ -102,6 +125,12 @@ or upstream-device correction makes prior conclusions candidates for
 revalidation. Preserve compact failed-attempt records after resolution; full
 temporary patches stay under ignored local diagnostics.
 
+When a material core/frontend checkpoint changes an incident's prerequisites,
+set `evidence_status` to `needs-revalidation`, record the checkpoint and reason
+in `revalidation_reason`, and retain the original reported/reproduced
+revisions. This is deliberately not the same as resolving or invalidating the
+bug: the earlier observation becomes potentially stale evidence until rerun.
+
 ## Generalized correction and impact
 
 Forbidden fixes include title-name branches, pixel-content cropping,
@@ -129,6 +158,7 @@ Use this impact matrix for neighboring regressions:
 ## Verification and handoff
 
 `diagnose verify INCIDENT` writes tailored manual steps and neighboring checks.
+With `--accepted`, it also records the accepting commit and note.
 Every change handoff must say:
 
 - what changed and why;

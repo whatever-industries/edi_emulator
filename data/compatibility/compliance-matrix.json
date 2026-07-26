@@ -67,7 +67,7 @@
     {
       "requirement": "Player timing derives from the selected PAL or NTSC board clock while independent disc, field, and system-tick domains remain asynchronous",
       "subsystem": "machine-timing",
-      "status": "gap",
+      "status": "implemented-tested",
       "specification": [
         "Philips CD-i 205 service manual PDF pages 66 and 96",
         "MCD212 Table 5-5",
@@ -113,13 +113,12 @@
       ],
       "firmware_evidence": [],
       "source_symbols": [
-        "cdi_core::mcd212"
+        "cdi_core::mcd212::Mcd212"
       ],
-      "tests": [],
-      "known_gaps": [
-        "The current accumulator yields twelve fields at 50 Hz but ten fields at 60 Hz",
-        "PAL and NTSC register-level blink-period tests are pending"
-      ]
+      "tests": [
+        "mcd212::tests::cursor_blink_units_are_twelve_fields_in_pal_and_ntsc"
+      ],
+      "known_gaps": []
     },
     {
       "requirement": "CDFM does not reuse a full PCL until the native consumer releases it",

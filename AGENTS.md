@@ -82,10 +82,15 @@ Update that document's status and next action whenever a checkpoint is reached.
 
 - Commit completed work directly to `main` unless the user explicitly requests
   another branch.
+- Optimized local test builds may be created from a clean local commit before
+  it is pushed, so manual testing can validate that exact revision.
+- Push `main` only at a manually accepted stable checkpoint or when the user
+  explicitly requests a push. Do not push every iterative commit.
 - If a temporary branch is necessary, merge it into `main`, push `main`, and
   delete the temporary local and remote branch before handoff.
-- Build release artifacts only after the corresponding `main` push succeeds,
-  so every delivered build comes from the published `main` revision.
+- Build published or distributable release artifacts only after the
+  corresponding `main` push succeeds. A local test application is not a
+  published release artifact.
 - Continue asking before commits unless the active request explicitly
   authorizes them.
 

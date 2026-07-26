@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "alien-gate-hud-lower-edge-missing",
+  "title": "Alien Gate HUD lower edge is missing",
+  "symptom": "The lower pixels of the elevated gameplay HUD are absent, removing the bottoms of labels such as SHIELD. The cause could be source drawing, transfer, origin, clipping, or plane composition; it is not yet classified as a layering defect.",
+  "expected": "Real-hardware footage shows authored windowboxed gameplay with a bottom black bar and a complete elevated HUD. Projectile sprites may cross the playfield boundary, but the background and enemy face remain below the HUD.",
+  "status": "reproduced",
+  "reported_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+  "last_reproduced_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": "The missing HUD pixels were manually reproduced on the current diagnostic working tree. The real-hardware reference establishes presentation expectations but does not identify the faulty emulation stage.",
+  "components": [
+    "mcd212",
+    "display-provenance"
+  ],
+  "disc_fingerprint": "4a3afad612dc164380254f9fbcce5e62fdb03b71",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega present but title uses base graphics",
+    "instruction_limit": null,
+    "input_events": [
+      "enter gameplay",
+      "pause to inspect HUD and sprite boundaries"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "first-display-stage-divergence",
+      "hardware_explanation": "The missing HUD edge may originate in guest drawing or transfer, MCD212 line origin/clipping, plane composition, or final aperture presentation. No stage is preferred until provenance is captured.",
+      "supporting_evidence": [
+        "The current screenshot lacks the lower portions of HUD lettering.",
+        "The user-supplied real-console video shows the full HUD, authored windowboxing and bottom bar, and projectile sprites crossing outside the playfield."
+      ],
+      "contradicting_evidence": [
+        "No current individual-plane, composed-raster, or frontend-stage capture exists.",
+        "The expected projectile spill proves that some content crossing the playfield boundary is intentional, so a global crop conclusion would be premature."
+      ],
+      "falsifying_test": "Capture the source drawmap, both MCD212 planes, composed hardware raster/aperture, and frontend output at the same gameplay frame. The first stage missing the HUD pixels identifies whether this is source drawing, transfer, clipping, composition, or presentation.",
+      "citations": [
+        "User-supplied real-CD-i gameplay reference: https://www.youtube.com/watch?v=Vj0GFhxTsi0",
+        "docs/debugging-workflow.md display provenance stages"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reproduced",
+      "revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+      "notes": "The lower HUD pixels are missing in current gameplay. Windowboxing, the bottom black bar, the elevated HUD position, and projectile spill are retained as expected behavior from the real-hardware reference."
+    }
+  ]
+}

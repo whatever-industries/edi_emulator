@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "id": "player-menu-pal-ntsc-sizing",
+  "title": "PAL and NTSC player-menu sizing",
+  "symptom": "The NTSC CD-i 220 player menu appears vertically larger or more stretched than the PAL player menu when each is presented at 4:3.",
+  "expected": "Each player ROM uses its hardware-correct 525/60 or 625/50 raster and pixel aspect; any remaining layout difference is attributable to the corresponding BIOS artwork rather than frontend distortion.",
+  "status": "reported-unconfirmed",
+  "reported_revision": "ac20dcd",
+  "last_reproduced_revision": null,
+  "last_verified_revision": null,
+  "evidence_status": "reported-current",
+  "revalidation_reason": null,
+  "components": [
+    "mcd212",
+    "frontend",
+    "firmware"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal-and-ntsc",
+    "dvc": null,
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "frontend-pixel-aspect-or-aperture",
+      "hardware_explanation": "The 525-line presentation path may apply an incorrect vertical scale or aperture relative to the 625-line path.",
+      "supporting_evidence": [
+        "Side-by-side 4:3 screenshots make the NTSC menu artwork appear taller and more vertically crowded."
+      ],
+      "contradicting_evidence": [
+        "The screenshots come from different PAL and NTSC player firmware, which may intentionally lay out the shell differently.",
+        "No real-hardware capture or common source asset has yet established the expected relative dimensions."
+      ],
+      "falsifying_test": "Capture the live MCD212 timing and aperture for both ROMs, verify frontend pixel-aspect math from the specifications, and compare against real-hardware captures or measurements of a common geometric element.",
+      "citations": [
+        "docs/display-geometry.md",
+        "MCD212 specification sections 5.1-5.8",
+        "Green Book V.2.2, V.2.3, and V.4.8"
+      ]
+    },
+    {
+      "id": "authored-firmware-layout",
+      "hardware_explanation": "The PAL and NTSC player ROMs intentionally use different coordinates or artwork proportions for their different active-line counts.",
+      "supporting_evidence": [
+        "The Philips logo, background-disc spacing, controls, and pointer placement differ together rather than looking like a uniform scale of one identical image."
+      ],
+      "contradicting_evidence": [
+        "A frontend scaling error could still exaggerate an intentional layout difference."
+      ],
+      "falsifying_test": "Compare raw composed rasters before frontend scaling and inspect the firmware's MCD212/DCA positioning for corresponding menu elements.",
+      "citations": [
+        "docs/display-geometry.md"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported-unconfirmed",
+      "revision": "ac20dcd",
+      "notes": "User supplied PAL and NTSC player-menu screenshots and explicitly marked the possible NTSC stretching as uncertain."
+    }
+  ]
+}

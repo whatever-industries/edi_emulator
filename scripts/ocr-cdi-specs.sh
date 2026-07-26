@@ -24,6 +24,36 @@ tmp_manifest="$output_root/manifest.tsv.new"
 : >"$tmp_manifest"
 printf 'sha256\tpages\tmethod\tsource\ttext\n' >>"$tmp_manifest"
 
+text_is_useful() {
+    candidate=$1
+    page_count=$2
+    [ -f "$candidate" ] || return 1
+
+    visible=$(tr -d '[:space:]' <"$candidate" | wc -c | tr -d ' ')
+    [ "$visible" -ge "$((page_count * 40))" ] || return 1
+
+    # Some scans expose only a repeated digitizer watermark to pdftotext.
+    # Character count alone makes those files look searchable. Require a
+    # modest number of distinct, non-empty lines as well.
+    distinct_lines=$(
+        awk '
+            {
+                line = $0
+                gsub(/[[:space:]]+/, " ", line)
+                sub(/^ /, "", line)
+                sub(/ $/, "", line)
+                if (length(line) >= 4 && !seen[line]++) {
+                    count++
+                }
+            }
+            END { print count + 0 }
+        ' "$candidate"
+    )
+    minimum_lines=$((page_count * 2))
+    [ "$minimum_lines" -ge 12 ] || minimum_lines=12
+    [ "$distinct_lines" -ge "$minimum_lines" ]
+}
+
 find "$source_root" -type f -iname '*.pdf' -print0 |
 while IFS= read -r -d '' pdf; do
     relative=${pdf#"$source_root"/}
@@ -31,31 +61,27 @@ while IFS= read -r -d '' pdf; do
     text_path="$output_root/$stem.txt"
     mkdir -p "$(dirname "$text_path")"
     pages=$(pdfinfo "$pdf" | awk '/^Pages:/ { print $2; exit }')
-    if [ -f "$text_path" ]; then
-        visible=$(tr -d '[:space:]' <"$text_path" | wc -c | tr -d ' ')
-    else
-        visible=0
-    fi
-    if [ "$visible" -ge "$((pages * 40))" ]; then
+    printf 'extracting %s (%s pages)\n' "$relative" "$pages" >&2
+    if text_is_useful "$text_path" "$pages"; then
         method=reused-local
     else
         pdftotext -layout "$pdf" "$text_path"
         method=pdftotext
-        visible=$(tr -d '[:space:]' <"$text_path" | wc -c | tr -d ' ')
     fi
-    if [ "$visible" -lt "$((pages * 40))" ]; then
+    if ! text_is_useful "$text_path" "$pages"; then
         for tool in pdftoppm tesseract; do
             command -v "$tool" >/dev/null 2>&1 || {
                 echo "$relative needs OCR but $tool is unavailable" >&2
                 exit 1
             }
         done
-        page_dir="$output_root/.page"
+        page_dir="$output_root/.page.$$"
         mkdir -p "$page_dir"
         ocr_path="$text_path.ocr-new"
         : >"$ocr_path"
         page_number=1
         while [ "$page_number" -le "$pages" ]; do
+            printf '  OCR page %s/%s\r' "$page_number" "$pages" >&2
             pdftoppm -f "$page_number" -l "$page_number" -r 240 -gray \
                 -singlefile -png "$pdf" "$page_dir/page" >/dev/null 2>&1
             tesseract "$page_dir/page.png" stdout --dpi 240 2>/dev/null >>"$ocr_path"
@@ -63,6 +89,7 @@ while IFS= read -r -d '' pdf; do
             rm -f "$page_dir/page.png"
             page_number=$((page_number + 1))
         done
+        printf '\n' >&2
         rmdir "$page_dir"
         mv "$ocr_path" "$text_path"
         method=tesseract-240dpi

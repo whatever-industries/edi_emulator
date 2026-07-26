@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "id": "sustained-mpeg-transport",
+  "title": "Sustained CDIC-to-DVC MPEG delivery",
+  "symptom": "Several VCD and DVC-heavy titles lose MPEG payloads, macroblock periodically, turn black, or report a valid disc as dirty.",
+  "expected": "The native CDIC to main-RAM/PCL to VMPEG path delivers every selected sector once and in order at hardware-correct timing.",
+  "status": "investigating",
+  "reported_revision": null,
+  "last_reproduced_revision": "ac20dcd+dirty:82e0cb0e0028605d9af685221d1e3c485c38e249d3878c5cb17bd41f3e011773",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": "A headless ac20dcd-plus-diagnostic run reproduces the decoder-side Addams audio/stream errors. The user-visible dirty-disc dialog and exact audible/visible symptom still require a current GUI check.",
+  "components": [
+    "cdic",
+    "dvc",
+    "disc-cdfm",
+    "timing"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": null,
+    "dvc": "vmpega",
+    "instruction_limit": 200000000,
+    "input_events": [
+      "script native menu navigation before sustained playback"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "pcl-reuse-or-drive-response-timing",
+      "hardware_explanation": "Guest PCL buffers are reused before firmware submits their previous MPEG payload, or drive seek/response timing misses the CD-RTOS completion window.",
+      "supporting_evidence": [
+        "The Accused trace observed one complete 2304-byte payload overwritten by the next sector.",
+        "Addams Family Values USA delivered only a fraction of its on-disc Philips Media MPEG before returning to the dirty-disc dialog.",
+        "Temporary nonstandard sector cadences materially changed delivered bytes and frames."
+      ],
+      "contradicting_evidence": [
+        "Changing the nominal 75-sector rate is not a specification-backed correction and did not fully fix the affected titles.",
+        "The 7th Guest sustains working MPEG delivery on the same broad hardware path.",
+        "Current DMA-boundary tracing observes no full-PCL overwrite in either The 7th Guest or Addams Family Values USA."
+      ],
+      "falsifying_test": "Trace CDFM PCB/CIL/PCL ownership and drive completion timing on ac20dcd, then compare the first missing payload against a working sustained-MPEG title.",
+      "citations": [
+        "Green Book VII CDFM SS_Play PCB/CIL/PCL",
+        "White Book Figure III.2",
+        "docs/mpeg-dvc-plan.md"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "historical-payload-loss",
+      "context": {
+        "base_revision": "unknown-pre-ac20dcd",
+        "dirty_diff_hash": "unknown",
+        "component_fingerprints": {},
+        "dependencies": {},
+        "disc_fingerprint": "",
+        "model": "cdi220b",
+        "video_standard": "pal-and-ntsc",
+        "dvc": "vmpega",
+        "scenario": "Accused and Addams Family Values diagnostic runs",
+        "timing": "nominal and temporary 70/60-sector experiments"
+      },
+      "hypothesis_id": "pcl-reuse-or-drive-response-timing",
+      "strategy": "Compare on-disc elementary streams with native-path captures and vary only diagnostic sector cadence.",
+      "symbols": [
+        "cdi_core::cdic",
+        "cdi_core::dvc"
+      ],
+      "assumptions": [
+        "Disc dumps are valid.",
+        "Temporary cadence changes are diagnostic only."
+      ],
+      "expected": "A transport loss appears before MPEG decode when the issue reproduces.",
+      "actual": "One Accused payload was overwritten; affected Addams playback captured only part of the source clip; cadence changes altered but did not eliminate the failure.",
+      "outcome": "partial",
+      "regressions": [],
+      "improvements": [],
+      "reverted": true,
+      "evidence_quality": "high",
+      "confidence": "medium",
+      "applicability": {
+        "conditions": [
+          "Historical pre-ac20dcd CDIC/CDFM scheduling"
+        ],
+        "invalidated_by": [
+          "CDIC, scheduler, CDFM/PCL, or replacement power-state changes"
+        ],
+        "repeat_when": [
+          "Reproducing on ac20dcd or later with exact revision capture"
+        ]
+      }
+    },
+    {
+      "id": "current-pcl-and-payload-comparison",
+      "context": {
+        "base_revision": "ac20dcd",
+        "dirty_diff_hash": "82e0cb0e0028605d9af685221d1e3c485c38e249d3878c5cb17bd41f3e011773",
+        "component_fingerprints": {
+          "addams_disc_sha1": "dd9adb80a89378d97acfecaf50ce20d0f769c442",
+          "seventh_guest_disc_sha1": "451de6f0f71e9b6c3442608c3987837d62aa69a8"
+        },
+        "dependencies": {
+          "diagnostics": "DMA-boundary PCB/CIL/PCL ownership and payload hashes"
+        },
+        "disc_fingerprint": "Addams dd9adb80a89378d97acfecaf50ce20d0f769c442; comparator 7th Guest 451de6f0f71e9b6c3442608c3987837d62aa69a8",
+        "model": "cdi220b",
+        "video_standard": "ntsc Addams; pal 7th Guest",
+        "dvc": "vmpega",
+        "scenario": "150M-instruction Addams VCD feature-path sample versus 650M-instruction The 7th Guest sustained-play sample",
+        "timing": "nominal 75-sector transport; no behavior changes"
+      },
+      "hypothesis_id": "pcl-reuse-or-drive-response-timing",
+      "strategy": "Decode native one-sector PCL chains at DMA boundaries, record fill/release/reconfiguration/overwrite events, and correlate normalized CDIC and VMPEG DMA payload hashes.",
+      "symbols": [
+        "cdi_core::PclDiagnosticSnapshot",
+        "cdi_core::MachineDiagnosticEvent::PclState",
+        "cdi_core::MachineDiagnosticEvent::PclOverwriteRisk",
+        "cdi_core::MachineDiagnosticEvent::DmaTransfer"
+      ],
+      "assumptions": [
+        "PCL_BufSz is a sector count as specified by Green Book.",
+        "The normalized video transport hash excludes the 12-byte pack prefix.",
+        "Diagnostics remain observational and bounded."
+      ],
+      "expected": "If current failure is simple PCL reuse, a producer write occurs while the prior one-sector PCL remains full.",
+      "actual": "No overwrite risk occurred. The 7th Guest completed 1296 packs with zero decoder errors. Addams matched 463 of 464 normalized payloads; the lone audio mismatch at $22CD88 coincided with the first jump to 647 audio and stream errors, and its PCL was discovered only later.",
+      "outcome": "partial",
+      "regressions": [],
+      "improvements": [
+        "Falsifiable ownership events now exist without changing machine behavior.",
+        "The active search is narrowed from global sector cadence to one transient audio-buffer interval."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "ac20dcd device behavior with the diagnostic-only dirty diff",
+          "The exact Addams and The 7th Guest disc fingerprints recorded above"
+        ],
+        "invalidated_by": [
+          "CDIC DMA layout changes",
+          "DVC DMA aggregation changes",
+          "Guest-memory write ordering or CDFM ownership changes"
+        ],
+        "repeat_when": [
+          "Bounded guest-write provenance can cover $22CD88 from CDIC completion through VMPEG DMA",
+          "A current GUI run confirms or disproves the user-visible dirty-disc symptom"
+        ]
+      }
+    }
+  ],
+  "manual_verification": [
+    "Run Addams Family Values USA under NTSC with VMPEG and record whether the dirty-disc dialog still appears.",
+    "Run The 7th Guest Europe under PAL with VMPEG through both post-title videos and into gameplay; note black transitions and audio continuity."
+  ]
+}

@@ -46,6 +46,16 @@ is not. This does not prove the datasheet timing values are wrong. It proves
 that the rest of the emulator does not remain behaviorally correct when all
 device time is advanced in instruction-sized batches under those values.
 
+The Philips documentation pass adds a second constraint to that
+reconstruction. TN 94 says disc/audio, video-field, and system-tick time bases
+are asynchronous. The CD-i 205 service manual specifies a 30.0000/15.000 MHz
+PAL system/CPU clock but a 30.2098 MHz NTSC system clock, matching the
+MCD212's 525-TV timing table. The current global 30/15 MHz scheduler cannot
+represent that distinction. This strengthens the event-interleaving
+hypothesis; it does not justify changing an isolated clock constant while
+devices still advance in instruction-sized batches. See
+`docs/specification-research.md`.
+
 ## Classification
 
 ### Preserve independently
@@ -115,3 +125,9 @@ VSYNC/release path, and SLAVE/input behavior under the legacy SCC68070 timing
 baseline. Together with the accepted seven-stage The 7th Guest run, every
 manual neighboring-title gate required before timing/scheduling
 reconstruction now passes.
+
+On 2026-07-26 the user revalidated Earth Command audio termination and Alien
+Gate gameplay/firing audio on the `ac20dcd` diagnostic working tree. Both
+played without the historical looping fault. Alien Gate's separate missing-HUD
+edge report is display-only and is tracked in
+`data/compatibility/incidents/alien-gate-hud-lower-edge-missing.json`.

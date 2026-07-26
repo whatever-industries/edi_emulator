@@ -25,6 +25,13 @@ aperture drives texture UVs, screenshots, window aspect, and pointer
 endpoints. Raw square pixels remain available separately as a diagnostic;
 normal presentation uses the measured Philips player pixel aspect.
 
+Green Book V.4.8 distinguishes 525-line **monitor** and **TV** outputs.
+Compatibility mode is a centered 360-pixel picture on the 525 TV output but a
+384-pixel picture on the 525 monitor output; the mode-zero meanings are
+reversed. The current CD-i 220 model represents the TV output. A future
+monitor-class player must be an explicit player-model distinction rather than
+an inferred per-title crop.
+
 ## Philips evidence
 
 The local ICDIA technical-note mirror is the primary source. OCR sidecars are
@@ -51,6 +58,14 @@ derived files nor the original documents are redistributed by this project.
   (384 samples in 51.2 us). E-Di stores these exactly as 49/40 and 41/40.
   The note's 320x210 safety area is authoring guidance, not a mandatory
   emulator crop.
+
+TN 093 also says the same bitmap will appear vertically stretched on a
+525-line player and compacted on a 625-line player, and reports that regional
+assets may be authored separately. Consequently, a PAL/NTSC screenshot
+difference is not sufficient to change geometry: compare the exact disc,
+source dimensions, live MCD212/MCD251 state, and presentation boundary first.
+The ongoing source ledger and test queue are in
+`docs/specification-research.md`.
 
 ## The Apprentice diagnosis
 

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "legacy-display-framing-concerns",
+  "title": "Historical per-title display framing concerns",
+  "symptom": "Earlier builds showed inconsistent bars or vertical placement in several PAL/NTSC title screens and clips.",
+  "expected": "The specification-derived MCD212 aperture, player pixel aspect, screenshots, and pointer mapping agree without title-specific cropping.",
+  "status": "needs-revalidation",
+  "reported_revision": null,
+  "last_reproduced_revision": null,
+  "last_verified_revision": null,
+  "evidence_status": "needs-revalidation",
+  "revalidation_reason": "Reports span several pre-ac20dcd display implementations and screenshots without a consistently recorded commit. Recheck only discrepancies that remain visible on ac20dcd or a later build.",
+  "components": [
+    "mcd212",
+    "frontend"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": null,
+    "dvc": null,
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [],
+  "experiments": [],
+  "manual_verification": []
+}

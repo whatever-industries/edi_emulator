@@ -59,6 +59,39 @@ cadence experiments show nonlinear timing sensitivity and were reverted; the
 required fix remains correct 75-sector CDIC/CDFM/PCL handshaking rather than a
 different nominal rate.
 
+The 2026-07-25 specification pass now gives that handshaking investigation a
+precise contract. Green Book R2 VII.4.4.2-VII.4.4.3 says a CIL advances through
+the PCL chain as buffers fill and that a still-full PCL cannot be reused.
+Green Book IX.3.3.3 and Philips TN 098 describe separate circular one-sector
+video/audio chains; `/mv` and `/ma` reset `PCL_Cnt` and `PCL_Ctrl` only after
+consuming a buffer. The next sustained-stream experiment must trace both guest
+ownership fields and the producer/consumer transition. Slowing the 75-sector
+disc clock remains invalid.
+
+The 2026-07-26 read-only trace implements that experiment at DMA boundaries.
+It treats `PCL_BufSz` as a sector count, derives the Form-1/Form-2 capacity,
+discovers circular and sequential chains in main and DVC extension RAM, and
+records producer fill, consumer release, reconfiguration, and overwrite-risk
+events. A synthetic two-PCL ring detects reuse before release. A 650-million
+instruction The 7th Guest comparator observed 1,290 fills, 1,157 releases,
+1,296 VMPEG packs, and zero overwrite or decoder errors. The current Addams
+Family Values USA run also recorded no full-PCL reuse. Of 464 normalized
+CDIC-to-VMPEG payloads, 463 match exactly; one audio payload at `$22CD88`
+differs, and that DMA is the first point at which audio and stream errors jump
+to 647. The buffer still contains the original valid pack immediately after
+the CDIC transfer, while its audio PCL is discovered only later. This narrows
+the next experiment to bounded guest-write provenance between CDIC completion,
+PCL assignment, and DMA2 submission. It does not justify changing the
+75-sector clock or decoder.
+
+Philips TN 088 and TN 102 also separate decoder-transition failures from that
+transport issue. Pause/continue, abort/restart, EOS+SOS in one sector,
+sequence changes, stale B-pictures, and redundant EOS codes each need a
+project-owned synthetic regression. Green Book IX ties first/last-picture and
+old-PCL-release events to display/consumption time, not merely parser input.
+See `docs/specification-research.md` for the cited compliance matrix and test
+order.
+
 Frontend presentation consumes `cdi-core`'s public `DisplayGeometry`, derived
 only from live MCD212 `CF`, `ST`, `FD`, `SM`, field parity, and the player
 standard. Horizontal Compatibility Mode masks 24 double-resolution pixels on
@@ -170,6 +203,8 @@ by `scripts/fetch-mpeg-refs.sh`.
 | Philips FMV extension/recommendation/features documents | local `docs/fmv_extension.pdf`, `docs/cdi_fmv_rec.pdf`, `authoring/fmv_features.pdf` | specification/reference | Cartridge role, external-plane behavior, title recommendations, and hardware/software division |
 | VLC | current upstream, unpinned | GPL study/reference only; no code copied | Confirms VCD uses the same MPEG-1 system/video/audio family, but CD-i needs its own Mode-2 Form-2 sector transport, VMPEG registers, clocks, interrupts, and compositing |
 | MAME issue #1170 / The 7th Guest `cdi_loader` lead | comments through 2025-09-04 | Issue comments reference only; the attached commercial-title module was inspected temporarily and must never be fetched, stored, or committed | Loader presence test uses CSD descriptors rather than a direct DVC register probe; details below |
+| Philips 22ER9141 service manual | local `svcmanuals/22er9141.pdf`, §§4.3-4.5 | service reference | Confirms MPEG-1, 1 MiB extension memory, distinct audio/video/DRAM sections, 68070-fed compressed data, and decoded RGB/audio returned to the base case |
+| Video CD on CD-i Release 4.1 | local `docs_sw/vcd_on_cdi_41.pdf`, pp. 7-9 | Philips/ICDIA application reference | Defines native DVC-required and dirty-disc screens, PSD startup, control behavior, and `CDI/CDI_VCD.APP` filesystem layout |
 
 Known DVC/system firmware hashes (supported binaries are tracked in
 `firmware/`):

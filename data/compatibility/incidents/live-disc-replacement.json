@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "id": "live-disc-replacement",
+  "title": "Disc replacement and second-title boot",
+  "symptom": "Replacing a running PAL title with another PAL title could leave the old application active or repeatedly return to the player shell after Play.",
+  "expected": "First insertion reaches an empty player through a live media-change event; replacing mounted media cold-boots the new disc once while preserving battery-backed saves.",
+  "status": "resolved",
+  "reported_revision": "c4af7cc",
+  "last_reproduced_revision": "775ab2a",
+  "last_verified_revision": "ac20dcd",
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "frontend",
+    "slave",
+    "cdic",
+    "nvram"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": [
+      "boot PAL title",
+      "return to Library",
+      "select second PAL title",
+      "select Play"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "replacement-retains-volatile-title-state",
+      "hardware_explanation": "A reset or live media-change event retains volatile main, CDIC, or DVC state owned by the preceding application; replacement needs a cold player power boundary while NVRAM remains battery-backed.",
+      "supporting_evidence": [
+        "The same saved PAL NVRAM boots the replacement correctly from a cold headless start.",
+        "PAL-to-PAL replacement failed while a player-standard change, which rebuilt more state, could boot.",
+        "Machine::power_cycle on replacement fixed the sequence without clearing the saved game."
+      ],
+      "contradicting_evidence": [
+        "A clean-NVRAM replacement once succeeded without a cold power cycle, so stale volatile state is conditional."
+      ],
+      "falsifying_test": "Repeat PAL-to-PAL replacement with the previously looping NVRAM after a cold Machine::power_cycle; failure would show that retained volatile state is insufficient to explain the loop.",
+      "citations": [
+        "crates/cdi-core/src/machine.rs",
+        "crates/cdi-frontend/src/main.rs",
+        "docs/slave-protocol.md"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "cold-replacement-with-persistent-nvram",
+      "context": {
+        "base_revision": "ac20dcd",
+        "dirty_diff_hash": "clean",
+        "component_fingerprints": {
+          "machine-power-cycle": "ac20dcd"
+        },
+        "dependencies": {
+          "frontend-load-policy": "first-live-replacement-cold"
+        },
+        "disc_fingerprint": "",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega",
+        "scenario": "PAL title to Library to second PAL title to Play",
+        "timing": "interactive optimized build"
+      },
+      "hypothesis_id": "replacement-retains-volatile-title-state",
+      "strategy": "Cold-power-cycle only replacement media while preserving NVRAM and keep first insertion as a live event.",
+      "symbols": [
+        "cdi_core::Machine::power_cycle",
+        "cdi_frontend::disc_load_action"
+      ],
+      "assumptions": [
+        "The saved PAL NVRAM is valid because it independently cold-boots the title.",
+        "The cyan player startup screen is expected after a deliberate cold replacement."
+      ],
+      "expected": "The second PAL title boots after one Play request and a real save remains after application restart.",
+      "actual": "The user confirmed both the replacement sequence and save persistence.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "PAL-to-PAL replacement no longer loops at the player shell.",
+        "Battery-backed title storage survives replacement and application restart."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "Replacing already-mounted media in the desktop frontend"
+        ],
+        "invalidated_by": [
+          "Changes to Machine power-cycle semantics, frontend disc-load policy, SLAVE media-change behavior, or NVRAM storage"
+        ],
+        "repeat_when": [
+          "Any of those dependencies changes or replacement behavior regresses"
+        ]
+      }
+    }
+  ],
+  "manual_verification": [
+    {
+      "result": "verified-fixed",
+      "revision": "ac20dcd",
+      "notes": "PAL-to-PAL replacement boots the second title after Play; the cyan startup screen is expected for a cold replacement."
+    },
+    {
+      "result": "verified-persistent",
+      "revision": "ac20dcd",
+      "notes": "A newly created title save remained after quitting and relaunching E-Di."
+    }
+  ]
+}

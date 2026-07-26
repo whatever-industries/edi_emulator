@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "id": "7th-guest-missing-transition-animations",
+  "title": "The 7th Guest transition animations",
+  "symptom": "Two authored transition animations are replaced by brief black intervals between otherwise working MPEG and gameplay stages.",
+  "expected": "Both transition animations remain visible while both post-title MPEG sequences and automatic gameplay entry continue to work.",
+  "status": "reproduced",
+  "reported_revision": "18beb7f",
+  "last_reproduced_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": "Reproduced after clearing the persistent PAL/VMPEG NVRAM on the ac20dcd diagnostic working tree. The user may also have seen an additional authored animation before the first black interval, but could not yet compare that detail confidently with an earlier build.",
+  "components": [
+    "dvc",
+    "mpeg",
+    "mcd212",
+    "cdic"
+  ],
+  "disc_fingerprint": "451de6f0f71e9b6c3442608c3987837d62aa69a8",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": [
+      "manual click through pre-title launch clip"
+    ]
+  },
+  "hypotheses": [],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported",
+      "revision": "18beb7f",
+      "notes": "Both post-title MPEGs and gameplay worked, but two hardware-reference transition animations appeared as black flashes."
+    },
+    {
+      "result": "reproduced",
+      "revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+      "notes": "With freshly cleared PAL/VMPEG NVRAM, both expected transition positions still flash black while the surrounding sequence plays."
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "cd-shoot-fast-hover-animation",
+  "title": "CD Shoot animation cadence",
+  "symptom": "The hovered language flag and later skeets animate much too quickly.",
+  "expected": "Guest animation cadence remains synchronized with the 50 Hz player.",
+  "status": "needs-revalidation",
+  "reported_revision": "775ab2a",
+  "last_reproduced_revision": "775ab2a",
+  "last_verified_revision": null,
+  "evidence_status": "needs-revalidation",
+  "revalidation_reason": "The report predates the ac20dcd cold-power-cycle checkpoint. Its timing hypothesis remains technically relevant, but behavior on that checkpoint or a later build has not been reconfirmed.",
+  "components": [
+    "cpu",
+    "timing",
+    "mcd212"
+  ],
+  "disc_fingerprint": "51b4249613fe03bbec25ae20335d5eba4a7fed5d",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": null,
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "instruction-timing-and-device-scheduling",
+      "hardware_explanation": "Legacy SCC68070 instruction timing lets guest animation logic perform too much work per MCD212 frame. Restoring section-6.2 timings without cycle/event-interleaved device advancement is insufficient because that historical combination regressed The 7th Guest.",
+      "supporting_evidence": [
+        "The section-6.2 timing implementation in 191eebb corrected this cadence.",
+        "Commit 18beb7f restored legacy timing to preserve The 7th Guest under the current instruction-boundary scheduler."
+      ],
+      "contradicting_evidence": [
+        "The current ac20dcd build has not yet been manually retested for this symptom."
+      ],
+      "falsifying_test": "Reproduce flag and skeet cadence on ac20dcd, then test accurate SCC68070 timing only after device events can advance within long instructions.",
+      "citations": [
+        "docs/core-compatibility-audit.md",
+        "docs/mpeg-dvc-plan.md",
+        "Philips SCC68070 section 6.2"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "regression-reported",
+      "revision": "775ab2a",
+      "notes": "User reported that the previously corrected fast language-flag animation had returned."
+    }
+  ]
+}

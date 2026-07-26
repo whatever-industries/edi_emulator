@@ -1,5 +1,12 @@
 # Local ICDIA document archive assessment
 
+> Historical status note (2026-07-25): this document is the first-pass archive
+> survey and remains useful for source discovery. Its statements about current
+> implementation status may predate later fixes, reversions, or experiments.
+> Use `docs/specification-research.md` for the current research ledger,
+> `docs/core-compatibility-audit.md` for present core conclusions, and
+> `data/compatibility/compliance-matrix.json` for machine-readable status.
+
 Source tree (local research material, not redistributed):
 `/Volumes/Projects/Coding/disc specs/Philips CD-i - icdia-site-documents-2026-07-18`
 

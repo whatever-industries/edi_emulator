@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "id": "7th-guest-pal-ntsc-title-sizing",
+  "title": "The 7th Guest PAL and NTSC title-screen sizing",
+  "symptom": "The NTSC title image appears taller and reaches both horizontal edges, while the PAL image appears less vertically stretched and retains narrow side columns.",
+  "expected": "Each regional disc reproduces its real-hardware MPEG framing, VMPEG display window, and player pixel aspect; PAL and NTSC output need not be identical if their streams or guest programming differ.",
+  "status": "reported-unconfirmed",
+  "reported_revision": "ac20dcd",
+  "last_reproduced_revision": null,
+  "last_verified_revision": null,
+  "evidence_status": "reported-current",
+  "revalidation_reason": null,
+  "components": [
+    "dvc",
+    "mpeg",
+    "mcd212",
+    "frontend"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal-and-ntsc",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": [
+      "allow the regional title MPEG to reach the 7th Guest logo frame"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "authored-regional-mpeg-framing",
+      "hardware_explanation": "The PAL and NTSC discs contain differently framed MPEG source pictures or intentionally program different VMPEG windows for their 625-line and 525-line players.",
+      "supporting_evidence": [
+        "The supplied captures have different final raster sizes: NTSC is 720x539 and PAL is 768x574, both close to their expected 4:3 presentation sizes.",
+        "Regional MPEG encodes commonly use different coded heights and may retain different authored borders."
+      ],
+      "contradicting_evidence": [
+        "The raw MPEG sequence dimensions, decoded-frame bounds, and live VMPEG window registers have not yet been compared.",
+        "A shared presentation defect could affect this title and the separately reported PAL/NTSC player-menu sizing."
+      ],
+      "falsifying_test": "Inventory both exact discs, compare MPEG sequence headers and a corresponding decoded frame before composition, then compare live VMPEG window and MCD212 external-video registers. Identical authored frames and guest register state with different normalized presentation would falsify this explanation.",
+      "citations": [
+        "docs/mpeg-dvc-plan.md",
+        "docs/display-geometry.md",
+        "data/compatibility/incidents/player-menu-pal-ntsc-sizing.json"
+      ]
+    },
+    {
+      "id": "standard-specific-presentation-scale",
+      "hardware_explanation": "The NTSC DVC/MCD212/frontend path may use an incorrect vertical scale, horizontal aperture, or pixel-aspect conversion relative to PAL.",
+      "supporting_evidence": [
+        "The NTSC logo and landscape appear taller, and the side columns visible in PAL are absent."
+      ],
+      "contradicting_evidence": [
+        "The two captures are from different regional discs rather than the same authored frame under two player standards.",
+        "Both captured output sizes are already close to 4:3, so the difference may exist inside the authored MPEG picture or VMPEG window rather than at final window scaling."
+      ],
+      "falsifying_test": "Run one exact disc under both player standards and capture the decoded MPEG frame, external-video window, composed aperture, and frontend output. If only the regional disc changes the internal frame/window, host presentation is not the cause.",
+      "citations": [
+        "docs/display-geometry.md",
+        "MCD212 specification sections 5.1-5.8",
+        "Philips VMPEG technical documentation"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported-unconfirmed",
+      "revision": "ac20dcd",
+      "notes": "User supplied NTSC 720x539 and PAL 768x574 screenshots and noted that either or both presentations may be correct."
+    }
+  ]
+}

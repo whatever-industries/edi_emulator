@@ -63,6 +63,127 @@
         "Guest PCB/CIL/PCL semantic decoding and destination labels",
         "Audio hash timeline"
       ]
+    },
+    {
+      "requirement": "Player timing derives from the selected PAL or NTSC board clock while independent disc, field, and system-tick domains remain asynchronous",
+      "subsystem": "machine-timing",
+      "status": "gap",
+      "specification": [
+        "Philips CD-i 205 service manual PDF pages 66 and 96",
+        "MCD212 Table 5-5",
+        "Philips Technical Note 094 printed pages 1 through 5"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::sched::CRYSTAL_HZ"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "The scheduler uses one 30 MHz crystal for PAL and NTSC",
+        "CPU and device events are not yet reconciled on an event-interleaved three-clock timeline"
+      ]
+    },
+    {
+      "requirement": "CDIC reset-visible register 2 state matches Mono-I hardware",
+      "subsystem": "cdic",
+      "status": "disputed",
+      "specification": [
+        "Philips CD-i 205 service manual, PCB test step 9 and terminal test step 09",
+        "Philips CD-i 220 service manual, PCB test step 9 and terminal test step 09",
+        "Philips CD-i 350 service manual, PCB test step 9 and terminal test step 09",
+        "Philips CD-i 360 service manual, PCB test step 9 and terminal test step 09"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::cdic::Cdic::new"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "The four reviewed service manuals consistently say $C7FE in the PCB test and $D7FE in the terminal test",
+        "Both documented values are nonzero while the current corresponding register starts at zero",
+        "The repeated bit-12 test-context difference, its register meaning, and the BIOS first-write sequence require evidence before correction"
+      ]
+    },
+    {
+      "requirement": "MCD212 cursor blink timing uses twelve television fields per programmed on/off unit",
+      "subsystem": "mcd212",
+      "status": "gap",
+      "specification": [
+        "MCD212 section 7.6 and cursor-control register description"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "The current accumulator yields twelve fields at 50 Hz but ten fields at 60 Hz",
+        "PAL and NTSC register-level blink-period tests are pending"
+      ]
+    },
+    {
+      "requirement": "CDFM does not reuse a full PCL until the native consumer releases it",
+      "subsystem": "disc-cdfm",
+      "status": "partial",
+      "specification": [
+        "Green Book R2 VII.4.4.2 and VII.4.4.3",
+        "Green Book R2 IX.3.3.3",
+        "Philips Technical Note 098, PCL Handling by the MPEG Drivers"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::PclDiagnosticSnapshot",
+        "cdi_core::MachineDiagnosticEvent::PclState",
+        "cdi_core::MachineDiagnosticEvent::PclOverwriteRisk",
+        "cdi_core::MachineDiagnosticEvent::DmaTransfer"
+      ],
+      "tests": [
+        "diagnostics::pcl_tests::circular_pcl_trace_detects_reuse_before_release",
+        "machine::tests::vmpeg_dma_channel_one_transfers_memory_words"
+      ],
+      "known_gaps": [
+        "Bounded guest-write provenance between CDIC completion and VMPEG DMA is not yet recorded",
+        "The current Addams VCD trace has one audio payload mismatch without a recorded full-PCL overwrite",
+        "The user-visible dirty-disc symptom still needs current-build manual revalidation"
+      ]
+    },
+    {
+      "requirement": "SLAVE drive traffic preserves the documented four-byte command path to the drive MCU",
+      "subsystem": "slave-servo",
+      "status": "partial",
+      "specification": [
+        "Philips CD-i 205 service manual PDF pages 79 through 81"
+      ],
+      "firmware_evidence": [
+        "SLAVE firmware-derived B0 boot and media flow"
+      ],
+      "source_symbols": [
+        "cdi_core::slave"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "SERVO firmware A0 through A5 and AB command correlation",
+        "Physical open, close, spin-up, and live-media state transitions"
+      ]
+    },
+    {
+      "requirement": "Native Video CD engine errors are attributed to the transport or decoder stage that triggered them",
+      "subsystem": "vcd",
+      "status": "gap",
+      "specification": [
+        "Video CD on CD-i Release 4.1 pages 7 through 9"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_disc::DiscImage::inspect",
+        "cdi_core::cdic",
+        "cdi_core::dvc"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "The multilingual dirty-disc dialog is known native engine behavior but is not correlated with the first failing PCL or decoder event",
+        "Synthetic CDI/CDI_VCD.APP and PVD entry-point coverage is pending"
+      ]
     }
   ]
 }

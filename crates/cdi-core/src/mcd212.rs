@@ -204,6 +204,7 @@ const CURCNT_COF_SHIFT: u32 = 16;
 const CURCNT_CON_SHIFT: u32 = 19;
 const CURCNT_BLKC: u32 = 0x40_0000;
 const CURCNT_EN: u32 = 0x80_0000;
+const CURSOR_BLINK_FIELDS_PER_UNIT: u32 = 12;
 
 /// DYUV lookup tables (pure functions of the datasheet delta table).
 struct DyuvLuts {
@@ -1158,16 +1159,17 @@ impl Mcd212 {
                         self.process_dca(1, planeb);
                     }
                 }
-                // Cursor blink cadence (MCD212 section 7.5, as modeled by
-                // MAME): advance once per frame.
-                self.blink_time += 5 + u32::from(self.dcr[0] & DCR_FD != 0);
+                // Motorola MCD212 Technical Reference Manual, rev. 0, §7.6
+                // (Cursor Control Register): each CON/COF unit is twelve
+                // television fields, independent of the 50/60 Hz standard.
+                self.blink_time += 1;
                 let on_time = (self.cursor_control >> CURCNT_CON_SHIFT) & 7;
                 let off_time = (self.cursor_control >> CURCNT_COF_SHIFT) & 7;
-                if !self.blink_active && self.blink_time >= on_time * 60 {
+                if !self.blink_active && self.blink_time >= on_time * CURSOR_BLINK_FIELDS_PER_UNIT {
                     self.blink_active = true;
                     self.blink_time = 0;
                 }
-                if self.blink_active && self.blink_time >= off_time * 60 {
+                if self.blink_active && self.blink_time >= off_time * CURSOR_BLINK_FIELDS_PER_UNIT {
                     self.blink_active = false;
                     self.blink_time = 0;
                 }
@@ -1295,6 +1297,55 @@ mod serde_arrays {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn advance_fields(mcd212: &mut Mcd212, fields: u32) {
+        let plane = vec![0; 0x80000];
+        let field_cycles = cycles_per_line(mcd212.pal) * u64::from(geometry(mcd212.pal).1);
+        for _ in 0..fields {
+            mcd212.tick(field_cycles, &plane, &plane);
+        }
+    }
+
+    #[test]
+    fn cursor_blink_units_are_twelve_fields_in_pal_and_ntsc() {
+        for pal in [true, false] {
+            let mut mcd212 = Mcd212::new(pal);
+            if !pal {
+                mcd212.write8(0x12, (DCR_FD >> 8) as u8);
+            }
+            mcd212.set_register(
+                0,
+                0xCE,
+                CURCNT_EN | (1 << CURCNT_CON_SHIFT) | (1 << CURCNT_COF_SHIFT),
+            );
+
+            advance_fields(&mut mcd212, 11);
+            assert!(
+                !mcd212.blink_active,
+                "{} cursor switched off before twelve fields",
+                if pal { "PAL" } else { "NTSC" }
+            );
+            advance_fields(&mut mcd212, 1);
+            assert!(
+                mcd212.blink_active,
+                "{} cursor did not switch off on the twelfth field",
+                if pal { "PAL" } else { "NTSC" }
+            );
+
+            advance_fields(&mut mcd212, 11);
+            assert!(
+                mcd212.blink_active,
+                "{} cursor switched on before twelve further fields",
+                if pal { "PAL" } else { "NTSC" }
+            );
+            advance_fields(&mut mcd212, 1);
+            assert!(
+                !mcd212.blink_active,
+                "{} cursor did not switch on on the twelfth further field",
+                if pal { "PAL" } else { "NTSC" }
+            );
+        }
+    }
 
     #[test]
     fn presentation_expands_ccir_levels_once() {

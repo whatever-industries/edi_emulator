@@ -137,6 +137,13 @@ Forbidden fixes include title-name branches, pixel-content cropping,
 arbitrary delays, forced status values, direct disc-to-decoder shortcuts, and
 constants chosen only until one title passes.
 
+For non-obvious hardware behavior and specification-derived constants, keep a
+concise source citation beside the implementation: short document title,
+revision when known, and section/table/page. Put edition hashes, conflicting
+sources, rejected interpretations, and extended rationale in
+`data/compatibility/compliance-matrix.json` or the associated research note;
+do not turn implementation comments into a second source ledger.
+
 Before implementation, state:
 
 - hardware hypothesis and its falsifying test;

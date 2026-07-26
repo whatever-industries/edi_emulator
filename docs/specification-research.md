@@ -74,7 +74,7 @@ These hashes pin the exact local editions used for the first priority pass:
 | CDIC reset state | CDIC register 2 at base + `$3FFA` is nonzero after reset. The service manuals consistently say `$C7FE` in the PCB test and `$D7FE` in the terminal test | `svcmanuals/cdi205.pdf`, `svcmanuals/cdi220.pdf`, `svcmanuals/cdi350.pdf`, and `svcmanuals/cdi360.pdf`, PCB test step 9 and terminal test step 09 | `Cdic::new` currently initializes the corresponding Z/audio-control register to zero, so a reset mismatch is confirmed. The repeated bit-12 difference strongly suggests test-path state rather than a one-off typo; its cause must not be guessed. | Trace each BIOS's first accesses, identify what the terminal test initializes before reading register 2, and map `$C7FE`/`$D7FE` fields against CDIC documentation before correcting the reset state. |
 | MCD212 geometry | Compatibility mode masks fixed samples/lines; 525 monitor and 525 TV have different `ST` meanings | Green Book R2 V.4.8; `docs/mcd212rev0.pdf`, Tables 5-4 through 5-7 and §5.8 | CD-i 220 TV and 625 behavior are modeled. The core has no distinct 525-monitor player type, so monitor-mode semantics are not representable. | Table-driven 525-monitor tests before adding a monitor-class model; do not alter CD-i 220 TV output. |
 | Pixel aspect | Measured Philips output uses pixel-height/width ratios 1.225 for 525 and 1.025 for 625 | `notes/technote093.pdf`, printed p. 6 | Implemented exactly as 49/40 and 41/40. NTSC can legitimately look taller than PAL, and regional assets may also differ. | Compare raw MPEG dimensions, live MCD251 window, and final presentation before classifying PAL/NTSC framing as a bug. |
-| MCD212 cursor | Blink on/off units are 12 TV fields: 200 ms at 60 Hz and 240 ms at 50 Hz | `docs/mcd212rev0.pdf`, §7.6 and cursor-control register description | Confirmed mismatch: current accumulator produces 12 fields per unit at 50 Hz but 10 fields per unit at 60 Hz. | Add PAL and NTSC register-level blink-period tests, then replace the accumulator with explicit field counting. |
+| MCD212 cursor | Blink on/off units are 12 TV fields: 200 ms at 60 Hz and 240 ms at 50 Hz | `docs/mcd212rev0.pdf`, §7.6 and cursor-control register description | Implemented with explicit field counting. PAL and NTSC register-level tests prove the state changes on the twelfth field in both standards. | Retain the field-count test when changing display scheduling; do not derive blink from CPU-cycle or nominal-frame accumulators. |
 | Pointer devices | Relative devices report changes; maneuvering devices report continuously while deflected and support at least 16 directions; X/Y coexist in one packet | `docs/pointing_devices.pdf`, protocol sections “Relative” and “Maneuvering” | Relative mouse and simultaneous X/Y are conceptually correct. A fixed 60 Hz HLE polling cadence is not yet justified by this document alone. | Trace SLAVE firmware packet timing before changing `POLL_INTERVAL`; test diagonal and simultaneous-button packets. |
 | Keyboard | K-mode uses 1200 baud, 8 data bits, one stop bit and two-byte change packets; T-mode uses 7 data bits, two stop bits and four-byte packets; both report Shift/Caps/Supershift/Control and ISO-8859-1 key codes | `docs/keyboards_1996.pdf`, v0.92, pp. 1-5; `docs/keyboard_drivers.pdf` | Host-keyboard passthrough is not emulated. The documents provide enough device-level protocol to implement K-mode first without mapping keys directly into guest memory. | Add a serial-packet encoder and SLAVE/UART recognition tests for press, release, modifiers, ID request, and idle silence. |
 | SLAVE/SERVO | For drive traffic the SLAVE MC68HC05 transparently forwards four-byte command/data messages to a second drive MC68HC05 over SPI; `A0..A5` report status/time/track/version/echo/errors | `svcmanuals/cdi205.pdf`, PDF pp. 79-81 | Firmware-derived `B0` boot/media HLE works, but the physical drive-side state machine and open/close/spin-up phases are incomplete. | Correlate the SERVO firmware's SPI traffic with documented `A0..A5`/`AB` packets and the SLAVE flags before extending live media changes. |
@@ -192,9 +192,10 @@ Green Book V.4.8 also distinguishes a 525-line monitor from a 525-line TV:
 their horizontal Compatibility Mode meanings are reversed. This is a future
 player-model boundary, not a reason to alter the current CD-i 220 TV.
 
-The MCD212 cursor blink calculation is different: §7.6 is explicit and the
-current NTSC accumulator is objectively short. That issue should be corrected
-only after adding the two field-count tests.
+The MCD212 cursor blink calculation is different: §7.6 is explicit. The former
+accumulator produced 12 fields per unit at 50 Hz but only 10 at 60 Hz. The
+implementation now counts fields explicitly, with a register-level regression
+covering both standards.
 
 ### Video CD behavior and controls
 
@@ -266,7 +267,8 @@ the corresponding corrections:
 2. **CDIC reset register:** BIOS trace plus a focused nonzero `$3FFA` reset
    test after resolving the documented `$C7FE` versus `$D7FE` difference and
    mapping the bit fields.
-3. **MCD212 cursor blink:** PAL and NTSC field-count tests for one on/off unit.
+3. **MCD212 cursor blink (complete):** PAL and NTSC register-level tests now
+   prove one on/off unit lasts twelve fields.
 4. **Three-clock timeline:** expose bounded disc, field, tick, audio-buffer,
    PCL, and pointer-update events on one diagnostic clock.
 5. **MPEG transition suite:** project-owned EOS/SOS, delayed B-picture,

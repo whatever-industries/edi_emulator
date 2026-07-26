@@ -2723,10 +2723,7 @@ impl App {
             self.save_dir.as_deref(),
             &image,
         ) {
-            Some(Ok(path)) => {
-                *self.shared.status.lock().unwrap() =
-                    format!("Screenshot saved to {}", path.display());
-            }
+            Some(Ok(_)) => {}
             Some(Err(error)) => {
                 *self.shared.status.lock().unwrap() = format!("Screenshot save failed: {error}");
             }

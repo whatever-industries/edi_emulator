@@ -609,6 +609,23 @@ impl Machine {
         self.cpu.reset(&mut self.bus);
     }
 
+    /// Perform a cold player power cycle.
+    ///
+    /// Battery-backed NVRAM, the timekeeper, inserted media, and cartridge
+    /// firmware remain present. All volatile host, CDIC, and DVC memory is
+    /// cleared before the normal reset sequence.
+    pub fn power_cycle(&mut self) {
+        for ram in &mut self.bus.ram {
+            ram.fill(0);
+        }
+        self.bus.cdic.power_cycle();
+        if let Some(dvc) = &mut self.bus.dvc {
+            dvc.power_cycle();
+        }
+        self.cpu = cdi_scc68070::Cpu::new();
+        self.reset();
+    }
+
     /// Enable bounded transition events. A zero capacity disables capture.
     /// Diagnostics are observational and do not alter device timing.
     pub fn enable_diagnostics(&mut self, capacity: usize) {
@@ -1012,6 +1029,25 @@ mod tests {
         assert_eq!(m.read16(0x0000_0002, FnCode::SupervisorData).0, 0x1500);
         assert_eq!(m.read16(0x0000_0004, FnCode::SupervisorData).0, 0x0040);
         assert_eq!(m.read16(0x0000_0006, FnCode::SupervisorData).0, 0x04B8);
+    }
+
+    #[test]
+    fn power_cycle_clears_volatile_memory_but_preserves_nvram() {
+        let mut m = Machine::new(&CDI220B, machine().rom).unwrap();
+        m.bus.ram[0][0x1000] = 0x5A;
+        m.bus.ram[1][0x1000] = 0xA5;
+        m.bus.cdic.ram_write8(0x100, 0x3C);
+        m.bus.nvram[0x100] = 0xC3;
+        m.cpu.d[0] = 0xDEAD_BEEF;
+
+        m.power_cycle();
+
+        assert_eq!(m.bus.ram[0][0x1000], 0);
+        assert_eq!(m.bus.ram[1][0x1000], 0);
+        assert_eq!(m.bus.cdic.ram_read8(0x100), 0);
+        assert_eq!(m.bus.nvram[0x100], 0xC3);
+        assert_eq!(m.cpu.d[0], 0);
+        assert_eq!(&m.bus.ram[0][..8], &m.bus.rom[..8]);
     }
 
     #[test]

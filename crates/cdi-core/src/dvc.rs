@@ -752,6 +752,16 @@ impl Vmpeg {
         self.audio_out.clear();
     }
 
+    /// Remove power from the cartridge while retaining its firmware ROM.
+    pub fn power_cycle(&mut self) {
+        let firmware = self.firmware.clone();
+        *self = Self::new(DvcConfig {
+            kind: DvcKind::Vmpeg,
+            rom: firmware,
+        })
+        .expect("an attached VMPEG firmware image remains valid");
+    }
+
     pub fn stats(&self) -> DvcStats {
         let mut stats = self.stats;
         stats.queued_video_frames = self.video_frames.len() as u64;

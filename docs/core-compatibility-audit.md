@@ -86,6 +86,7 @@ that the underlying hardware hypothesis is false.
 Every promoted core batch must keep:
 
 - The 7th Guest seven-stage sequence above.
+- CD Shoot's hovered language flag and skeets at their intended cadence.
 - Earth Command sound-map completion without looping.
 - The Naked Gun copyright-to-menu transition.
 - Alien Gate pointer input and firing audio.

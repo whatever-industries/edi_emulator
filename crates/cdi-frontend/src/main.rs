@@ -30,6 +30,7 @@ const UI_SURFACE: egui::Color32 = egui::Color32::from_rgb(23, 26, 30);
 const UI_SURFACE_HOVER: egui::Color32 = egui::Color32::from_rgb(34, 39, 45);
 const UI_BORDER: egui::Color32 = egui::Color32::from_rgb(46, 51, 58);
 const UI_ACCENT: egui::Color32 = egui::Color32::from_rgb(67, 82, 98);
+const UI_SELECTED_TEXT: egui::Color32 = egui::Color32::from_rgb(235, 238, 242);
 const UI_MUTED_TEXT: egui::Color32 = egui::Color32::from_rgb(145, 151, 160);
 const PARENTAL_PASSCODE_COLOR: egui::Color32 = egui::Color32::from_rgb(184, 126, 70);
 const PARENTAL_PASSCODE_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(50, 39, 29);
@@ -46,6 +47,7 @@ fn configure_ui(ctx: &egui::Context) {
     style.visuals.faint_bg_color = UI_SURFACE;
     style.visuals.extreme_bg_color = egui::Color32::from_rgb(9, 10, 12);
     style.visuals.selection.bg_fill = UI_ACCENT;
+    style.visuals.selection.stroke = egui::Stroke::new(1.0_f32, UI_SELECTED_TEXT);
     style.visuals.widgets.inactive.weak_bg_fill = UI_SURFACE;
     style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, UI_BORDER);
     style.visuals.widgets.hovered.weak_bg_fill = UI_SURFACE_HOVER;
@@ -2084,6 +2086,8 @@ struct App {
     window_title: String,
     save_dir: Option<String>,
     settings_tab: SettingsTab,
+    /// Reset the separate settings viewport to its top after open/tab changes.
+    settings_scroll_to_top: bool,
     #[cfg(target_os = "macos")]
     native_menu: NativeMenu,
 }
@@ -2195,6 +2199,7 @@ impl App {
             window_title: APP_NAME.to_owned(),
             save_dir: prefs.save_dir.clone(),
             settings_tab: SettingsTab::System,
+            settings_scroll_to_top: true,
             #[cfg(target_os = "macos")]
             native_menu: NativeMenu::new().expect("initialize native macOS menu"),
         };
@@ -2382,7 +2387,7 @@ impl App {
                         // Formats with no discs are dimmed but still
                         // selectable, so their set-folder prompt is reachable.
                         let mut text = egui::RichText::new(*name).size(15.0);
-                        if counts[slot] == 0 {
+                        if counts[slot] == 0 && selected != slot {
                             text = text.weak();
                         }
                         if ui.selectable_label(selected == slot, text).clicked() {
@@ -2701,6 +2706,11 @@ impl App {
         *self.shared.command.lock().unwrap() = Some(MachineCommand::Reset);
     }
 
+    fn open_settings(&mut self) {
+        self.settings_open = true;
+        self.settings_scroll_to_top = true;
+    }
+
     fn choose_dvc(&self) {
         if let Some(path) = rfd::FileDialog::new()
             .set_title("Select DVC cartridge firmware")
@@ -2770,13 +2780,7 @@ impl App {
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(egui::RichText::new("Settings").size(22.0).strong());
-        ui.label(
-            egui::RichText::new("Player, input, and library preferences")
-                .color(UI_MUTED_TEXT)
-                .size(12.0),
-        );
-        ui.add_space(8.0);
+        let previous_tab = self.settings_tab;
         egui::Frame::new()
             .fill(egui::Color32::from_rgb(18, 21, 24))
             .corner_radius(egui::CornerRadius::same(8))
@@ -2793,6 +2797,9 @@ impl App {
                     );
                 });
             });
+        if self.settings_tab != previous_tab {
+            self.settings_scroll_to_top = true;
+        }
         ui.add_space(8.0);
         egui::Frame::new()
             .fill(UI_SURFACE)
@@ -2807,16 +2814,16 @@ impl App {
     }
 
     fn settings_libraries_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Disc Libraries");
-        ui.label(
-            "Folders where your disc images live. The Open dialog starts in the first configured library.",
-        );
-        ui.add_space(4.0);
+        ui.heading("Disc Folders");
         let mut libraries_changed = false;
         for (slot, name) in LIBRARY_SLOTS.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.strong(format!("{name}:"));
-                if ui.button("Choose…").clicked() {
+                if ui
+                    .button("Choose…")
+                    .on_hover_text(format!("Choose the {name} library folder"))
+                    .clicked()
+                {
                     if let Some(dir) = rfd::FileDialog::new()
                         .set_title(format!("Choose the {name} library folder"))
                         .pick_folder()
@@ -2845,11 +2852,13 @@ impl App {
         }
 
         ui.separator();
-        ui.heading("Screenshot Save Folder");
-        ui.label("Where saved photos and screenshots go. Defaults to Downloads.");
-        ui.add_space(4.0);
+        ui.heading("Screenshots");
         ui.horizontal(|ui| {
-            if ui.button("Choose…").clicked() {
+            if ui
+                .button("Choose Folder…")
+                .on_hover_text("Choose where saved photos and screenshots go")
+                .clicked()
+            {
                 if let Some(dir) = rfd::FileDialog::new()
                     .set_title("Choose the screenshot save folder")
                     .pick_folder()
@@ -2857,7 +2866,12 @@ impl App {
                     self.save_dir = Some(dir.display().to_string());
                 }
             }
-            if self.save_dir.is_some() && ui.button("Use Downloads").clicked() {
+            if self.save_dir.is_some()
+                && ui
+                    .button("Use Downloads")
+                    .on_hover_text("Restore the default screenshot folder")
+                    .clicked()
+            {
                 self.save_dir = None;
             }
         });
@@ -2872,8 +2886,12 @@ impl App {
     }
 
     fn settings_system_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("System ROM");
-        ui.label(self.shared.rom_status.lock().unwrap().as_str());
+        ui.heading("Player");
+        let rom_status = self.shared.rom_status.lock().unwrap().clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.strong("Model:");
+            ui.label(&rom_status);
+        });
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt("system_rom")
                 .selected_text("Select model…")
@@ -2891,7 +2909,11 @@ impl App {
                         }
                     }
                 });
-            if ui.button("Choose ROM…").clicked() {
+            if ui
+                .button("Choose ROM…")
+                .on_hover_text("Load a custom CD-i system ROM")
+                .clicked()
+            {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title("Select a CD-i system ROM")
                     .add_filter("ROM images", &["rom", "bin"])
@@ -2906,100 +2928,7 @@ impl App {
                 }
             }
         });
-        ui.label(
-            "Region names the market a model was sold into and only sets the default video standard below — the same ROM shipped in 50 Hz and 60 Hz players. Changing the ROM resets the machine and keeps the disc.",
-        );
-        ui.separator();
-        ui.heading("Player Storage");
-        ui.label(
-            "Battery-backed CD-i memory stores saved games, high scores, and player settings.",
-        );
-        if self.reset_nvram_confirmation {
-            egui::Frame::new()
-                .fill(PARENTAL_PASSCODE_BACKGROUND)
-                .stroke(egui::Stroke::new(1.0_f32, PARENTAL_PASSCODE_COLOR))
-                .corner_radius(egui::CornerRadius::same(6))
-                .inner_margin(egui::Margin::symmetric(10, 8))
-                .show(ui, |ui| {
-                    ui.label("Clear saved games, high scores, and settings for this CD-i board?");
-                    ui.weak("E-Di creates a timestamped backup first, then restarts the title.");
-                    ui.horizontal(|ui| {
-                        if ui.button("Cancel").clicked() {
-                            self.reset_nvram_confirmation = false;
-                        }
-                        if ui.button("Back Up and Reset").clicked() {
-                            *self.shared.command.lock().unwrap() = Some(MachineCommand::ResetNvram);
-                            self.reset_nvram_confirmation = false;
-                            self.settings_open = false;
-                        }
-                    });
-                });
-        } else if ui.button("Reset Player Storage…").clicked() {
-            self.reset_nvram_confirmation = true;
-        }
-        ui.weak("Resetting first creates a recoverable backup, then restarts the current title.");
-        ui.separator();
-        ui.heading("Audio");
-        let mut muted = self.shared.muted.load(Ordering::Relaxed);
-        if ui.checkbox(&mut muted, "Mute audio").changed() {
-            self.shared.muted.store(muted, Ordering::Relaxed);
-        }
-        ui.label("44.1 kHz stereo output");
-        ui.separator();
-        ui.heading("DVC Cartridge");
-        ui.label(self.shared.dvc_status.lock().unwrap().as_str());
-        ui.horizontal(|ui| {
-            if self.shared.dvc_inserted.load(Ordering::Relaxed) {
-                if ui.button("Remove DVC Cartridge").clicked() {
-                    self.remove_dvc();
-                }
-            } else if ui.button("Insert DVC Cartridge").clicked() {
-                self.insert_dvc();
-            }
-            if ui.button("Choose Firmware…").clicked() {
-                self.choose_dvc();
-            }
-        });
-        ui.label(
-            "The bundled VMPEG cartridge is inserted by default. Inserting or removing it resets the machine and retains the disc.",
-        );
-        ui.separator();
-        ui.heading("Display");
         let identity = self.shared.disc_identity.lock().unwrap().clone();
-        if let Some(identity) = &identity {
-            if let Some(profile) = &identity.profile {
-                ui.horizontal_wrapped(|ui| {
-                    ui.strong("Exact disc:");
-                    ui.label(&profile.name);
-                    ui.hyperlink_to(
-                        format!("Redump #{}", profile.redump_id),
-                        format!("https://redump.info/disc/{}/", profile.redump_id),
-                    );
-                });
-                let mut details = Vec::new();
-                if let Some(serial) = &profile.serial {
-                    details.push(format!("serial {serial}"));
-                }
-                if let Some(version) = &profile.version {
-                    details.push(format!("version {version}"));
-                }
-                details.push(format!(
-                    "{} recommendation",
-                    if profile.video_standard.is_pal() {
-                        "PAL/50 Hz"
-                    } else {
-                        "NTSC/60 Hz"
-                    }
-                ));
-                ui.weak(details.join(" · "));
-            } else {
-                ui.weak(format!(
-                    "Exact pressing identified ({}) but no display profile is tracked yet.",
-                    &identity.fingerprint[..identity.fingerprint.len().min(12)]
-                ));
-            }
-            ui.add_space(4.0);
-        }
         let mut pal = self.shared.pal.load(Ordering::Relaxed);
         ui.horizontal(|ui| {
             ui.label("Video standard:");
@@ -3057,46 +2986,136 @@ impl App {
         }
         let mut auto_region = self.shared.auto_region.load(Ordering::Relaxed);
         if ui
-            .checkbox(&mut auto_region, "Match region to disc on load")
+            .checkbox(&mut auto_region, "Match disc region on load")
+            .on_hover_text(
+                "Uses an exact disc profile first, then an unambiguous filename region. \
+                 Mixed or unknown names keep the current setting.",
+            )
             .changed()
         {
             self.shared
                 .auto_region
                 .store(auto_region, Ordering::Relaxed);
         }
-        ui.label(
-            "Uses an exact Redump profile when available, otherwise an unambiguous region tag in the disc's name (USA/Japan → 60 Hz, Europe → 50 Hz). Mixed-region and untagged pressings keep the current setting. This changes timing, not the screen shape.",
-        );
+
+        if let Some(identity) = &identity {
+            if let Some(profile) = &identity.profile {
+                ui.horizontal_wrapped(|ui| {
+                    ui.weak("Disc profile:");
+                    ui.label(&profile.name);
+                    ui.hyperlink_to(
+                        format!("Redump #{}", profile.redump_id),
+                        format!("https://redump.info/disc/{}/", profile.redump_id),
+                    );
+                });
+            } else {
+                ui.weak(format!(
+                    "Unprofiled pressing · {}",
+                    &identity.fingerprint[..identity.fingerprint.len().min(12)]
+                ));
+            }
+        }
+
+        ui.separator();
+        ui.heading("Display");
         ui.horizontal(|ui| {
             ui.label("Display area:");
             ui.radio_value(
                 &mut self.display_area,
                 DisplayArea::TypicalCrt,
                 "Typical CRT",
-            );
+            )
+            .on_hover_text("Hide the nominal NTSC analog overscan margin");
             ui.radio_value(
                 &mut self.display_area,
                 DisplayArea::FullSignal,
                 "Full signal",
-            );
+            )
+            .on_hover_text("Show the complete MCD212 hardware output");
         });
-        ui.label(
-            "Typical CRT hides the nominal analog overscan margin on a 525-line player. Full signal exposes the complete hardware aperture. PAL and MCD212 Compatibility Mode remain hardware-defined.",
-        );
-        ui.checkbox(
-            &mut self.crt_aspect,
-            "Correct for Philips CD-i CRT pixel shape",
-        );
-        ui.label(
-            "Uses Philips player measurements (PAL 1.025, NTSC 1.225 pixel height/width). Disable only for raw square-pixel diagnostics.",
-        );
-        ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
-        ui.checkbox(&mut self.show_fps, "Show frame rate");
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut self.crt_aspect, "CRT aspect")
+                .on_hover_text("Use measured Philips PAL/NTSC pixel shape");
+            ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
+            ui.checkbox(&mut self.show_fps, "Show FPS");
+        });
+
+        ui.separator();
+        ui.heading("Digital Video");
+        let dvc_status = self.shared.dvc_status.lock().unwrap().clone();
+        ui.horizontal_wrapped(|ui| {
+            ui.strong("Cartridge:");
+            ui.label(&dvc_status);
+        });
+        ui.horizontal(|ui| {
+            if self.shared.dvc_inserted.load(Ordering::Relaxed) {
+                if ui
+                    .button("Remove")
+                    .on_hover_text("Remove the Digital Video Cartridge")
+                    .clicked()
+                {
+                    self.remove_dvc();
+                }
+            } else if ui
+                .button("Insert")
+                .on_hover_text("Insert the bundled VMPEG cartridge")
+                .clicked()
+            {
+                self.insert_dvc();
+            }
+            if ui
+                .button("Choose Firmware…")
+                .on_hover_text("Choose VMPEG or IMPEG cartridge firmware")
+                .clicked()
+            {
+                self.choose_dvc();
+            }
+        });
+
+        ui.separator();
+        ui.heading("Audio & Storage");
+        ui.horizontal_wrapped(|ui| {
+            let mut muted = self.shared.muted.load(Ordering::Relaxed);
+            if ui.checkbox(&mut muted, "Mute audio").changed() {
+                self.shared.muted.store(muted, Ordering::Relaxed);
+            }
+            ui.weak("44.1 kHz stereo");
+            if !self.reset_nvram_confirmation
+                && ui
+                    .button("Reset Player Storage…")
+                    .on_hover_text(
+                        "Back up and clear saved games, high scores, and player settings",
+                    )
+                    .clicked()
+            {
+                self.reset_nvram_confirmation = true;
+            }
+        });
+        if self.reset_nvram_confirmation {
+            egui::Frame::new()
+                .fill(PARENTAL_PASSCODE_BACKGROUND)
+                .stroke(egui::Stroke::new(1.0_f32, PARENTAL_PASSCODE_COLOR))
+                .corner_radius(egui::CornerRadius::same(6))
+                .inner_margin(egui::Margin::symmetric(10, 8))
+                .show(ui, |ui| {
+                    ui.label("Clear saved games, high scores, and settings for this CD-i board?");
+                    ui.weak("E-Di creates a timestamped backup first, then restarts the title.");
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            self.reset_nvram_confirmation = false;
+                        }
+                        if ui.button("Back Up and Reset").clicked() {
+                            *self.shared.command.lock().unwrap() = Some(MachineCommand::ResetNvram);
+                            self.reset_nvram_confirmation = false;
+                            self.settings_open = false;
+                        }
+                    });
+                });
+        }
     }
 
     fn settings_input_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading("CD-i Peripherals");
-        ui.label("The emulated player exposes a relative pointing device; every input source below drives it.");
+        ui.heading("Pointer");
 
         // A pending keyboard rebind captures the next key pressed while the
         // settings window has focus.
@@ -3117,12 +3136,11 @@ impl App {
             }
         }
 
-        egui::CollapsingHeader::new("Pointing device — Mouse")
-            .default_open(true)
-            .show(ui, |ui| {
-                ui.checkbox(&mut self.capture_mouse_enabled, "Capture mouse on click");
-                ui.label("Captured: relative motion like a real CD-i mouse. Uncaptured: the pointer follows the cursor over the picture.");
-            });
+        ui.checkbox(&mut self.capture_mouse_enabled, "Capture mouse on click")
+            .on_hover_text(
+                "Captured mode sends relative motion like a CD-i mouse. \
+                 Without capture, the pointer follows the cursor over the picture.",
+            );
 
         if ui.available_width() >= 620.0 {
             ui.columns(2, |columns| {
@@ -3160,7 +3178,13 @@ impl App {
             } else {
                 self.ff_key.name().to_owned()
             };
-            if ui.button(text).clicked() {
+            if ui
+                .button(text)
+                .on_hover_text(
+                    "Hold to run as fast as this machine allows; audio is muted while active",
+                )
+                .clicked()
+            {
                 self.ff_rebind = !self.ff_rebind;
             }
             if self.ff_key != default_ff_key() && ui.button("Reset").clicked() {
@@ -3168,19 +3192,10 @@ impl App {
                 self.ff_rebind = false;
             }
         });
-        ui.label("Runs the emulation as fast as this machine allows while held; audio is silenced during it.");
-
-        egui::CollapsingHeader::new("CD-i Keyboard (not yet emulated)")
-            .default_open(false)
-            .show(ui, |ui| {
-                ui.label(
-                    "Some CD-i players (notably authoring/industrial models) support a keyboard peripheral. Emulating it needs core-side support for the keyboard port; planned in TODO.md.",
-                );
-            });
     }
 
     fn settings_keyboard_ui(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Pointing device — Keyboard")
+        egui::CollapsingHeader::new("Keyboard")
             .default_open(true)
             .show(ui, |ui| {
                 ui.add(egui::Slider::new(&mut self.kb_speed, 1.0..=20.0).text("Pointer speed"));
@@ -3218,7 +3233,7 @@ impl App {
     }
 
     fn settings_controller_ui(&mut self, ui: &mut egui::Ui) {
-        egui::CollapsingHeader::new("Pointing device — Controller")
+        egui::CollapsingHeader::new("Controller")
             .default_open(true)
             .show(ui, |ui| match &self.gamepad {
                 Some(gilrs) => {
@@ -3234,7 +3249,10 @@ impl App {
                     ui.add(
                         egui::Slider::new(&mut self.pad_speed, 1.0..=20.0).text("Pointer speed"),
                     );
-                    ui.checkbox(&mut self.pad_analog_enabled, "Enable left analog stick");
+                    ui.checkbox(&mut self.pad_analog_enabled, "Enable left analog stick")
+                        .on_hover_text(
+                            "The D-pad is always active and takes priority over analog drift",
+                        );
                     ui.add_enabled(
                         self.pad_analog_enabled,
                         egui::Slider::new(&mut self.pad_deadzone, 0.0..=0.5).text("Stick deadzone"),
@@ -3267,12 +3285,6 @@ impl App {
                         self.pad_button2 = defaults.pad_button2;
                         self.pad_rebind = None;
                     }
-                    ui.weak(if self.pad_analog_enabled {
-                        "The D-pad is always active and takes priority over stick drift."
-                    } else {
-                        "D-pad movement remains active; the left stick is disabled."
-                    });
-                    ui.weak("Controller layouts are auto-detected.");
                 }
                 None => {
                     ui.label("Controller support unavailable on this system");
@@ -3559,7 +3571,7 @@ impl App {
                 NativeMenuAction::Open => self.open_disc(),
                 NativeMenuAction::Eject => self.eject_disc(),
                 NativeMenuAction::Reset => self.reset_machine(),
-                NativeMenuAction::Settings => self.settings_open = true,
+                NativeMenuAction::Settings => self.open_settings(),
             }
         }
     }
@@ -3742,7 +3754,7 @@ impl eframe::App for App {
                     ui.separator();
                     if ui.button("Settings…").clicked() {
                         ui.close_menu();
-                        self.settings_open = true;
+                        self.open_settings();
                     }
                     ui.separator();
                     if ui.button("Quit").clicked() {
@@ -3795,9 +3807,12 @@ impl eframe::App for App {
                         }
                     } else {
                         egui::CentralPanel::default().show(ctx, |ui| {
-                            egui::ScrollArea::vertical()
-                                .auto_shrink([false; 2])
-                                .show(ui, |ui| self.settings_ui(ui));
+                            let mut scroll = egui::ScrollArea::vertical().auto_shrink([false; 2]);
+                            if self.settings_scroll_to_top {
+                                scroll = scroll.vertical_scroll_offset(0.0);
+                                self.settings_scroll_to_top = false;
+                            }
+                            scroll.show(ui, |ui| self.settings_ui(ui));
                         });
                         if ctx.input(|input| input.viewport().close_requested()) {
                             self.settings_open = false;
@@ -4295,14 +4310,21 @@ impl eframe::App for App {
 #[cfg(test)]
 mod tests {
     use super::{
-        backup_nvram, configured_nvram_path, controller_deflection, controller_dpad_deflection,
-        controller_stick_deflection, cycle_library_focus, display_aperture, fill_audio, fit_aspect,
-        library_dpad_direction, library_pad_action, load_nvram, parental_passcode, pointer_mapping,
-        presentation_aspect, region_is_pal, screenshot_dimensions, screenshot_image, write_nvram,
-        DiscOverride, DisplayAperture, DisplayArea, LibraryPadAction, SharedFrame,
-        LIBRARY_OPEN_FOCUS,
+        backup_nvram, configure_ui, configured_nvram_path, controller_deflection,
+        controller_dpad_deflection, controller_stick_deflection, cycle_library_focus,
+        display_aperture, fill_audio, fit_aspect, library_dpad_direction, library_pad_action,
+        load_nvram, parental_passcode, pointer_mapping, presentation_aspect, region_is_pal,
+        screenshot_dimensions, screenshot_image, write_nvram, DiscOverride, DisplayAperture,
+        DisplayArea, LibraryPadAction, SharedFrame, LIBRARY_OPEN_FOCUS, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
+
+    #[test]
+    fn selected_controls_use_high_contrast_text() {
+        let ctx = egui::Context::default();
+        configure_ui(&ctx);
+        assert_eq!(ctx.style().visuals.selection.stroke.color, UI_SELECTED_TEXT);
+    }
 
     #[test]
     fn nvram_write_is_replaceable_and_wrong_sizes_start_clean() {

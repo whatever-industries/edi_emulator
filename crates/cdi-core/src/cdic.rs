@@ -199,6 +199,11 @@ impl Cdic {
         *self = Self { ram, ..Self::new() };
     }
 
+    /// Remove power from the CD interface, clearing its volatile RAM.
+    pub fn power_cycle(&mut self) {
+        *self = Self::new();
+    }
+
     pub fn int_line(&self) -> bool {
         self.int_line
     }

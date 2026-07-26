@@ -1000,12 +1000,12 @@ enum DiscLoadAction {
     /// Let the already-running player shell observe a physical insertion.
     LiveInsert,
     /// A running title may ignore a drive event, so boot replacement media.
-    ReplaceAndReset,
+    ReplaceAndPowerCycle,
 }
 
 fn disc_load_action(has_mounted_disc: bool) -> DiscLoadAction {
     if has_mounted_disc {
-        DiscLoadAction::ReplaceAndReset
+        DiscLoadAction::ReplaceAndPowerCycle
     } else {
         DiscLoadAction::LiveInsert
     }
@@ -1564,12 +1564,13 @@ fn emu_loop(
                                 // through the SLAVE X-Bus drive event.
                                 machine.change_disc(Some(disc));
                             }
-                            DiscLoadAction::ReplaceAndReset => {
+                            DiscLoadAction::ReplaceAndPowerCycle => {
                                 // A running title is not required to handle
                                 // replacement media. Attach the new disc as
-                                // power-on state and boot it deterministically.
+                                // power-on state and cold-boot it, preserving
+                                // only battery-backed player storage.
                                 machine.set_disc(Some(disc));
-                                machine.reset();
+                                machine.power_cycle();
                             }
                         }
                         *shared.disc_name.lock().unwrap() = Some(display_name(&path));
@@ -2100,6 +2101,8 @@ struct App {
     library_selection: usize,
     /// Last mapped D-pad/hat direction, for edge-triggered row navigation.
     library_dpad_y: i8,
+    /// Discard egui's persisted scroll offset when entering the Library.
+    library_scroll_to_top: bool,
     /// Host-side controller menu shown over the current title.
     quick_menu_open: bool,
     /// Selected quick-menu row: Library or Return to Current Title.
@@ -2218,6 +2221,7 @@ impl App {
             library_focus: 0,
             library_selection: 0,
             library_dpad_y: 0,
+            library_scroll_to_top: true,
             quick_menu_open: false,
             quick_menu_selection: 0,
             quick_menu_dpad_y: 0,
@@ -2381,6 +2385,7 @@ impl App {
         let mut selected = self.library_tab;
         let mut load_path = None;
         let mut needs_open = false;
+        let scroll_to_top = std::mem::take(&mut self.library_scroll_to_top);
         // Library folder to configure, set from the empty-state link.
         let mut pick_slot: Option<usize> = None;
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -2420,6 +2425,7 @@ impl App {
                             selected = slot;
                             self.library_focus = slot;
                             self.library_selection = 0;
+                            self.library_scroll_to_top = true;
                         }
                     }
                 });
@@ -2468,57 +2474,56 @@ impl App {
                 return;
             }
 
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let col_w = ui.available_width().min(640.0);
-                    ui.vertical_centered(|ui| {
-                        ui.set_max_width(col_w);
-                        ui.add_space(4.0);
-                        for (row, entry) in self
-                            .library
-                            .iter()
-                            .filter(|e| e.category == selected)
-                            .enumerate()
-                        {
-                            let row_h = 30.0;
-                            let (rect, resp) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), row_h),
-                                egui::Sense::click(),
-                            );
-                            let hovered = resp.hovered();
-                            let controller_selected =
-                                self.library_focus == selected && row == self.library_selection;
-                            if hovered || controller_selected {
-                                ui.painter().rect_filled(
-                                    rect,
-                                    egui::CornerRadius::same(5),
-                                    hover_fill,
-                                );
-                            }
-                            if hovered {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                            }
-                            ui.painter().text(
-                                egui::pos2(rect.left() + 12.0, rect.center().y),
-                                egui::Align2::LEFT_CENTER,
-                                &entry.title,
-                                egui::FontId::proportional(15.0),
-                                if hovered || controller_selected {
-                                    text_strong
-                                } else {
-                                    text_normal
-                                },
-                            );
-                            if resp.clicked() {
-                                self.library_focus = selected;
-                                self.library_selection = row;
-                                load_path = Some(entry.cue.clone());
-                            }
+            let mut scroll_area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+            if scroll_to_top {
+                scroll_area = scroll_area.vertical_scroll_offset(0.0);
+            }
+            scroll_area.show(ui, |ui| {
+                let col_w = ui.available_width().min(640.0);
+                ui.vertical_centered(|ui| {
+                    ui.set_max_width(col_w);
+                    ui.add_space(4.0);
+                    for (row, entry) in self
+                        .library
+                        .iter()
+                        .filter(|e| e.category == selected)
+                        .enumerate()
+                    {
+                        let row_h = 30.0;
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), row_h),
+                            egui::Sense::click(),
+                        );
+                        let hovered = resp.hovered();
+                        let controller_selected =
+                            self.library_focus == selected && row == self.library_selection;
+                        if hovered || controller_selected {
+                            ui.painter()
+                                .rect_filled(rect, egui::CornerRadius::same(5), hover_fill);
                         }
-                        ui.add_space(16.0);
-                    });
+                        if hovered {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        }
+                        ui.painter().text(
+                            egui::pos2(rect.left() + 12.0, rect.center().y),
+                            egui::Align2::LEFT_CENTER,
+                            &entry.title,
+                            egui::FontId::proportional(15.0),
+                            if hovered || controller_selected {
+                                text_strong
+                            } else {
+                                text_normal
+                            },
+                        );
+                        if resp.clicked() {
+                            self.library_focus = selected;
+                            self.library_selection = row;
+                            load_path = Some(entry.cue.clone());
+                        }
+                    }
+                    ui.add_space(16.0);
                 });
+            });
         });
         self.library_tab = selected;
         if let Some(slot) = pick_slot {
@@ -2545,6 +2550,7 @@ impl App {
         self.library_focus = self.library_tab;
         self.library_selection = 0;
         self.library_dpad_y = 0;
+        self.library_scroll_to_top = true;
     }
 
     fn paint_quick_menu(&mut self, ctx: &egui::Context) {
@@ -3412,6 +3418,7 @@ impl App {
                         action == LibraryPadAction::NextTab,
                     );
                     self.library_selection = 0;
+                    self.library_scroll_to_top = true;
                     if self.library_focus < LIBRARY_SLOTS.len() {
                         self.library_tab = self.library_focus;
                     }
@@ -4000,6 +4007,7 @@ impl eframe::App for App {
                 self.library_focus = self.library_tab;
                 self.library_selection = 0;
                 self.library_dpad_y = 0;
+                self.library_scroll_to_top = true;
                 self.pad_buttons = 0;
                 self.pad_frac = egui::Vec2::ZERO;
                 if self.mouse_captured {
@@ -4354,9 +4362,9 @@ mod tests {
     }
 
     #[test]
-    fn first_disc_is_inserted_live_but_replacement_media_resets() {
+    fn first_disc_is_inserted_live_but_replacement_media_power_cycles() {
         assert_eq!(disc_load_action(false), DiscLoadAction::LiveInsert);
-        assert_eq!(disc_load_action(true), DiscLoadAction::ReplaceAndReset);
+        assert_eq!(disc_load_action(true), DiscLoadAction::ReplaceAndPowerCycle);
     }
 
     #[test]

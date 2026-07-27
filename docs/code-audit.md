@@ -41,7 +41,7 @@ Until then, keep it isolated and clearly visible in the presentation module.
 
 - [x] Extract rendering, screenshot, pointer, and aspect calculations into
   `presentation.rs` without changing behavior.
-- [ ] Extract NVRAM path/load/write/backup operations into `storage.rs`.
+- [x] Extract NVRAM path/load/write/backup operations into `storage.rs`.
 - [ ] Extract library scanning, ZIP media resolution, and focused-list
   navigation behind a `LibraryModel`.
 - [ ] Extract Settings panels into small view functions which mutate a

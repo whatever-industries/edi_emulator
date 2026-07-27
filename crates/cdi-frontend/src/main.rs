@@ -7,10 +7,10 @@
 
 mod disc_profiles;
 mod presentation;
+mod storage;
 mod store_zip;
 
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -26,6 +26,7 @@ use presentation::{
     display_aperture, fit_aspect, pointer_mapping, presentation_aspect, screenshot_image,
     DisplayArea,
 };
+use storage::{backup_nvram, configured_nvram_path, load_nvram, write_nvram};
 
 const AUDIO_RATE: u32 = 44_100;
 const AUDIO_RING_SAMPLES: usize = AUDIO_RATE as usize * 2;
@@ -393,6 +394,8 @@ struct DiscOverride {
 const LIBRARY_SLOTS: [&str; 4] = ["Philips CD-i", "Photo CD", "Video CD", "CD-BGM"];
 const LIBRARY_FOCUS_COUNT: usize = LIBRARY_SLOTS.len() + 1;
 const LIBRARY_OPEN_FOCUS: usize = LIBRARY_SLOTS.len();
+const LIBRARY_REPEAT_DELAY: Duration = Duration::from_millis(300);
+const LIBRARY_REPEAT_INTERVAL: Duration = Duration::from_millis(75);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LibraryPadAction {
@@ -440,6 +443,39 @@ fn library_dpad_direction(axis_y: f32, up_button: bool, down_button: bool) -> i8
         (true, false) => -1,
         (false, true) => 1,
         _ => 0,
+    }
+}
+
+/// Edge-trigger a new direction, then repeat it at a bounded menu-navigation
+/// cadence while held. Restarting the interval from the current poll avoids a
+/// burst of catch-up movements after the UI was blocked by a file dialog.
+#[derive(Default)]
+struct LibraryDpadRepeat {
+    direction: i8,
+    next_repeat: Option<Instant>,
+}
+
+impl LibraryDpadRepeat {
+    fn update(&mut self, direction: i8, now: Instant) -> i8 {
+        if direction == 0 {
+            self.reset();
+            return 0;
+        }
+        if direction != self.direction {
+            self.direction = direction;
+            self.next_repeat = Some(now + LIBRARY_REPEAT_DELAY);
+            return direction;
+        }
+        if self.next_repeat.is_some_and(|deadline| now >= deadline) {
+            self.next_repeat = Some(now + LIBRARY_REPEAT_INTERVAL);
+            return direction;
+        }
+        0
+    }
+
+    fn reset(&mut self) {
+        self.direction = 0;
+        self.next_repeat = None;
     }
 }
 
@@ -693,64 +729,6 @@ fn photocd_worker(rx: mpsc::Receiver<PcdCmd>, tx: mpsc::Sender<PcdEvent>, ctx: e
         // The binding is intentionally retained alongside the opened disc.
         let _ = &archive_guard;
         ctx.request_repaint();
-    }
-}
-
-/// Write a decoded photo as PNG via a save dialog.
-/// Per-user data directory for files the app owns, such as saved NVRAM.
-fn app_data_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let dir = if cfg!(target_os = "macos") {
-        home?.join("Library/Application Support/cdi-frontend")
-    } else if cfg!(target_os = "windows") {
-        PathBuf::from(std::env::var_os("APPDATA")?).join("cdi-frontend")
-    } else {
-        match std::env::var_os("XDG_DATA_HOME") {
-            Some(base) => PathBuf::from(base).join("cdi-frontend"),
-            None => home?.join(".local/share/cdi-frontend"),
-        }
-    };
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir)
-}
-
-fn configured_nvram_path(
-    board_name: &str,
-    pal: bool,
-    dvc_inserted: bool,
-    persistent: bool,
-) -> Option<PathBuf> {
-    if !persistent {
-        return None;
-    }
-    let standard = if pal { "pal" } else { "ntsc" };
-    let cartridge = if dvc_inserted { "vmpeg" } else { "base" };
-    app_data_dir().map(|dir| dir.join(format!("{board_name}-{standard}-{cartridge}.nvr")))
-}
-
-fn load_nvram(path: Option<&std::path::Path>, expected_len: usize) -> Vec<u8> {
-    let Some(path) = path else {
-        return vec![0; expected_len];
-    };
-    match std::fs::read(path) {
-        Ok(saved) if saved.len() == expected_len => {
-            log::info!("nvram restored from {}", path.display());
-            saved
-        }
-        Ok(saved) => {
-            log::warn!(
-                "nvram {}: expected {} bytes, found {}; ignoring",
-                path.display(),
-                expected_len,
-                saved.len()
-            );
-            vec![0; expected_len]
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => vec![0; expected_len],
-        Err(error) => {
-            log::warn!("nvram {}: {error}", path.display());
-            vec![0; expected_len]
-        }
     }
 }
 
@@ -1864,51 +1842,6 @@ fn log_dvc_composition(
     );
 }
 
-/// Write battery-backed SRAM atomically, replacing any previous contents.
-fn write_nvram(path: Option<&std::path::Path>, data: &[u8]) -> Result<(), String> {
-    let Some(path) = path else {
-        return Ok(());
-    };
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
-        format!(
-            "create temporary NVRAM file in {}: {error}",
-            parent.display()
-        )
-    })?;
-    temporary
-        .write_all(data)
-        .map_err(|error| format!("write temporary NVRAM file: {error}"))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|error| format!("sync temporary NVRAM file: {error}"))?;
-    temporary
-        .persist(path)
-        .map_err(|error| format!("replace {}: {}", path.display(), error.error))?;
-    log::debug!("nvram saved to {}", path.display());
-    Ok(())
-}
-
-fn backup_nvram(path: Option<&std::path::Path>, data: &[u8]) -> Result<Option<PathBuf>, String> {
-    let Some(path) = path else {
-        return Ok(None);
-    };
-    if data.iter().all(|&byte| byte == 0) {
-        return Ok(None);
-    }
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| format!("system clock: {error}"))?
-        .as_secs();
-    let backup = path.with_extension(format!("nvr.backup-{timestamp}"));
-    std::fs::write(&backup, data)
-        .map_err(|error| format!("write backup {}: {error}", backup.display()))?;
-    Ok(Some(backup))
-}
-
 struct App {
     shared: Arc<Shared>,
     texture: Option<egui::TextureHandle>,
@@ -1963,10 +1896,12 @@ struct App {
     library_focus: usize,
     /// Controller-selected row within the active format.
     library_selection: usize,
-    /// Last mapped D-pad/hat direction, for edge-triggered row navigation.
-    library_dpad_y: i8,
+    /// Edge and hold-repeat state for mapped D-pad/hat row navigation.
+    library_dpad_repeat: LibraryDpadRepeat,
     /// Discard egui's persisted scroll offset when entering the Library.
     library_scroll_to_top: bool,
+    /// Center the controller-highlighted row after its selection changes.
+    library_scroll_to_selection: bool,
     /// Host-side controller menu shown over the current title.
     quick_menu_open: bool,
     /// Selected quick-menu row: Library or Return to Current Title.
@@ -2084,8 +2019,9 @@ impl App {
             library_tab: 0,
             library_focus: 0,
             library_selection: 0,
-            library_dpad_y: 0,
+            library_dpad_repeat: LibraryDpadRepeat::default(),
             library_scroll_to_top: true,
+            library_scroll_to_selection: false,
             quick_menu_open: false,
             quick_menu_selection: 0,
             quick_menu_dpad_y: 0,
@@ -2250,6 +2186,7 @@ impl App {
         let mut load_path = None;
         let mut needs_open = false;
         let scroll_to_top = std::mem::take(&mut self.library_scroll_to_top);
+        let scroll_to_selection = std::mem::take(&mut self.library_scroll_to_selection);
         // Library folder to configure, set from the empty-state link.
         let mut pick_slot: Option<usize> = None;
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -2290,6 +2227,7 @@ impl App {
                             self.library_focus = slot;
                             self.library_selection = 0;
                             self.library_scroll_to_top = true;
+                            self.library_scroll_to_selection = false;
                         }
                     }
                 });
@@ -2361,6 +2299,9 @@ impl App {
                         let hovered = resp.hovered();
                         let controller_selected =
                             self.library_focus == selected && row == self.library_selection;
+                        if controller_selected && scroll_to_selection {
+                            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                        }
                         if hovered || controller_selected {
                             ui.painter()
                                 .rect_filled(rect, egui::CornerRadius::same(5), hover_fill);
@@ -2413,8 +2354,9 @@ impl App {
         self.scan_libraries();
         self.library_focus = self.library_tab;
         self.library_selection = 0;
-        self.library_dpad_y = 0;
+        self.library_dpad_repeat.reset();
         self.library_scroll_to_top = true;
+        self.library_scroll_to_selection = false;
     }
 
     fn paint_quick_menu(&mut self, ctx: &egui::Context) {
@@ -3228,8 +3170,7 @@ impl App {
     }
 
     /// Handle controller navigation while the Library owns the central view.
-    /// Button-press events provide natural edge triggering, so held triggers
-    /// and D-pad directions cannot race through several tabs or rows.
+    /// Tabs and actions remain edge-triggered; rows repeat after a short hold.
     fn poll_library_gamepad(&mut self) -> Option<PathBuf> {
         let gilrs = self.gamepad.as_mut()?;
         let mut actions = Vec::new();
@@ -3260,13 +3201,11 @@ impl App {
             })
             .find(|&direction| direction != 0)
             .unwrap_or(0);
-        if dpad_y != self.library_dpad_y {
-            if dpad_y < 0 {
-                actions.push(LibraryPadAction::PreviousDisc);
-            } else if dpad_y > 0 {
-                actions.push(LibraryPadAction::NextDisc);
-            }
-            self.library_dpad_y = dpad_y;
+        let repeated_direction = self.library_dpad_repeat.update(dpad_y, Instant::now());
+        if repeated_direction < 0 {
+            actions.push(LibraryPadAction::PreviousDisc);
+        } else if repeated_direction > 0 {
+            actions.push(LibraryPadAction::NextDisc);
         }
 
         let mut load_path = None;
@@ -3280,6 +3219,7 @@ impl App {
                     );
                     self.library_selection = 0;
                     self.library_scroll_to_top = true;
+                    self.library_scroll_to_selection = false;
                     if self.library_focus < LIBRARY_SLOTS.len() {
                         self.library_tab = self.library_focus;
                     }
@@ -3300,6 +3240,7 @@ impl App {
                     } else {
                         self.library_selection = (self.library_selection + count - 1) % count;
                     }
+                    self.library_scroll_to_selection = true;
                 }
                 LibraryPadAction::Activate => {
                     if self.library_focus == LIBRARY_OPEN_FOCUS {
@@ -3867,8 +3808,9 @@ impl eframe::App for App {
                 self.scan_libraries();
                 self.library_focus = self.library_tab;
                 self.library_selection = 0;
-                self.library_dpad_y = 0;
+                self.library_dpad_repeat.reset();
                 self.library_scroll_to_top = true;
+                self.library_scroll_to_selection = false;
                 self.pad_buttons = 0;
                 self.pad_frac = egui::Vec2::ZERO;
                 if self.mouse_captured {
@@ -4211,7 +4153,8 @@ mod tests {
         disc_load_action, display_aperture, fill_audio, fit_aspect, library_dpad_direction,
         library_pad_action, load_nvram, parental_passcode, pointer_mapping, presentation_aspect,
         region_is_pal, screenshot_image, write_nvram, DiscLoadAction, DiscOverride, DisplayArea,
-        LibraryPadAction, SharedFrame, LIBRARY_OPEN_FOCUS, UI_SELECTED_TEXT,
+        LibraryDpadRepeat, LibraryPadAction, SharedFrame, LIBRARY_OPEN_FOCUS, LIBRARY_REPEAT_DELAY,
+        LIBRARY_REPEAT_INTERVAL, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
 
@@ -4396,6 +4339,58 @@ mod tests {
         assert_eq!(library_dpad_direction(0.0, false, true), 1);
         assert_eq!(library_dpad_direction(0.0, true, true), 0);
         assert_eq!(library_dpad_direction(0.2, false, false), 0);
+    }
+
+    #[test]
+    fn library_dpad_hold_repeats_after_delay_without_catch_up_bursts() {
+        let start = std::time::Instant::now();
+        let mut repeat = LibraryDpadRepeat::default();
+        assert_eq!(repeat.update(1, start), 1);
+        assert_eq!(repeat.update(1, start + LIBRARY_REPEAT_DELAY / 2), 0);
+        assert_eq!(repeat.update(1, start + LIBRARY_REPEAT_DELAY), 1);
+        assert_eq!(
+            repeat.update(
+                1,
+                start + LIBRARY_REPEAT_DELAY + LIBRARY_REPEAT_INTERVAL / 2
+            ),
+            0
+        );
+        assert_eq!(
+            repeat.update(1, start + LIBRARY_REPEAT_DELAY + LIBRARY_REPEAT_INTERVAL),
+            1
+        );
+
+        // A long blocked frame produces one movement, not a queued burst.
+        assert_eq!(
+            repeat.update(1, start + std::time::Duration::from_secs(5)),
+            1
+        );
+        assert_eq!(
+            repeat.update(
+                1,
+                start + std::time::Duration::from_secs(5) + LIBRARY_REPEAT_INTERVAL / 2
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn library_dpad_release_and_reversal_are_immediate_edges() {
+        let start = std::time::Instant::now();
+        let mut repeat = LibraryDpadRepeat::default();
+        assert_eq!(repeat.update(1, start), 1);
+        assert_eq!(
+            repeat.update(-1, start + std::time::Duration::from_millis(1)),
+            -1
+        );
+        assert_eq!(
+            repeat.update(0, start + std::time::Duration::from_millis(2)),
+            0
+        );
+        assert_eq!(
+            repeat.update(1, start + std::time::Duration::from_millis(3)),
+            1
+        );
     }
 
     #[test]

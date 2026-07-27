@@ -76,13 +76,16 @@ events. A synthetic two-PCL ring detects reuse before release. A 650-million
 instruction The 7th Guest comparator observed 1,290 fills, 1,157 releases,
 1,296 VMPEG packs, and zero overwrite or decoder errors. The current Addams
 Family Values USA run also recorded no full-PCL reuse. Of 464 normalized
-CDIC-to-VMPEG payloads, 463 match exactly; one audio payload at `$22CD88`
-differs, and that DMA is the first point at which audio and stream errors jump
-to 647. The buffer still contains the original valid pack immediately after
-the CDIC transfer, while its audio PCL is discovered only later. This narrows
-the next experiment to bounded guest-write provenance between CDIC completion,
-PCL assignment, and DMA2 submission. It does not justify changing the
-75-sector clock or decoder.
+CDIC-to-VMPEG payloads, 463 match exactly. Bounded guest-write provenance now
+explains the last one: at `$22CD88` the native application intentionally
+changes two SCR timestamp bytes before DMA2 submission. The MPEG audio payload
+is unchanged. Its first Layer-II sync header occurs after a legal 647-byte
+mid-frame prefix, exactly accounting for the old “647 errors.” These bytes are
+now reported as synchronization distance rather than malformed frames. Two
+150-million-instruction repeats remain deterministic with 464 packs, 215
+decoded video frames, 45 decoded audio frames, no PCL overwrite, and zero
+demux/video/audio/stream errors. This closes the current VCD audio divergence
+without changing transport timing or decoded output.
 
 Philips TN 088 and TN 102 also separate decoder-transition failures from that
 transport issue. Pause/continue, abort/restart, EOS+SOS in one sector,

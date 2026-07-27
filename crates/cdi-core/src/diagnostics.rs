@@ -185,6 +185,20 @@ pub enum MachineDiagnosticEvent {
         transport_payload_hash: u64,
         pcl_addresses: Vec<u32>,
     },
+    /// Guest CPU writes to a main-memory range most recently filled by CDIC
+    /// DMA. This is diagnostic provenance only: it records hashes and bounds,
+    /// never the commercial payload itself.
+    GuestMemoryWrite {
+        cycle: u64,
+        memory_address: u32,
+        bytes: u32,
+        changed_bytes: u32,
+        before_hash: u64,
+        after_hash: u64,
+        source_dma_address: u32,
+        source_dma_bytes: u32,
+        pcl_addresses: Vec<u32>,
+    },
     PclState {
         cycle: u64,
         transition: PclTransition,

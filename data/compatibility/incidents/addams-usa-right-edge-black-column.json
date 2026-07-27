@@ -1,21 +1,22 @@
 {
   "schema_version": 1,
   "id": "addams-usa-right-edge-black-column",
-  "title": "Addams Family Values USA right-edge black column",
-  "symptom": "All observed screens, including MPEG video, have a vertical black line at the right edge and appear shifted left.",
-  "expected": "Base graphics and MPEG video use their programmed hardware windows without a persistent one-sided black column.",
+  "title": "USA Video CD right-edge black column",
+  "symptom": "Addams Family Values USA and Forrest Gump USA show a persistent vertical black line at the right edge of the picture. Forrest Gump's native bottom control panel remains correctly positioned while its MPEG picture appears shifted left.",
+  "expected": "Base graphics, native Video CD controls, and MPEG video use their programmed hardware windows without a persistent one-sided black column.",
   "status": "reproduced",
   "reported_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
-  "last_reproduced_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+  "last_reproduced_revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "Reported and manually reproduced on the current diagnostic working tree; no rendering experiment or correction has been attempted.",
+  "revalidation_reason": "Reproduced on the current diagnostic working tree in a second USA Video CD. The correctly placed native control panel in Forrest Gump provides new evidence that the MPEG picture and base/control presentation boundaries must be captured separately.",
   "components": [
     "mcd212",
     "dvc",
-    "frontend"
+    "frontend",
+    "vcd"
   ],
-  "disc_fingerprint": "dd9adb80a89378d97acfecaf50ce20d0f769c442",
+  "disc_fingerprint": "Addams Family Values USA: dd9adb80a89378d97acfecaf50ce20d0f769c442; Forrest Gump USA: inventory pending",
   "scenario": {
     "model": "cdi220b",
     "video_standard": "ntsc",
@@ -23,13 +24,38 @@
     "instruction_limit": null,
     "input_events": []
   },
-  "hypotheses": [],
+  "hypotheses": [
+    {
+      "id": "first-video-window-divergence",
+      "hardware_explanation": "The one-sided column may originate in the native MCD251 external-video window/sample origin, an MCD212 plane or aperture boundary, or frontend presentation. The correctly positioned native control panel does not yet prove which boundary is inaccurate.",
+      "supporting_evidence": [
+        "The right-edge column is visible in both Addams Family Values USA and Forrest Gump USA.",
+        "Forrest Gump's native bottom control panel is correctly positioned while the MPEG picture retains the column.",
+        "The earlier Addams report described the column on both base screens and MPEG, so a DVC-only conclusion would be premature."
+      ],
+      "contradicting_evidence": [
+        "No synchronized individual-plane, external-video, composed-raster, aperture, and frontend capture exists for either title.",
+        "PAL Video CD runs have not yet been compared at the same programmed register state."
+      ],
+      "falsifying_test": "Capture MCD251 display registers and external frame bounds, both MCD212 planes, the composed hardware raster/aperture, and frontend output at one affected frame. The first stage containing the black column distinguishes authored pixels, external-video origin, composition, and presentation.",
+      "citations": [
+        "Motorola MCD251 Technical Summary",
+        "Green Book Release 2 external-video composition",
+        "docs/debugging-workflow.md display provenance stages"
+      ]
+    }
+  ],
   "experiments": [],
   "manual_verification": [
     {
       "result": "reproduced",
       "revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
       "notes": "A persistent vertical black column is visible at the right edge across base screens and MPEG video, making the image appear shifted left."
+    },
+    {
+      "result": "reproduced",
+      "revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+      "notes": "Forrest Gump USA reproduces the right-edge black column during MPEG playback while its native bottom Video CD control panel is correctly placed. Addams Family Values USA also still shows the previously reported column."
     }
   ]
 }

@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "id": "vcd-contents-control-freeze",
+  "title": "Native Video CD Contents control stalls",
+  "symptom": "Selecting Contents in the native Video CD menu makes the in-disc controls stop responding in two tested Video CDs, while MPEG video continues playing.",
+  "expected": "The native Contents action opens or navigates the disc's content selection and the Video CD controls remain responsive.",
+  "status": "reproduced",
+  "reported_revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+  "last_reproduced_revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": "Manually reproduced in two current-build Video CD runs. Continued MPEG playback shows that the decoder and presentation clocks continue, but no device boundary has yet been isolated.",
+  "components": [
+    "vcd",
+    "input",
+    "slave",
+    "cdic",
+    "dvc"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "ntsc",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": [
+      "start feature playback",
+      "open the native Video CD controls",
+      "select Contents"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "contents-navigation-completion-or-input-state",
+      "hardware_explanation": "The native Video CD application may be waiting for a CDIC/CDFM or PSD-navigation completion that E-Di does not deliver, or input/control state may fail to transition after the Contents action. MPEG playback can continue independently while the guest control path waits.",
+      "supporting_evidence": [
+        "The in-disc controls stop responding immediately after Contents is selected in two tested Video CDs.",
+        "MPEG video continues playing, so this is not a total machine or decoder freeze."
+      ],
+      "contradicting_evidence": [
+        "No bounded guest-PC, input-packet, CDIC-command, PSD, or completion-event trace has been captured around the click.",
+        "The exact second disc fingerprint and whether both discs use the same PSD layout are not yet recorded."
+      ],
+      "falsifying_test": "Record two deterministic runs around the Contents selection, one without the click and one with it. Compare SLAVE input delivery, guest PC/IRQ state, CDIC commands and completions, VCD PSD reads, and VMPEG counters to identify the first control-path divergence.",
+      "citations": [
+        "Video CD on CD-i Release 4.1, control behavior and PSD startup",
+        "White Book Video CD playback control",
+        "docs/debugging-workflow.md"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reproduced",
+      "revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+      "notes": "The native Contents control became unresponsive in two tested Video CDs while the feature video continued to decode and play."
+    }
+  ]
+}

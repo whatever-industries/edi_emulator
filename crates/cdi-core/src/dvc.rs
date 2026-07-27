@@ -185,6 +185,10 @@ pub struct DvcStats {
     pub demux_errors: u64,
     pub video_errors: u64,
     pub audio_errors: u64,
+    /// Bytes skipped while acquiring the first valid Layer-II frame sync.
+    /// Beginning playback in the middle of an audio frame is legal and is
+    /// therefore not counted as a malformed-stream error.
+    pub audio_resync_bytes: u64,
     pub queued_video_frames: u64,
     pub queued_audio_samples: u64,
     pub playing: u64,
@@ -474,6 +478,8 @@ struct Mp2Decoder {
     state: oxideav_mp2::frame::FrameDecodeState,
     pcm: VecDeque<i16>,
     errors: u64,
+    resync_bytes: u64,
+    synchronized: bool,
 }
 
 impl Mp2Decoder {
@@ -481,6 +487,8 @@ impl Mp2Decoder {
         self.state.reset();
         self.pcm.clear();
         self.errors = 0;
+        self.resync_bytes = 0;
+        self.synchronized = false;
     }
 
     fn decode_available(&mut self, input: &mut VecDeque<u8>) -> u64 {
@@ -494,7 +502,12 @@ impl Mp2Decoder {
                 Ok(header) => header,
                 Err(_) => {
                     input.pop_front();
-                    self.errors += 1;
+                    if self.synchronized {
+                        self.errors += 1;
+                        self.synchronized = false;
+                    } else {
+                        self.resync_bytes += 1;
+                    }
                     continue;
                 }
             };
@@ -509,12 +522,14 @@ impl Mp2Decoder {
                     Self::append_resampled(&mut self.pcm, &frame.pcm, frame.header.sample_rate);
                     input.drain(..frame_size);
                     decoded += 1;
+                    self.synchronized = true;
                 }
                 Err(error) => {
                     log::debug!("vmpeg: malformed MP2 frame: {error}");
                     input.pop_front();
                     self.state.reset();
                     self.errors += 1;
+                    self.synchronized = false;
                 }
             }
         }
@@ -596,6 +611,7 @@ pub struct Vmpeg {
     demux_errors_before_reset: u64,
     video_errors_before_reset: u64,
     audio_errors_before_reset: u64,
+    audio_resync_bytes_before_reset: u64,
     captured_video_es: Option<Vec<u8>>,
     stats: DvcStats,
     audio_out: Vec<i16>,
@@ -672,6 +688,7 @@ impl Vmpeg {
             demux_errors_before_reset: 0,
             video_errors_before_reset: 0,
             audio_errors_before_reset: 0,
+            audio_resync_bytes_before_reset: 0,
             captured_video_es: None,
             stats: DvcStats::default(),
             audio_out: Vec::new(),
@@ -691,6 +708,9 @@ impl Vmpeg {
         self.audio_errors_before_reset = self
             .audio_errors_before_reset
             .saturating_add(self.mp2.errors);
+        self.audio_resync_bytes_before_reset = self
+            .audio_resync_bytes_before_reset
+            .saturating_add(self.mp2.resync_bytes);
         self.fma_regs.fill(0);
         self.fmv_regs.fill(0);
         self.fma_read_counts.fill(0);
@@ -1483,6 +1503,9 @@ impl Vmpeg {
                     self.audio_errors_before_reset = self
                         .audio_errors_before_reset
                         .saturating_add(self.mp2.errors);
+                    self.audio_resync_bytes_before_reset = self
+                        .audio_resync_bytes_before_reset
+                        .saturating_add(self.mp2.resync_bytes);
                     self.mp2.reset();
                     self.audio_underflow_reported = false;
                     self.audio_underflow_after_eoi_ack = false;
@@ -1739,6 +1762,8 @@ impl Vmpeg {
             + self.audio_demux.stats.errors;
         self.stats.video_errors = self.video_errors_before_reset + self.video_decoder.errors;
         self.stats.audio_errors = self.audio_errors_before_reset + self.mp2.errors;
+        self.stats.audio_resync_bytes =
+            self.audio_resync_bytes_before_reset + self.mp2.resync_bytes;
         self.stats.stream_errors =
             self.stats.demux_errors + self.stats.video_errors + self.stats.audio_errors;
     }
@@ -1977,6 +2002,33 @@ mod tests {
 
         assert_eq!(dvc.stats.video_errors, 2);
         assert_eq!(dvc.stats.stream_errors, 2);
+    }
+
+    #[test]
+    fn mp2_frame_sync_acquisition_is_not_a_stream_error() {
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+        let mut input = VecDeque::from([0x00, 0x11, 0x22, 0x33]);
+        assert_eq!(dvc.mp2.decode_available(&mut input), 0);
+        dvc.sync_stats();
+
+        assert_eq!(dvc.stats.audio_resync_bytes, 1);
+        assert_eq!(dvc.stats.audio_errors, 0);
+        assert_eq!(dvc.stats.stream_errors, 0);
+    }
+
+    #[test]
+    fn mp2_lost_sync_after_a_frame_is_a_stream_error() {
+        let mut decoder = Mp2Decoder {
+            synchronized: true,
+            ..Mp2Decoder::default()
+        };
+        let mut input = VecDeque::from([0x00, 0x11, 0x22, 0x33]);
+        assert_eq!(decoder.decode_available(&mut input), 0);
+
+        assert_eq!(decoder.errors, 1);
+        assert_eq!(decoder.resync_bytes, 0);
+        assert!(!decoder.synchronized);
     }
 
     #[test]

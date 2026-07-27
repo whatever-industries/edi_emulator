@@ -55,10 +55,103 @@ struct DvcDmaDiagnosticInFlight {
     payload_hash: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WatchedDmaRegion {
+    address: u32,
+    bytes: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GuestMemoryWriteObservation {
+    memory_address: u32,
+    bytes: u32,
+    changed_bytes: u32,
+    before_hash: u64,
+    after_hash: u64,
+    source_dma_address: u32,
+    source_dma_bytes: u32,
+}
+
 #[derive(Debug, Default)]
 struct DmaDiagnosticCapture {
     pending: Vec<DmaDiagnosticObservation>,
     dvc_in_flight: Option<DvcDmaDiagnosticInFlight>,
+    watched_cdic_regions: Vec<WatchedDmaRegion>,
+    pending_guest_writes: Vec<GuestMemoryWriteObservation>,
+    cdic_dma_active: bool,
+}
+
+impl DmaDiagnosticCapture {
+    const MAX_WATCHED_CDIC_REGIONS: usize = 128;
+
+    fn watch_cdic_region(&mut self, address: u32, bytes: u32) {
+        if bytes == 0 {
+            return;
+        }
+        self.watched_cdic_regions
+            .retain(|watch| !ranges_overlap(watch.address, watch.bytes, address, bytes));
+        if self.watched_cdic_regions.len() == Self::MAX_WATCHED_CDIC_REGIONS {
+            self.watched_cdic_regions.remove(0);
+        }
+        self.watched_cdic_regions
+            .push(WatchedDmaRegion { address, bytes });
+    }
+
+    fn observe_guest_write(&mut self, address: u32, before: u8, after: u8) {
+        if self.cdic_dma_active || before == after {
+            return;
+        }
+        let Some(source) = self
+            .watched_cdic_regions
+            .iter()
+            .rev()
+            .find(|watch| range_contains_address(watch.address, watch.bytes, address))
+            .copied()
+        else {
+            return;
+        };
+        if let Some(previous) = self.pending_guest_writes.last_mut() {
+            if previous.source_dma_address == source.address
+                && previous.source_dma_bytes == source.bytes
+                && previous.memory_address.wrapping_add(previous.bytes) == address
+            {
+                previous.bytes += 1;
+                previous.changed_bytes += 1;
+                previous.before_hash = diagnostic_hash_byte(previous.before_hash, before);
+                previous.after_hash = diagnostic_hash_byte(previous.after_hash, after);
+                return;
+            }
+        }
+        self.pending_guest_writes.push(GuestMemoryWriteObservation {
+            memory_address: address,
+            bytes: 1,
+            changed_bytes: 1,
+            before_hash: diagnostic_hash_byte(DIAGNOSTIC_HASH_OFFSET, before),
+            after_hash: diagnostic_hash_byte(DIAGNOSTIC_HASH_OFFSET, after),
+            source_dma_address: source.address,
+            source_dma_bytes: source.bytes,
+        });
+    }
+
+    fn retire_consumed_region(&mut self, address: u32, bytes: u32) {
+        self.watched_cdic_regions
+            .retain(|watch| !ranges_overlap(watch.address, watch.bytes, address, bytes));
+    }
+}
+
+fn range_contains_address(start: u32, bytes: u32, address: u32) -> bool {
+    start
+        .checked_add(bytes)
+        .is_some_and(|end| address >= start && address < end)
+}
+
+fn ranges_overlap(left: u32, left_bytes: u32, right: u32, right_bytes: u32) -> bool {
+    let (Some(left_end), Some(right_end)) =
+        (left.checked_add(left_bytes), right.checked_add(right_bytes))
+    else {
+        return false;
+    };
+    left < right_end && right < left_end
 }
 
 /// Stub identifiers for devices that are not yet implemented; accesses are
@@ -428,7 +521,10 @@ impl MachineBus {
             if region.contains(addr) {
                 match *region {
                     Region::Ram { block, base, .. } => {
-                        self.ram[block][(addr - base) as usize] = val;
+                        let index = (addr - base) as usize;
+                        let before = self.ram[block][index];
+                        self.observe_guest_memory_write(addr, before, val);
+                        self.ram[block][index] = val;
                     }
                     Region::Rom { .. } => log::trace!("write to ROM @ {addr:#010x}"),
                     Region::Dev { slot, base, .. } => self.dev_write8(slot, addr - base, val),
@@ -437,6 +533,12 @@ impl MachineBus {
             }
         }
         log::trace!("open-bus write8 @ {addr:#010x} = {val:#04x}");
+    }
+
+    fn observe_guest_memory_write(&mut self, address: u32, before: u8, after: u8) {
+        if let Some(capture) = &mut self.dma_diagnostics {
+            capture.observe_guest_write(address, before, after);
+        }
     }
 
     pub fn read8_silent(&mut self, addr: u32) -> u8 {
@@ -461,6 +563,9 @@ impl MachineBus {
             &self.cdic.ram
                 [device_at & 0x3FFF..(device_at & 0x3FFF) + 16.min(0x3FFF - (device_at & 0x3FFF))]
         );
+        if let Some(capture) = &mut self.dma_diagnostics {
+            capture.cdic_dma_active = true;
+        }
         for i in 0..count {
             let mem_addr = start.wrapping_add(i * 2);
             if to_memory {
@@ -488,9 +593,18 @@ impl MachineBus {
             }
             device_at += 2;
         }
+        if let Some(capture) = &mut self.dma_diagnostics {
+            capture.cdic_dma_active = false;
+        }
         self.periph
             .set_dma0_memory_address(start.wrapping_add(count * 2));
         if let Some(capture) = &mut self.dma_diagnostics {
+            // Real-time Form-2 payloads are 2,304 or 2,324 bytes. Excluding
+            // ordinary 2,048-byte filesystem traffic keeps this bounded
+            // provenance focused on the CDFM/PCL media path.
+            if to_memory && transfer_bytes >= 2304 {
+                capture.watch_cdic_region(start, transfer_bytes);
+            }
             capture.pending.push(DmaDiagnosticObservation {
                 channel: 0,
                 memory_address: start,
@@ -601,6 +715,9 @@ impl MachineBus {
             return;
         };
         if let Some(in_flight) = capture.dvc_in_flight.take() {
+            if completed {
+                capture.retire_consumed_region(in_flight.memory_address, in_flight.bytes);
+            }
             capture
                 .pending
                 .push(dvc_dma_observation(in_flight, completed));
@@ -615,6 +732,13 @@ impl MachineBus {
         self.dma_diagnostics
             .as_mut()
             .map(|capture| std::mem::take(&mut capture.pending))
+            .unwrap_or_default()
+    }
+
+    fn take_guest_memory_write_observations(&mut self) -> Vec<GuestMemoryWriteObservation> {
+        self.dma_diagnostics
+            .as_mut()
+            .map(|capture| std::mem::take(&mut capture.pending_guest_writes))
             .unwrap_or_default()
     }
 
@@ -667,7 +791,10 @@ impl MachineBus {
         }
         match self.pages[(a24 >> PAGE_SHIFT) as usize] {
             Page::Ram { block, page_base } => {
-                self.ram[block][(page_base + (a24 & 0xFFF)) as usize] = val;
+                let index = (page_base + (a24 & 0xFFF)) as usize;
+                let before = self.ram[block][index];
+                self.observe_guest_memory_write(a24, before, val);
+                self.ram[block][index] = val;
             }
             Page::Rom { .. } => log::trace!("write to ROM @ {addr:#010x}"),
             Page::Slow => self.slow_write8(a24, val),
@@ -983,7 +1110,8 @@ impl Machine {
             return;
         }
         let observations = self.bus.take_dma_diagnostic_observations();
-        if observations.is_empty() {
+        let guest_writes = self.bus.take_guest_memory_write_observations();
+        if observations.is_empty() && guest_writes.is_empty() {
             return;
         }
         let cycle = self.cpu.cycles;
@@ -994,6 +1122,19 @@ impl Machine {
             };
             let regions = self.bus.diagnostic_ram_regions();
             events.extend(tracker.sample(cycle, &regions));
+            for write in guest_writes {
+                events.push(MachineDiagnosticEvent::GuestMemoryWrite {
+                    cycle,
+                    memory_address: write.memory_address,
+                    bytes: write.bytes,
+                    changed_bytes: write.changed_bytes,
+                    before_hash: write.before_hash,
+                    after_hash: write.after_hash,
+                    source_dma_address: write.source_dma_address,
+                    source_dma_bytes: write.source_dma_bytes,
+                    pcl_addresses: tracker.matching_buffers(write.memory_address, write.bytes),
+                });
+            }
             for observation in observations {
                 let (pcl_addresses, mut ownership_events) =
                     if observation.channel == 0 && observation.to_memory {
@@ -1226,6 +1367,41 @@ mod tests {
         rom[..8].copy_from_slice(&[0x00, 0x00, 0x15, 0x00, 0x00, 0x40, 0x04, 0xB8]);
         rom[0x4B8] = 0xAB;
         MachineBus::new(&CDI220B, rom).unwrap()
+    }
+
+    #[test]
+    fn guest_write_provenance_is_bounded_to_the_latest_cdic_region() {
+        let mut capture = DmaDiagnosticCapture::default();
+        capture.watch_cdic_region(0x1000, 4);
+        capture.observe_guest_write(0x1000, 0x10, 0x20);
+        capture.observe_guest_write(0x1001, 0x30, 0x30);
+        capture.observe_guest_write(0x2000, 0x40, 0x50);
+
+        assert_eq!(capture.pending_guest_writes.len(), 1);
+        let observation = capture.pending_guest_writes[0];
+        assert_eq!(observation.memory_address, 0x1000);
+        assert_eq!(observation.bytes, 1);
+        assert_eq!(observation.changed_bytes, 1);
+        assert_eq!(observation.source_dma_address, 0x1000);
+        assert_eq!(observation.source_dma_bytes, 4);
+
+        capture.watch_cdic_region(0x1002, 4);
+        assert_eq!(capture.watched_cdic_regions.len(), 1);
+        assert_eq!(capture.watched_cdic_regions[0].address, 0x1002);
+    }
+
+    #[test]
+    fn guest_write_provenance_excludes_dma_and_retires_after_consumption() {
+        let mut capture = DmaDiagnosticCapture::default();
+        capture.watch_cdic_region(0x3000, 8);
+        capture.cdic_dma_active = true;
+        capture.observe_guest_write(0x3000, 0, 1);
+        capture.cdic_dma_active = false;
+        assert!(capture.pending_guest_writes.is_empty());
+
+        capture.retire_consumed_region(0x3002, 2);
+        capture.observe_guest_write(0x3000, 0, 1);
+        assert!(capture.pending_guest_writes.is_empty());
     }
 
     #[test]

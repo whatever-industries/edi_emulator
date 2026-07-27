@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "id": "philips-validation-disc-coverage",
+  "title": "Philips Validation Disc regression coverage",
+  "symptom": "The two Philips Validation Discs contain structured hardware, graphics, UCM, real-time-media, input, storage, and performance tests that are not yet represented in E-Di's regression matrix.",
+  "expected": "Selected validation cases run reproducibly and their authored result screens, timing measurements, and device events are captured as evidence for device-level compatibility work.",
+  "status": "planned",
+  "reported_revision": "53165b3+dirty:c8aee56743ec102de4d59f44b7df8c13bd0f747fc13e0fc796b1d5d0ea77a31b",
+  "last_reproduced_revision": null,
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": "Payload-free inventories were generated for both local discs. Disc 1's Philips Tests menu was manually reached, but no individual validation result has yet been classified against a specification or hardware baseline.",
+  "components": [
+    "cpu",
+    "timing",
+    "mcd212",
+    "ucm",
+    "cdic",
+    "input",
+    "nvram",
+    "rtf",
+    "audio"
+  ],
+  "disc_fingerprint": "Disc 1 Europe: 032c326a5dbd94715cfe79d79c79bc214cbae5d4; Disc 2 Japan: 7f2b27564cfa07bbc2b450d906411d61dc6746c6",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "Disc 1 PAL; Disc 2 player standard to be verified per test",
+    "dvc": "Disc 1 not required; Disc 2 requirement must be verified rather than inferred from inventory classification",
+    "instruction_limit": null,
+    "input_events": [
+      "navigate the authored validation menus",
+      "select one isolated test",
+      "capture its result screen and bounded diagnostics"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "authored-validation-as-device-boundary",
+      "hardware_explanation": "A Philips-authored validation case can provide a smaller and better-controlled device stimulus than a commercial title, but its result is meaningful only after the tested subsystem, expected output, player standard, and any required hardware are identified.",
+      "supporting_evidence": [
+        "Disc 1 contains named bitmap conceal/draw/fade/scroll/text and performance programs, LUCM, pointer tests, NVRAM/alarm/signal tests, and 68070/OS-9 analyzers.",
+        "Disc 1's authored menu exposes Visual Examples, Video Representations, Base Case UCM Functions, and Performance categories.",
+        "Disc 2 contains authored DYUV, RL7, XA, slideshow, channel-selection, trigger, and EOR/EOF real-time records plus two audio tracks."
+      ],
+      "contradicting_evidence": [
+        "No real-hardware result captures or authoritative expected-value tables have yet been associated with individual cases.",
+        "Some performance tests may encode assumptions about a particular player revision, so raw numeric differences are not automatically emulator defects.",
+        "Disc 2's broad inventory-level DVC flag is not supported by an identified MPEG sequence and must be verified in the authored menu."
+      ],
+      "falsifying_test": "Choose one case with a specification-defined result, run it twice with bounded diagnostics, and compare its device-level output to the cited requirement. If the case cannot be mapped to a defined device contract, retain it as observational evidence rather than a pass/fail gate.",
+      "citations": [
+        "Philips Validation Disc Europe Disc 1 payload-free inventory",
+        "Philips Validation Disc Japan Disc 2 payload-free inventory",
+        "docs/debugging-workflow.md"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "menu-reached",
+      "revision": "53165b3+dirty:c8aee56743ec102de4d59f44b7df8c13bd0f747fc13e0fc796b1d5d0ea77a31b",
+      "notes": "The user reached Disc 1's Philips Validation Suite submenu. Its top-level choices include Visual Examples, Video Representations, Base Case UCM Functions, and Performance."
+    }
+  ]
+}

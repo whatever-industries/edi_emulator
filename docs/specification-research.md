@@ -1,6 +1,6 @@
 # Philips CD-i specification research
 
-Status date: 2026-07-25
+Status date: 2026-07-26
 
 This is the durable research ledger for the local Philips CD-i/ICDIA document
 archive. It records claims that can constrain emulation behavior, their exact
@@ -70,7 +70,7 @@ These hashes pin the exact local editions used for the first priority pass:
 |---|---|---|---|---|
 | Global timing | Disc/audio, video field, and 10 ms system tick are asynchronous; continuous A/V normally follows the disc/audio clock | `notes/technote094.pdf`, printed pp. 1-5 | The nominal 75-sector CDIC cadence is correct. Whole-machine event interleaving still needs reconciliation with SCC68070 instruction timing. | Trace disc delivery, field events, system ticks, and guest buffer release on one shared timeline. |
 | Player clocks | PAL system/CPU clocks are 30/15 MHz; NTSC system clock is 30.2098 MHz, consistent with the MCD212's 30.2097 MHz timing tables | `svcmanuals/cdi205.pdf`, PDF pp. 66 and 96; `svcmanuals/cdi350.pdf`, video specifications; `docs/mcd212rev0.pdf`, Table 5-5 | The scheduler and devices currently use a global 30/15 MHz constant, while MCD212 derives integer line periods from exact 50/60 Hz. This is a confirmed model limitation, but changing it before event-interleaved scheduling could regress verified titles. | Add board-clock values and line/field-period tests, then reconstruct scheduling so CPU and devices share the selected crystal without instruction-boundary lumping. |
-| CDFM/PCL | CIL advances to `PCL_Nxt`; a full buffer cannot be reused; PCL signal precedes PCB signal; MPEG uses circular one-sector PCL chains | Green Book R2 `docs/cdi_may94_r2.pdf`, VII.4.4.2-VII.4.4.3 and IX.3.3.3; `notes/technote098.pdf`, “PCL Handling by the MPEG Drivers” | DMA-boundary ownership tracing and a synthetic reuse test are implemented. Current The 7th Guest and Addams runs show no full-PCL overwrite; 463/464 Addams payloads match, with one audio divergence at `$22CD88` coinciding with 647 audio/stream errors. | Trace bounded guest writes between the matching CDIC transfer, late PCL assignment, and VMPEG DMA to classify the lone divergence before changing timing. |
+| CDFM/PCL | CIL advances to `PCL_Nxt`; a full buffer cannot be reused; PCL signal precedes PCB signal; MPEG uses circular one-sector PCL chains | Green Book R2 `docs/cdi_may94_r2.pdf`, VII.4.4.2-VII.4.4.3 and IX.3.3.3; `notes/technote098.pdf`, “PCL Handling by the MPEG Drivers” | DMA-boundary ownership tracing, bounded guest-write provenance, and a synthetic reuse test are implemented. Current The 7th Guest and Addams runs show no full-PCL overwrite. The lone Addams hash difference is an intentional guest SCR retime, not payload corruption. | Retain these diagnostics when investigating a current visible transport failure; do not alter the nominal 75-sector cadence without a new first-divergence trace. |
 | CDIC reset state | CDIC register 2 at base + `$3FFA` is nonzero after reset. The service manuals consistently say `$C7FE` in the PCB test and `$D7FE` in the terminal test | `svcmanuals/cdi205.pdf`, `svcmanuals/cdi220.pdf`, `svcmanuals/cdi350.pdf`, and `svcmanuals/cdi360.pdf`, PCB test step 9 and terminal test step 09 | `Cdic::new` currently initializes the corresponding Z/audio-control register to zero, so a reset mismatch is confirmed. The repeated bit-12 difference strongly suggests test-path state rather than a one-off typo; its cause must not be guessed. | Trace each BIOS's first accesses, identify what the terminal test initializes before reading register 2, and map `$C7FE`/`$D7FE` fields against CDIC documentation before correcting the reset state. |
 | MCD212 geometry | Compatibility mode masks fixed samples/lines; 525 monitor and 525 TV have different `ST` meanings | Green Book R2 V.4.8; `docs/mcd212rev0.pdf`, Tables 5-4 through 5-7 and §5.8 | CD-i 220 TV and 625 behavior are modeled. The core has no distinct 525-monitor player type, so monitor-mode semantics are not representable. | Table-driven 525-monitor tests before adding a monitor-class model; do not alter CD-i 220 TV output. |
 | Pixel aspect | Measured Philips output uses pixel-height/width ratios 1.225 for 525 and 1.025 for 625 | `notes/technote093.pdf`, printed p. 6 | Implemented exactly as 49/40 and 41/40. NTSC can legitimately look taller than PAL, and regional assets may also differ. | Compare raw MPEG dimensions, live MCD251 window, and final presentation before classifying PAL/NTSC framing as a bug. |
@@ -81,7 +81,7 @@ These hashes pin the exact local editions used for the first priority pass:
 | DVC memory/hardware | 22ER9141 supplies MPEG-1 decode and 1 MiB extra system RAM; compressed data comes from the 68070 and decoded RGB/audio returns to the base case | `svcmanuals/22er9141.pdf`, §§4.3-4.5 | The architecture matches the current CDIC/main-RAM/DMA/VMPEG path and base-case video/audio composition. The service diagram also confirms separate audio, video, buffering, and DRAM sections. | Preserve this path in transport fixes; add an initialization test for advertised extension memory and both decoder drivers. |
 | DVC/player variants | Later CD-i 450/550 service material names model-specific DVC hardware (`22ER9144` in the regional power table and built-in `22ER9956` for the 550) | `svcmanuals/cdi450.pdf`, model notice and technical specifications | This reinforces the existing M3 boundary: the 22ER9141 VMPEG implementation must not be assumed to describe every later player/DVC combination. | Inventory the named cartridges and board interfaces as separate future models before extending M3 behavior to CD-i 450/550. |
 | DVC memory descriptors | DVC adds priority-`$81` system RAM and color-`$90` MPEG memory; applications are guaranteed at least 960 KiB contiguous extension RAM | `notes/technote101.pdf`, printed pp. 1-3 | Address maps exist, and VMPEG firmware exposes CSD material. Guest-visible descriptor/allocation behavior is not directly asserted. | Parse regenerated CSD and verify `/mv`, `/ma`, `RAM00`, `RAM01`, priorities, colors, and minimum contiguous allocation. |
-| MPEG play buffers | Normal video and audio playback use separate circular one-sector PCL chains; the drivers reset `PCL_Cnt`/`PCL_Ctrl` after consumption | `notes/technote098.pdf`, “PCL Handling by the MPEG Drivers” | Read-only diagnostics now observe PCL fills/releases and match DMA payloads. The working comparator completes orderly releases with zero decoder errors; the VCD sample has one unmatched audio submission without a recorded overwrite. | Add guest-write provenance around the unmatched buffer and distinguish transformation, late ownership assignment, and diagnostic aggregation. |
+| MPEG play buffers | Normal video and audio playback use separate circular one-sector PCL chains; the drivers reset `PCL_Cnt`/`PCL_Ctrl` after consumption | `notes/technote098.pdf`, “PCL Handling by the MPEG Drivers” | Read-only diagnostics now observe PCL fills/releases, bounded guest changes, and DMA hashes. The working comparator and VCD sample complete without overwrite. Addams rewrites only two SCR bytes before submitting the pack; its 647 skipped audio bytes are legal initial Layer-II frame synchronization. | Apply the same provenance path to a user-visible sustained-play failure; treat MP2 sync acquisition separately from malformed frames. |
 | MPEG events | Events occur at presentation time; last-picture means the first field displaying the last picture, not parser receipt of sequence end | Green Book R2 IX.3.3.5-IX.3.3.7 | SCR/PTS anchors and delayed-reference handling exist, but event timing has incomplete synthetic coverage. | Add first/last picture, new-sequence, underflow, input-error, and old-PCL-release timing tests. |
 | MPEG sequence end | Concatenated encodes may introduce extra EOS codes; real cartridges can lose rhythm after some EOS codes | `notes/technote102.pdf`, printed pp. 1-2 | This is a real hardware edge case, but the authoring utility's patching workaround must not become an emulator media hack. | Build a project-owned stream with repeated valid EOS/SOS boundaries and test decoder/transport resynchronization. |
 | MPEG transitions | Pause/continue, rapid abort/restart, starting on EOS+SOS, sequence changes, and PCL flushing have documented edge cases | `notes/technote088.pdf`, printed pp. 1-6 and issue summary | Relevant to The 7th Guest transitions and the rare B-picture failures. It does not prove a single current root cause. | Add one isolated synthetic test per transition rule before reworking live-title behavior. |
@@ -126,7 +126,7 @@ repeat the scheduling rabbit hole documented in
 `docs/core-compatibility-audit.md`. Board clocks and event interleaving need
 to be changed and tested together.
 
-### CDFM/PCL ownership is the leading sustained-MPEG question
+### CDFM/PCL ownership result
 
 Green Book R2 specifies Form-2 video payloads of 2,324 bytes and Form-2 audio
 payloads of 2,304 bytes (the final 20 audio bytes are ignored). `PCL_Cnt`
@@ -140,15 +140,19 @@ one-sector circular PCL chains, while `/mv` and `/ma` clear `PCL_Cnt` and
 models that contract and a synthetic ring proves it can detect reuse before
 release.
 
-The current comparison does not confirm that reuse hypothesis. The 7th Guest
-completes 1,296 VMPEG packs with orderly fill/release events and zero decoder
-errors. Addams Family Values USA records no overwrite risk and 463 of 464
-normalized CDIC-to-VMPEG hashes match. Its single audio mismatch at `$22CD88`
-coincides with the first 647 audio/stream errors, but the buffer still contains
-the original valid pack after the CDIC transfer and is assigned to an audio
-PCL only later. The next distinguishing experiment is bounded guest-write
-provenance across that interval. The earlier historical overwrite remains
-contextual evidence, not a reason to slow the nominal pump rate.
+The current comparison falsifies simple PCL reuse for this sample. The 7th
+Guest completes 1,296 VMPEG packs with orderly fill/release events and zero
+decoder errors. Addams Family Values USA records no overwrite risk. Bounded
+guest-write provenance shows that its lone hash difference at `$22CD88`
+changes exactly two MPEG pack-header SCR bytes before DMA2 submission; the
+elementary audio is unchanged. The first valid Layer-II frame header is 647
+payload bytes later, exactly matching the old “647 audio errors” count.
+Beginning in the middle of an audio frame is legal synchronization, so the
+decoder now reports those bytes separately from malformed frames. Two
+150-million-instruction runs remain deterministic with 464 packs, 215 decoded
+video frames, 45 decoded audio frames, zero stream errors, and 647 audio
+resynchronization bytes. The earlier historical overwrite remains contextual
+evidence for other incidents, not a reason to slow the nominal pump rate.
 
 ### MPEG end and transition behavior
 
@@ -260,10 +264,9 @@ audio, or version-specific interaction.
 No emulation behavior changed during this research pass. Tests should precede
 the corresponding corrections:
 
-1. **VCD audio divergence:** trace bounded guest writes to `$22CD88` between
-   CDIC completion, PCL assignment, and VMPEG DMA; classify the one current
-   mismatch before changing transport behavior. The PCL ownership trace and
-   synthetic two-PCL reuse test are complete.
+1. **VCD audio divergence (complete):** bounded provenance proves the guest
+   intentionally retimes two SCR bytes and the 647-byte prefix is legal MP2
+   frame-sync acquisition. No transport correction is warranted.
 2. **CDIC reset register:** BIOS trace plus a focused nonzero `$3FFA` reset
    test after resolving the documented `$C7FE` versus `$D7FE` difference and
    mapping the bit fields.

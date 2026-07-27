@@ -6,10 +6,10 @@
   "expected": "Both transition animations remain visible while both post-title MPEG sequences and automatic gameplay entry continue to work.",
   "status": "reproduced",
   "reported_revision": "18beb7f",
-  "last_reproduced_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+  "last_reproduced_revision": "53165b3+dirty:c8aee56743ec102de4d59f44b7df8c13bd0f747fc13e0fc796b1d5d0ea77a31b",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "Reproduced after clearing the persistent PAL/VMPEG NVRAM on the ac20dcd diagnostic working tree. The user may also have seen an additional authored animation before the first black interval, but could not yet compare that detail confidently with an earlier build.",
+  "revalidation_reason": "The latest PAL/VMPEG GUI run used blank ephemeral player storage and otherwise plays as before. This confirms that the stable title/post-title/gameplay sequence does not depend on the prior save; the separately reported transition-animation gaps remain unresolved.",
   "components": [
     "dvc",
     "mpeg",
@@ -38,6 +38,11 @@
       "result": "reproduced",
       "revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
       "notes": "With freshly cleared PAL/VMPEG NVRAM, both expected transition positions still flash black while the surrounding sequence plays."
+    },
+    {
+      "result": "stable-regression",
+      "revision": "53165b3+dirty:c8aee56743ec102de4d59f44b7df8c13bd0f747fc13e0fc796b1d5d0ea77a31b",
+      "notes": "The user confirmed that The 7th Guest plays as before when launched with blank ephemeral PAL/VMPEG player storage."
     }
   ]
 }

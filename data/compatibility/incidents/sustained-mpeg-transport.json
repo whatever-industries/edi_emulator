@@ -2,14 +2,14 @@
   "schema_version": 1,
   "id": "sustained-mpeg-transport",
   "title": "Sustained CDIC-to-DVC MPEG delivery",
-  "symptom": "Several VCD and DVC-heavy titles lose MPEG payloads, macroblock periodically, turn black, or report a valid disc as dirty.",
+  "symptom": "Several historical VCD and DVC-heavy runs lost MPEG payloads, macroblocked periodically, or turned black. Addams Family Values USA's former dirty-disc symptom is closed and is retained only as historical evidence.",
   "expected": "The native CDIC to main-RAM/PCL to VMPEG path delivers every selected sector once and in order at hardware-correct timing.",
   "status": "investigating",
   "reported_revision": null,
-  "last_reproduced_revision": "ac20dcd+dirty:82e0cb0e0028605d9af685221d1e3c485c38e249d3878c5cb17bd41f3e011773",
+  "last_reproduced_revision": "53165b3+dirty:d31d7747017baf0e5dd5de49bffc1b89991eac9db2310bf3d6ce133293540362",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "A headless ac20dcd-plus-diagnostic run reproduces the decoder-side Addams audio/stream errors. The user-visible dirty-disc dialog and exact audible/visible symptom still require a current GUI check.",
+  "revalidation_reason": "Two deterministic 53165b3-plus-diagnostic runs prove the Addams 647-byte count is legal Layer-II synchronization, not a transport or decoder error. The dirty-disc symptom was already closed; the latest GUI run merely reconfirms that it remains absent. Other historical sustained-stream symptoms remain separately scoped.",
   "components": [
     "cdic",
     "dvc",
@@ -38,7 +38,8 @@
       "contradicting_evidence": [
         "Changing the nominal 75-sector rate is not a specification-backed correction and did not fully fix the affected titles.",
         "The 7th Guest sustains working MPEG delivery on the same broad hardware path.",
-        "Current DMA-boundary tracing observes no full-PCL overwrite in either The 7th Guest or Addams Family Values USA."
+        "Current DMA-boundary tracing observes no full-PCL overwrite in either The 7th Guest or Addams Family Values USA.",
+        "Bounded guest-write provenance proves the lone Addams hash difference is an intentional two-byte SCR retime; the old 647-error count exactly equals the legal MP2 frame-sync prefix."
       ],
       "falsifying_test": "Trace CDFM PCB/CIL/PCL ownership and drive completion timing on ac20dcd, then compare the first missing payload against a working sustained-MPEG title.",
       "citations": [
@@ -151,10 +152,71 @@
           "A current GUI run confirms or disproves the user-visible dirty-disc symptom"
         ]
       }
+    },
+    {
+      "id": "addams-guest-write-and-mp2-sync-classification",
+      "context": {
+        "base_revision": "53165b3",
+        "dirty_diff_hash": "d31d7747017baf0e5dd5de49bffc1b89991eac9db2310bf3d6ce133293540362",
+        "component_fingerprints": {
+          "addams_disc_sha1": "dd9adb80a89378d97acfecaf50ce20d0f769c442"
+        },
+        "dependencies": {
+          "diagnostics": "bounded changed-byte hashes for Form-2 CDIC destinations",
+          "mp2": "frame-header acquisition and malformed-frame outcomes reported separately"
+        },
+        "disc_fingerprint": "Addams dd9adb80a89378d97acfecaf50ce20d0f769c442",
+        "model": "cdi220b",
+        "video_standard": "ntsc",
+        "dvc": "vmpega",
+        "scenario": "Two 150M-instruction Addams VCD feature-path repeats with the scripted native-menu click",
+        "timing": "nominal 75-sector transport; no decoded-output behavior change"
+      },
+      "hypothesis_id": "pcl-reuse-or-drive-response-timing",
+      "strategy": "Watch each real-time CDIC DMA destination until VMPEG consumes it, hash intervening changed bytes, then locate the first valid MP2 header in the exact on-disc audio pack.",
+      "symbols": [
+        "cdi_core::MachineDiagnosticEvent::GuestMemoryWrite",
+        "cdi_core::DvcStats::audio_resync_bytes",
+        "cdi_core::Mp2Decoder"
+      ],
+      "assumptions": [
+        "Form-2 video and audio CDIC transfers are at least 2304 bytes.",
+        "Hash-only write provenance is observational and does not retain commercial payload.",
+        "Layer-II decoding may legally begin in the middle of an existing frame."
+      ],
+      "expected": "A transport fault would modify MPEG elementary payload bytes, reuse a full PCL, or produce a malformed frame after synchronization.",
+      "actual": "Only MPEG pack-header SCR bytes 7 and 8 changed before DMA2. The elementary payload was unchanged. Its first valid MP2 header followed a 647-byte mid-frame prefix, exactly matching the former error count. Both repeats produced 464 packs, 215 decoded video frames, 45 decoded audio frames, zero PCL overwrite, zero demux/video/audio/stream errors, and 647 audio-resync bytes.",
+      "outcome": "hypothesis-falsified",
+      "regressions": [],
+      "improvements": [
+        "Guest-side pack retiming is now distinguishable from payload corruption.",
+        "Expected MP2 synchronization distance no longer inflates malformed-stream counters.",
+        "The diagnostic run shrank from 48290 events to 5214 by excluding ordinary filesystem traffic and unchanged writes."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "The exact Addams sample and native path recorded above",
+          "Current CDIC, PCL, DMA2, demux, and MP2 boundaries"
+        ],
+        "invalidated_by": [
+          "CDIC Form-2 payload layout changes",
+          "DVC DMA aggregation or MP2 frame-header parsing changes"
+        ],
+        "repeat_when": [
+          "A current GUI run reproduces a visible or audible Addams failure at a different boundary",
+          "Another title reports malformed frames after synchronization rather than startup resync bytes"
+        ]
+      }
     }
   ],
   "manual_verification": [
-    "Run Addams Family Values USA under NTSC with VMPEG and record whether the dirty-disc dialog still appears.",
-    "Run The 7th Guest Europe under PAL with VMPEG through both post-title videos and into gameplay; note black transitions and audio continuity."
+    {
+      "result": "accepted",
+      "revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+      "notes": "Additional confirmation of the already-closed Addams result: the title plays correctly in the GUI and the dirty-disc dialog remains absent."
+    }
   ]
 }

@@ -95,6 +95,12 @@ pub struct Mcd212 {
     /// Woven base-video fields before the hardware cursor is overlaid.
     #[cfg_attr(feature = "savestate", serde(skip, default = "default_fb"))]
     field_framebuffer: Vec<u32>,
+    /// Optional woven output of each decoded plane before transparency,
+    /// mattes, plane ordering, and cursor composition. This is allocated only
+    /// for a requested diagnostic capture so normal emulation pays no large
+    /// memory cost.
+    #[cfg_attr(feature = "savestate", serde(skip))]
+    diagnostic_plane_framebuffer: [Option<Vec<u32>>; 2],
 }
 
 pub const FB_WIDTH: usize = 768;
@@ -316,12 +322,41 @@ impl Mcd212 {
             frame_count: 0,
             framebuffer: vec![0; FB_WIDTH * FB_HEIGHT],
             field_framebuffer: vec![0; FB_WIDTH * FB_HEIGHT],
+            diagnostic_plane_framebuffer: [None, None],
         }
     }
 
     /// The rendered frame (768×560 0RGB; NTSC uses the top 480 lines).
     pub fn framebuffer(&self) -> &[u32] {
         &self.framebuffer
+    }
+
+    /// Base raster after both fields are woven but before the live hardware
+    /// cursor is overlaid.
+    pub fn diagnostic_base_framebuffer(&self) -> &[u32] {
+        &self.field_framebuffer
+    }
+
+    /// Enable or disable decoded-plane capture. Enabling allocates two full
+    /// diagnostic rasters; disabling releases them immediately.
+    pub fn set_diagnostic_plane_capture(&mut self, enabled: bool) {
+        if enabled {
+            for plane in &mut self.diagnostic_plane_framebuffer {
+                if plane.is_none() {
+                    *plane = Some(vec![0; FB_WIDTH * FB_HEIGHT]);
+                }
+            }
+        } else {
+            self.diagnostic_plane_framebuffer = [None, None];
+        }
+    }
+
+    /// Return a decoded plane before MCD212 composition when capture is
+    /// enabled.
+    pub fn diagnostic_plane_framebuffer(&self, path: usize) -> Option<&[u32]> {
+        self.diagnostic_plane_framebuffer
+            .get(path)
+            .and_then(Option::as_deref)
     }
 
     /// Visible output size for the current video standard.
@@ -397,9 +432,14 @@ impl Mcd212 {
         ((u32::from(self.dcr[path]) & 0x3F) << 16) | u32::from(self.vsr[path])
     }
 
-    fn set_display_parameters(&mut self, path: usize, value: u8) {
-        self.ddr[path] = (self.ddr[path] & 0xF0FF) | (u16::from(value & 0x0F) << 8);
-        self.dcr[path] = (self.dcr[path] & 0xF7FF) | (u16::from(value & 0x10) << 7);
+    fn set_display_parameters(&mut self, path: usize, value: u32) {
+        // Green Book V.4.6.1 Figure V.49 and Philips' cp_dprm macro place
+        // BP at bits 9:8, PRF at 3:2, and RMS at 1:0.  The MCD212 exposes
+        // the base-case BP_DOUBLE selection as DCR.CM; BP_HIGH is an
+        // extended-case 8-bit mode which this Mono-I device does not provide.
+        self.ddr[path] = (self.ddr[path] & 0xF0FF) | ((value as u16 & 0x0F) << 8);
+        let color_mode = if (value >> 8) & 0x03 == 1 { DCR_CM } else { 0 };
+        self.dcr[path] = (self.dcr[path] & !DCR_CM) | color_mode;
     }
 
     fn raise_it(&mut self, path: usize) {
@@ -978,6 +1018,41 @@ impl Mcd212 {
         }
     }
 
+    fn store_diagnostic_plane_lines(
+        &mut self,
+        row: usize,
+        duplicate_row: Option<usize>,
+        plane_a: &[u32; FB_WIDTH],
+        plane_b: &[u32; FB_WIDTH],
+    ) {
+        for (framebuffer, pixels) in self
+            .diagnostic_plane_framebuffer
+            .iter_mut()
+            .zip([plane_a.as_slice(), plane_b.as_slice()])
+        {
+            let Some(framebuffer) = framebuffer else {
+                continue;
+            };
+            let start = row * FB_WIDTH;
+            framebuffer[start..start + FB_WIDTH].copy_from_slice(pixels);
+            if let Some(other) = duplicate_row {
+                let start = other * FB_WIDTH;
+                framebuffer[start..start + FB_WIDTH].copy_from_slice(pixels);
+            }
+        }
+    }
+
+    fn clear_diagnostic_plane_lines(&mut self, row: usize, duplicate_row: Option<usize>) {
+        for framebuffer in self.diagnostic_plane_framebuffer.iter_mut().flatten() {
+            let start = row * FB_WIDTH;
+            framebuffer[start..start + FB_WIDTH].fill(0);
+            if let Some(other) = duplicate_row {
+                let start = other * FB_WIDTH;
+                framebuffer[start..start + FB_WIDTH].fill(0);
+            }
+        }
+    }
+
     /// Whether this physical active line consumes bitmap data and a DCA
     /// control slot. PAL Compatibility Mode masks 20 lines at both ends of
     /// the 280-line raster, leaving a 240-line display file (MCD212 tables
@@ -1010,6 +1085,7 @@ impl Mcd212 {
                 let start = other * FB_WIDTH;
                 self.field_framebuffer[start..start + FB_WIDTH].fill(COLOR_4BPP[0]);
             }
+            self.clear_diagnostic_plane_lines(row, duplicate_row);
             return;
         }
 
@@ -1021,6 +1097,7 @@ impl Mcd212 {
         self.process_vsr(1, planeb, planea, &mut plane_b, &mut tb);
 
         let mut line = [0u32; FB_WIDTH];
+        self.store_diagnostic_plane_lines(row, duplicate_row, &plane_a, &plane_b);
         self.mix_line(
             &plane_a,
             &ta,
@@ -1070,7 +1147,7 @@ impl Mcd212 {
                     return;
                 }
                 0x60..=0x6F => self.raise_it(path),
-                0x78..=0x7F => self.set_display_parameters(path, (cmd & 0x1F) as u8),
+                0x78..=0x7F => self.set_display_parameters(path, cmd),
                 reg => self.set_register(path, reg as u8, cmd & 0x00FF_FFFF),
             }
         }
@@ -1106,7 +1183,7 @@ impl Mcd212 {
                     break;
                 }
                 0x60..=0x6F => self.raise_it(path),
-                0x78..=0x7F => self.set_display_parameters(path, (cmd & 0x1F) as u8),
+                0x78..=0x7F => self.set_display_parameters(path, cmd),
                 reg => self.set_register(path, reg as u8, cmd & 0x00FF_FFFF),
             }
         }
@@ -1369,6 +1446,35 @@ mod tests {
             (15, None),
             "even field supplies even lines"
         );
+    }
+
+    #[test]
+    fn decoded_plane_diagnostics_are_opt_in_and_follow_output_rows() {
+        let mut m = Mcd212::new(true);
+        assert!(m.diagnostic_plane_framebuffer(0).is_none());
+        assert!(m.diagnostic_plane_framebuffer(1).is_none());
+
+        m.set_diagnostic_plane_capture(true);
+        let plane_a = [0x0011_2233; FB_WIDTH];
+        let plane_b = [0x0044_5566; FB_WIDTH];
+        m.store_diagnostic_plane_lines(14, Some(15), &plane_a, &plane_b);
+
+        for row in [14, 15] {
+            let start = row * FB_WIDTH;
+            assert_eq!(
+                &m.diagnostic_plane_framebuffer(0).unwrap()[start..start + FB_WIDTH],
+                &plane_a
+            );
+            assert_eq!(
+                &m.diagnostic_plane_framebuffer(1).unwrap()[start..start + FB_WIDTH],
+                &plane_b
+            );
+        }
+        assert_eq!(m.diagnostic_base_framebuffer().len(), FB_WIDTH * FB_HEIGHT);
+
+        m.set_diagnostic_plane_capture(false);
+        assert!(m.diagnostic_plane_framebuffer(0).is_none());
+        assert!(m.diagnostic_plane_framebuffer(1).is_none());
     }
 
     #[test]
@@ -1698,14 +1804,52 @@ mod tests {
     fn ica_reload_display_parameters() {
         let mut m = Mcd212::new(true);
         let mut plane = vec![0u8; 0x80000];
-        // RELOAD DISPLAY PARAMETERS (0x78) value 0x1F at both field-parity
-        // start addresses, then STOPs.
+        // Green Book RELOAD DISPLAY PARAMETERS with BP_DOUBLE, PRF_X16,
+        // and RMS_MOSAIC at both field-parity start addresses, then STOPs.
         plane[0x400..0x410].copy_from_slice(&[
-            0x78, 0, 0, 0x1F, 0x78, 0, 0, 0x1F, 0x00, 0, 0, 0, 0x00, 0, 0, 0,
+            0x78, 0, 0x05, 0x0F, 0x78, 0, 0x05, 0x0F, 0x00, 0, 0, 0, 0x00, 0, 0, 0,
         ]);
         m.dcr[0] |= DCR_DE | DCR_ICA;
         m.tick(cycles_per_line(true) * 313, &plane, &plane);
         assert_eq!(m.ddr[0] & 0x0F00, 0x0F00);
         assert_ne!(m.dcr[0] & DCR_CM, 0);
+    }
+
+    #[test]
+    fn ica_uses_green_book_display_parameter_fields() {
+        let mut m = Mcd212::new(true);
+        let mut plane = vec![0u8; 0x80000];
+        // Green Book V.4.6.1 Figure V.49 and Philips' cp_dprm macro:
+        // fixed bit 10, BP_DOUBLE at bits 9:8, PRF at 3:2, RMS at 1:0.
+        plane[0x400..0x410].copy_from_slice(&[
+            0x78, 0x00, 0x05, 0x00, 0x78, 0x00, 0x05, 0x00, 0x00, 0, 0, 0, 0x00, 0, 0, 0,
+        ]);
+        m.dcr[0] |= DCR_DE | DCR_ICA;
+        m.tick(cycles_per_line(true) * 313, &plane, &plane);
+        assert_ne!(m.dcr[0] & DCR_CM, 0);
+        assert_eq!(m.ddr[0] & 0x0F00, 0);
+    }
+
+    #[test]
+    fn dca_uses_green_book_display_parameter_fields() {
+        let mut m = Mcd212::new(true);
+        let mut plane = vec![0u8; 0x80000];
+        plane[0x100..0x108].copy_from_slice(&[
+            0x78, 0x00, 0x05, 0x06, // BP_DOUBLE, PRF_X4, RMS_RUNLENGTH
+            0x00, 0, 0, 0,
+        ]);
+        m.dca[0] = 0x100;
+        m.process_dca(0, &plane);
+        assert_ne!(m.dcr[0] & DCR_CM, 0);
+        assert_eq!(m.ddr[0] & 0x0F00, 0x0600);
+
+        plane[0x100..0x108].copy_from_slice(&[
+            0x78, 0x00, 0x04, 0x00, // BP_NORMAL, PRF_X2, RMS_NORMAL
+            0x00, 0, 0, 0,
+        ]);
+        m.dca[0] = 0x100;
+        m.process_dca(0, &plane);
+        assert_eq!(m.dcr[0] & DCR_CM, 0);
+        assert_eq!(m.ddr[0] & 0x0F00, 0);
     }
 }

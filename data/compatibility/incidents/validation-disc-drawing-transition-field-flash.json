@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "id": "validation-disc-drawing-transition-field-flash",
+  "title": "Validation Disc drawing-mode transition flash",
+  "symptom": "When advancing between certain Drawing validation frames, a very brief lightning-like transition is visible. It occurs across every tested drawing representation, while each resulting still frame remains stable and does not shimmer.",
+  "expected": "The shared drawing-mode transition is treated as authored validation-program behavior unless hardware evidence later shows otherwise; it is not conflated with the stationary artifact unique to CLUT 4 High Res.",
+  "status": "resolved",
+  "reported_revision": "883e90e",
+  "last_reproduced_revision": "883e90e",
+  "last_verified_revision": "883e90e",
+  "evidence_status": "current",
+  "revalidation_reason": "Manual comparison found the same brief flash in every tested drawing mode, including modes whose stable output is clean. It is therefore closed as shared likely-authored transition behavior rather than evidence for the CLUT 4 High Res still-frame defect. Real-hardware evidence could justify reopening it.",
+  "components": [
+    "mcd212",
+    "ucm",
+    "timing",
+    "display-provenance"
+  ],
+  "disc_fingerprint": "032c326a5dbd94715cfe79d79c79bc214cbae5d4",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega present but unused by this base-graphics test",
+    "instruction_limit": null,
+    "input_events": [
+      "Philips Tests",
+      "Visual Examples",
+      "Drawing",
+      "select CLUT 4, CLUT 4 High Res, CLUT 7, CLUT 8, or RGB",
+      "click repeatedly to advance between drawing modes"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "authored-or-non-atomic-field-update",
+      "hardware_explanation": "The flash is most likely an authored transition or authored non-atomic drawmap update because it occurs across all tested drawing representations, including modes with clean stable output. The stable destination frame argues against a persistent weave defect.",
+      "supporting_evidence": [
+        "The effect appears only briefly while changing modes.",
+        "The user's visual impression during the flash is of alternating field content.",
+        "The destination still frame does not alternate or shimmer.",
+        "The validation program exercises UCM drawing and display operations that may intentionally reveal update order.",
+        "The flash occurs in all tested modes rather than only CLUT 4 High Res."
+      ],
+      "contradicting_evidence": [
+        "No high-frame-rate capture or consecutive field hashes exist yet.",
+        "No real-hardware capture independently proves that the authored transition should be visible exactly this way."
+      ],
+      "falsifying_test": "Record consecutive raw odd/even plane hashes and composed rasters from immediately before the click until the destination frame stabilizes, while also tracing DCA/display-file and UCM drawmap changes. If the guest intentionally supplies the transient fields, classify it as authored; if guest data is stable but composition alternates incorrectly, isolate the first divergent MCD212 or frontend stage.",
+      "citations": [
+        "Philips Validation Disc Europe Disc 1, Visual Examples > Drawing",
+        "MCD212 Technical Specification, display-file switching and field timing",
+        "Green Book Release 2, UCM drawmap display operations",
+        "docs/debugging-workflow.md display provenance stages"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported",
+      "revision": "883e90e",
+      "notes": "A brief lightning-like animation appears between certain clicked drawing modes. It seems to expose alternating fields, but the resulting still is stable and non-shimmering."
+    },
+    {
+      "result": "accepted-as-shared-authored-behavior",
+      "revision": "883e90e",
+      "notes": "The flash occurs in every tested drawing mode. Only CLUT 4 High Res has stationary line artifacts, so the shared transition is not being treated as part of that defect. Reopen only if hardware evidence contradicts this classification."
+    }
+  ]
+}

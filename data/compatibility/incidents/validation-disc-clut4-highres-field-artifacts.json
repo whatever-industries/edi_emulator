@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "id": "validation-disc-clut4-highres-field-artifacts",
+  "title": "Validation Disc CLUT 4 High Res authored line detail",
+  "symptom": "The Philips Validation Disc 1 Visual Examples > Drawing > CLUT 4 High Res screen shows stable thin horizontal discontinuities around cloud, roof, window, house, and label edges. They persist in Filled Solid, Patterned, and Outlined frames, and do not shimmer or alternate while stationary. Standard CLUT 4, CLUT 8, and RGB versions of the same scene appear clean.",
+  "expected": "The high-resolution CLUT 4 scene faithfully presents the authored 768-pixel field-separated drawmaps. Static one-pixel horizontal contours present in those drawmaps remain visible in a pixel-perfect progressive capture and may be softened on a CRT.",
+  "status": "resolved",
+  "reported_revision": "883e90e",
+  "last_reproduced_revision": "883e90e",
+  "last_verified_revision": "883e90e+dirty:9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
+  "evidence_status": "current",
+  "revalidation_reason": "A four-field provenance capture established that the decoded planes, base raster, and composed raster are bit-identical across consecutive fields. Plane-A raw RAM contains the same one-pixel contours: every high and low CLUT4 nibble in the two field-separated 384-byte source lines maps one-to-one to the presented RGB value. The emulator therefore preserves rather than introduces this detail. Reopen only if a real-hardware digital capture or a specification-defined expected image contradicts the Philips-authored source.",
+  "components": [
+    "mcd212",
+    "ucm",
+    "display-provenance"
+  ],
+  "disc_fingerprint": "032c326a5dbd94715cfe79d79c79bc214cbae5d4",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega present but unused by this base-graphics test",
+    "instruction_limit": null,
+    "input_events": [
+      "Philips Tests",
+      "Visual Examples",
+      "Drawing",
+      "CLUT 4 High Res",
+      "advance to Filled Solid"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "field-weave-or-highres-line-fetch",
+      "hardware_explanation": "The stable lines are authored one-pixel detail in the two field-separated high-resolution CLUT4 drawmaps. MCD212 fetches 384 packed bytes per line and expands each nibble to one of 768 pixels, preserving that detail without an additional low-resolution horizontal doubling step.",
+      "supporting_evidence": [
+        "Thin horizontal discontinuities are visible at multiple object edges in the high-resolution CLUT 4 scene.",
+        "The same authored scene appears clean in standard CLUT 4, CLUT 8, and RGB modes.",
+        "High-resolution CLUT 4 changes pixel packing and display-file consumption while the PAL player still presents interlaced fields.",
+        "The lines remain fixed with no alternating or shimmering motion.",
+        "The discontinuities remain visible in Filled Solid, Patterned, and Outlined frames.",
+        "Four captured fields have identical decoded-plane, base-raster, and composed-raster hashes.",
+        "Raw drawmap analysis maps every stored CLUT4 nibble to exactly one displayed RGB value at the corresponding pixel."
+      ],
+      "contradicting_evidence": [
+        "The absence of shimmer weakens a hypothesis based on dynamically swapping mismatched odd/even fields.",
+        "Persistence across several drawing modes weakens a defect isolated to one fill operation.",
+        "The brief transition flash also occurs in clean standard-resolution modes and is therefore separate from this stationary high-resolution-only artifact.",
+        "A CRT or analog capture may visually soften the single-pixel contours, so appearance alone is not a byte-level contradiction.",
+        "No real-hardware digital framebuffer capture is available."
+      ],
+      "falsifying_test": "Obtain a real-hardware digital capture or Philips expected bitmap that differs from the captured source drawmap. If such evidence appears, compare UCM's generated field drawmaps before revisiting MCD212 fetch, weave, composition, or frontend presentation.",
+      "citations": [
+        "Philips Validation Disc Europe Disc 1, Visual Examples > Drawing > CLUT 4 High Res",
+        "MCD212 Technical Specification, scan mode and field-parity display tables",
+        "Green Book Release 2, UCM drawmaps and high-resolution CLUT modes",
+        "docs/debugging-workflow.md display provenance stages"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "four-field-display-provenance",
+      "context": {
+        "base_revision": "883e90e",
+        "dirty_diff_hash": "9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
+        "component_fingerprints": {
+          "mcd212-diagnostic-capture": "opt-in decoded planes plus raw plane RAM",
+          "frontend-diagnostic-capture": "four consecutive fields after two-field warmup"
+        },
+        "dependencies": {
+          "player-standard": "PAL",
+          "display-mode": "interlaced CLUT4 high resolution"
+        },
+        "disc_fingerprint": "032c326a5dbd94715cfe79d79c79bc214cbae5d4",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega present but unused",
+        "scenario": "Visual Examples > Drawing > CLUT 4 High Res > Filled Solid, stationary",
+        "timing": "four consecutive MCD212 fields"
+      },
+      "hypothesis_id": "field-weave-or-highres-line-fetch",
+      "strategy": "Capture raw plane RAM, decoded planes, base raster, composed raster, and MCD212 state for four consecutive fields; compare hashes and map each packed CLUT4 source nibble to the corresponding decoded pixel.",
+      "symbols": [
+        "cdi_core::Mcd212::diagnostic_plane_framebuffer",
+        "cdi_core::Mcd212::diagnostic_plane_ram",
+        "cdi_frontend::capture_display_diagnostics"
+      ],
+      "assumptions": [
+        "The stationary frame does not intentionally modify its drawmaps during capture.",
+        "The captured VSR/FCT addresses identify the two field-separated source drawmaps."
+      ],
+      "expected": "If the emulator introduces the lines, the first divergence appears after raw RAM or differs across fields; if authored, the exact line pixels are already encoded in both source drawmaps.",
+      "actual": "All four fields are stable. Plane A, plane B, base raster, and composed raster each have one invariant hash across the four fields. The two 384-byte-per-line CLUT4 drawmaps at the captured field VSRs encode every displayed contour exactly, with each source nibble mapping to one and only one RGB value.",
+      "outcome": "hypothesis-falsified",
+      "regressions": [],
+      "improvements": [
+        "Established the lines are authored source pixels rather than MCD212 fetch, weave, composition, or frontend damage.",
+        "Established a reusable opt-in display-provenance capture path without changing normal rendering."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "Philips Validation Disc CLUT 4 High Res stationary drawing frames",
+          "Current CLUT4 field-separated decode and presentation path"
+        ],
+        "invalidated_by": [
+          "Changes to CLUT4 decode, field selection, MCD212 composition, or diagnostic capture",
+          "Real-hardware digital evidence showing different authored output"
+        ],
+        "repeat_when": [
+          "Any named dependency changes",
+          "A specification-defined expected bitmap or real-hardware digital capture becomes available"
+        ]
+      }
+    }
+  ],
+  "manual_verification": [
+    {
+      "result": "reproduced",
+      "revision": "883e90e",
+      "notes": "The Filled Solid high-resolution CLUT 4 scene shows thin horizontal edge discontinuities not seen in the standard CLUT 4, CLUT 8, or RGB comparison screens."
+    },
+    {
+      "result": "motion-classified",
+      "revision": "883e90e",
+      "notes": "The high-resolution discontinuities are stationary. No alternating fields, vertical movement, or shimmer is visible."
+    },
+    {
+      "result": "mode-independent",
+      "revision": "883e90e",
+      "notes": "The same stationary discontinuities persist in the high-resolution Patterned and Outlined frames, so the observation is not limited to Filled Solid."
+    },
+    {
+      "result": "transition-separated",
+      "revision": "883e90e",
+      "notes": "A brief click-transition flash occurs across all drawing representations, including clean modes. Only CLUT 4 High Res retains stationary artifacts after the transition."
+    },
+    {
+      "result": "resolved-as-authored",
+      "revision": "883e90e+dirty:9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
+      "notes": "Command-Shift-D captured four stable fields and their provenance stages. Raw field-separated CLUT4 nibbles contain the observed one-pixel contours exactly; no emulator stage introduced or alternated them."
+    }
+  ]
+}

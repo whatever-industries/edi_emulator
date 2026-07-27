@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cdi_core::mcd212::{presentation_rgb, DisplayGeometry, FB_HEIGHT, FB_WIDTH};
 use clap::{Parser, ValueEnum};
@@ -834,7 +834,17 @@ enum MachineCommand {
     },
     /// Back up and clear the player's battery-backed storage, then reboot.
     ResetNvram,
+    /// Capture consecutive decoded-plane and composed-raster fields for a
+    /// local compatibility investigation.
+    CaptureDisplayDiagnostics(PathBuf),
     Reset,
+}
+
+struct PendingDisplayCapture {
+    directory: PathBuf,
+    warmup_fields: u8,
+    remaining_fields: u8,
+    next_index: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1314,6 +1324,87 @@ fn switch_nvram_store(
     *nvram_path = new_path;
 }
 
+fn write_diagnostic_rgb_png(
+    path: &std::path::Path,
+    pixels: &[u32],
+    width: usize,
+    height: usize,
+) -> Result<(), String> {
+    let expected = width
+        .checked_mul(height)
+        .ok_or_else(|| "diagnostic image dimensions overflow".to_owned())?;
+    if pixels.len() < expected {
+        return Err(format!(
+            "{}: expected {expected} pixels, found {}",
+            path.display(),
+            pixels.len()
+        ));
+    }
+    let mut rgb = Vec::with_capacity(expected * 3);
+    for pixel in &pixels[..expected] {
+        let pixel = presentation_rgb(*pixel);
+        rgb.extend_from_slice(&[(pixel >> 16) as u8, (pixel >> 8) as u8, pixel as u8]);
+    }
+    let file = std::fs::File::create(path).map_err(|error| error.to_string())?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width as u32, height as u32);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .and_then(|mut writer| writer.write_image_data(&rgb))
+        .map_err(|error| error.to_string())
+}
+
+fn write_display_diagnostic_field(
+    machine: &cdi_core::Machine,
+    directory: &std::path::Path,
+    index: u8,
+) -> Result<(), String> {
+    let snapshot = machine.diagnostic_snapshot();
+    let field_directory = directory.join(format!(
+        "field-{index:02}-{:010}",
+        snapshot.mcd212.frame_count
+    ));
+    std::fs::create_dir_all(&field_directory).map_err(|error| error.to_string())?;
+    let snapshot_json = serde_json::to_vec_pretty(&snapshot).map_err(|error| error.to_string())?;
+    std::fs::write(field_directory.join("snapshot.json"), snapshot_json)
+        .map_err(|error| error.to_string())?;
+
+    for (path, name) in [(0, "plane-a"), (1, "plane-b")] {
+        let ram = machine
+            .bus
+            .ram
+            .get(path)
+            .ok_or_else(|| format!("{name} RAM is unavailable"))?;
+        std::fs::write(field_directory.join(format!("{name}-ram.bin")), ram)
+            .map_err(|error| error.to_string())?;
+        let decoded = machine
+            .bus
+            .mcd212
+            .diagnostic_plane_framebuffer(path)
+            .ok_or_else(|| format!("{name} diagnostic raster is unavailable"))?;
+        write_diagnostic_rgb_png(
+            &field_directory.join(format!("{name}-decoded.png")),
+            decoded,
+            snapshot.mcd212.geometry.raster_width,
+            snapshot.mcd212.geometry.raster_height,
+        )?;
+    }
+
+    write_diagnostic_rgb_png(
+        &field_directory.join("base-raster.png"),
+        machine.bus.mcd212.diagnostic_base_framebuffer(),
+        snapshot.mcd212.geometry.raster_width,
+        snapshot.mcd212.geometry.raster_height,
+    )?;
+    write_diagnostic_rgb_png(
+        &field_directory.join("composed-raster.png"),
+        machine.bus.mcd212.framebuffer(),
+        snapshot.mcd212.geometry.raster_width,
+        snapshot.mcd212.geometry.raster_height,
+    )
+}
+
 fn emu_loop(
     mut machine: cdi_core::Machine,
     shared: Arc<Shared>,
@@ -1335,6 +1426,7 @@ fn emu_loop(
     let mut traced_dvc_visible = 0;
     let mut next_dvc_frame_trace = 30;
     let mut awaiting_first_dvc_frame = false;
+    let mut pending_display_capture: Option<PendingDisplayCapture> = None;
 
     while shared.running.load(Ordering::Relaxed) {
         if let Some(command) = shared.command.lock().unwrap().take() {
@@ -1641,6 +1733,18 @@ fn emu_loop(
                         }
                     }
                 }
+                MachineCommand::CaptureDisplayDiagnostics(directory) => {
+                    machine.bus.mcd212.set_diagnostic_plane_capture(true);
+                    pending_display_capture = Some(PendingDisplayCapture {
+                        directory,
+                        // Populate both halves of the woven diagnostic rasters
+                        // before recording four consecutive PAL/NTSC fields.
+                        warmup_fields: 2,
+                        remaining_fields: 4,
+                        next_index: 0,
+                    });
+                    *shared.status.lock().unwrap() = "Capturing display diagnostics…".to_owned();
+                }
                 MachineCommand::Reset => {
                     machine.reset();
                     *shared.status.lock().unwrap() = "Machine reset".to_owned();
@@ -1679,6 +1783,45 @@ fn emu_loop(
         while machine.bus.mcd212.frame_count < target_frame && steps < 3_000_000 {
             machine.step();
             steps += 1;
+        }
+
+        let mut display_capture_finished = false;
+        let mut display_capture_error = None;
+        if let Some(capture) = &mut pending_display_capture {
+            if capture.warmup_fields != 0 {
+                capture.warmup_fields -= 1;
+            } else {
+                match write_display_diagnostic_field(
+                    &machine,
+                    &capture.directory,
+                    capture.next_index,
+                ) {
+                    Ok(()) => {
+                        capture.next_index += 1;
+                        capture.remaining_fields -= 1;
+                        display_capture_finished = capture.remaining_fields == 0;
+                    }
+                    Err(error) => {
+                        display_capture_error = Some(error);
+                        display_capture_finished = true;
+                    }
+                }
+            }
+        }
+        if display_capture_finished {
+            machine.bus.mcd212.set_diagnostic_plane_capture(false);
+            if let Some(capture) = pending_display_capture.take() {
+                let message = display_capture_error.map_or_else(
+                    || {
+                        format!(
+                            "Display diagnostics saved — {}",
+                            capture.directory.display()
+                        )
+                    },
+                    |error| format!("Display diagnostic capture failed: {error}"),
+                );
+                *shared.status.lock().unwrap() = message;
+            }
         }
 
         if trace_dvc_composition {
@@ -1913,6 +2056,9 @@ struct App {
     /// Current window title, so it is only pushed when the disc changes.
     window_title: String,
     save_dir: Option<String>,
+    /// Root for opt-in compatibility captures. The shortcut is inactive when
+    /// `EDI_DIAGNOSTICS_DIR` is unset, keeping release UI behavior unchanged.
+    diagnostic_capture_root: Option<PathBuf>,
     settings_tab: SettingsTab,
     /// Reset the separate settings viewport to its top after open/tab changes.
     settings_scroll_to_top: bool,
@@ -2028,6 +2174,7 @@ impl App {
             library_strip_w: 0.0,
             window_title: APP_NAME.to_owned(),
             save_dir: prefs.save_dir.clone(),
+            diagnostic_capture_root: std::env::var_os("EDI_DIAGNOSTICS_DIR").map(PathBuf::from),
             settings_tab: SettingsTab::System,
             settings_scroll_to_top: true,
             #[cfg(target_os = "macos")]
@@ -2535,6 +2682,36 @@ impl App {
             }
             None => {}
         }
+    }
+
+    fn request_display_diagnostic_capture(&self) {
+        let Some(root) = &self.diagnostic_capture_root else {
+            return;
+        };
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let disc = self
+            .shared
+            .disc_name
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "no-disc".to_owned());
+        let safe_disc: String = disc
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        let directory = root.join(format!("{timestamp}-{safe_disc}"));
+        *self.shared.command.lock().unwrap() =
+            Some(MachineCommand::CaptureDisplayDiagnostics(directory));
     }
 
     fn reset_machine(&self) {
@@ -3569,6 +3746,18 @@ impl eframe::App for App {
 
         #[cfg(target_os = "macos")]
         self.handle_native_menu();
+
+        // Private compatibility shortcut, enabled only for explicitly
+        // instrumented launches. It captures the live machine state rather
+        // than asking a tester to handle raw VRAM or field data.
+        let capture_display_diagnostics = self.diagnostic_capture_root.is_some()
+            && !ctx.wants_keyboard_input()
+            && ctx.input(|input| {
+                input.key_pressed(egui::Key::D) && input.modifiers.command && input.modifiers.shift
+            });
+        if capture_display_diagnostics {
+            self.request_display_diagnostic_capture();
+        }
 
         #[cfg(not(target_os = "macos"))]
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {

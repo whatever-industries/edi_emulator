@@ -4,12 +4,12 @@
   "title": "Philips Validation Disc regression coverage",
   "symptom": "The two Philips Validation Discs contain structured hardware, graphics, UCM, real-time-media, input, storage, and performance tests that are not yet represented in E-Di's regression matrix.",
   "expected": "Selected validation cases run reproducibly and their authored result screens, timing measurements, and device events are captured as evidence for device-level compatibility work.",
-  "status": "planned",
+  "status": "investigating",
   "reported_revision": "53165b3+dirty:c8aee56743ec102de4d59f44b7df8c13bd0f747fc13e0fc796b1d5d0ea77a31b",
-  "last_reproduced_revision": null,
+  "last_reproduced_revision": "883e90e",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "Payload-free inventories were generated for both local discs. Disc 1's Philips Tests menu was manually reached, but no individual validation result has yet been classified against a specification or hardware baseline.",
+  "revalidation_reason": "Payload-free inventories were generated for both local discs. Disc 1's standard CLUT 4, CLUT 8, and RGB drawing comparisons appear clean. A four-field provenance capture proves the stationary lines in CLUT 4 High Res are present in the Philips-authored field-separated drawmaps and reproduced exactly by the emulator. A brief flash shared by every tested drawing-mode transition is likewise classified as likely-authored behavior.",
   "components": [
     "cpu",
     "timing",
@@ -55,12 +55,74 @@
       ]
     }
   ],
-  "experiments": [],
+  "experiments": [
+    {
+      "id": "clut4-highres-provenance-pilot",
+      "context": {
+        "base_revision": "883e90e",
+        "dirty_diff_hash": "9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
+        "component_fingerprints": {
+          "display-provenance": "raw RAM, decoded planes, base raster, composed raster"
+        },
+        "dependencies": {
+          "player-standard": "PAL",
+          "display-mode": "CLUT4 high resolution"
+        },
+        "disc_fingerprint": "032c326a5dbd94715cfe79d79c79bc214cbae5d4",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega present but unused",
+        "scenario": "Disc 1 Visual Examples > Drawing > CLUT 4 High Res",
+        "timing": "four consecutive fields"
+      },
+      "hypothesis_id": "authored-validation-as-device-boundary",
+      "strategy": "Use the validation case as the first full display-provenance pilot and compare raw packed pixels through the frontend raster.",
+      "symbols": [
+        "cdi_core::Mcd212",
+        "cdi_frontend::capture_display_diagnostics"
+      ],
+      "assumptions": [
+        "A stationary validation frame is suitable for a deterministic four-field comparison."
+      ],
+      "expected": "The provenance stages identify whether the observed high-resolution detail originates in guest drawmaps or a later emulator stage.",
+      "actual": "The raw CLUT4 source drawmaps encode the observed one-pixel contours and every later stage preserves them exactly; all four captured fields are stable.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "Resolved the first validation-disc observation without a title-specific rendering change.",
+        "Validated the opt-in display-provenance workflow on a Philips-authored case."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "Stationary base-graphics validation cases"
+        ],
+        "invalidated_by": [
+          "Changes to diagnostic capture or MCD212 presentation stages"
+        ],
+        "repeat_when": [
+          "A future graphics issue needs first-divergence localization"
+        ]
+      }
+    }
+  ],
   "manual_verification": [
     {
       "result": "menu-reached",
       "revision": "53165b3+dirty:c8aee56743ec102de4d59f44b7df8c13bd0f747fc13e0fc796b1d5d0ea77a31b",
       "notes": "The user reached Disc 1's Philips Validation Suite submenu. Its top-level choices include Visual Examples, Video Representations, Base Case UCM Functions, and Performance."
+    },
+    {
+      "result": "partial",
+      "revision": "883e90e",
+      "notes": "Visual Examples > Drawing is clean in CLUT 8, RGB, and standard CLUT 4. CLUT 4 High Res shows stationary horizontal edge detail across solid, patterned, and outlined modes. A brief flash shared by all tested drawing-mode transitions is classified separately as likely-authored behavior."
+    },
+    {
+      "result": "provenance-verified",
+      "revision": "883e90e+dirty:9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
+      "notes": "Four consecutive field captures and a raw packed-pixel comparison prove the CLUT 4 High Res lines are authored in the source drawmaps and faithfully preserved. No compatibility defect remains for this observation."
     }
   ]
 }

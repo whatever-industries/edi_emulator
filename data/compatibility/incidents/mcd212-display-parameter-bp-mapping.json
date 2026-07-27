@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "id": "mcd212-display-parameter-bp-mapping",
+  "title": "MCD212 display-parameter BP mapping",
+  "symptom": "Philips cp_dprm(BP_DOUBLE) emits 0x78000500, but E-Di masks the command to its low five bits. The captured Validation Disc CLUT 4 High Res state therefore leaves DCR.CM clear even though the guest explicitly requests four-bit double/high-resolution pixels.",
+  "expected": "The load-display-parameters instruction maps the Philips Green Book BP, PRF, and RMS fields to MCD212 color mode, mosaic factor, and file type without disc-specific inference. BP_DOUBLE selects the four-bit double/high-resolution channel mode.",
+  "status": "resolved",
+  "reported_revision": "883e90e+dirty:4c62707d6a57a1869db9ef1e174c88dd45bfac323d18e7414fe531eb6f0cb1ff",
+  "last_reproduced_revision": "883e90e+dirty:4c62707d6a57a1869db9ef1e174c88dd45bfac323d18e7414fe531eb6f0cb1ff",
+  "last_verified_revision": "883e90e+dirty:92d44ea51bd8035450a95061bced051be014a3e1a2c4d6928b5b952aa0ba75b6",
+  "evidence_status": "current",
+  "revalidation_reason": "The Philips Validation Disc capture contains the exact command 0x78000500 and ICM CLUT4, while the pre-correction MCD212 snapshot recorded DCR.CM clear. Green Book Figure V.49 and Philips' ucm.h cp_dprm macro place BP at bits 9:8, PRF at 3:2, and RMS at 1:0. ICA and DCA tests now exercise those Philips-authored fields: BP_DOUBLE sets DCR.CM, BP_NORMAL clears it, and PRF/RMS populate DDR independently. Revalidate if the command decoder, color-mode use, or extended BP_HIGH support changes.",
+  "components": [
+    "mcd212",
+    "dcp",
+    "display-provenance"
+  ],
+  "disc_fingerprint": "032c326a5dbd94715cfe79d79c79bc214cbae5d4",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega present but unused",
+    "instruction_limit": null,
+    "input_events": [
+      "Philips Tests",
+      "Visual Examples",
+      "Drawing",
+      "CLUT 4 High Res",
+      "capture a stationary Filled Solid frame"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "green-book-cp-dprm-fields-drive-mcd212-state",
+      "hardware_explanation": "CD-RTOS/UCM writes the Green Book cp_dprm layout directly into ICA/DCA. On base MCD212 hardware, BP_NORMAL clears DCR.CM and BP_DOUBLE sets it; PRF and RMS retain their low-four-bit mapping into DDR. The shortened bit diagram in Motorola Table 5-11 does not show the fixed bit 10 or BP field used by Philips software.",
+      "supporting_evidence": [
+        "Green Book Figure V.49 places BP at bits 9:8, PRF at bits 3:2, and RMS at bits 1:0.",
+        "Philips ucm.h defines _OP_DPRM as 0x78000400 and cp_dprm as BP shifted by eight, PRF by two, and RMS unshifted.",
+        "The Philips Validation Disc emits 0x78000500 for its CLUT 4 High Res frame.",
+        "MCD212 Tables 5-2, 6-5, 9-11, and 9-14 state that CM selects four bits/pixel and double horizontal resolution."
+      ],
+      "contradicting_evidence": [
+        "Motorola MCD212 Table 5-11 depicts CM, MF1, MF2, FT1, and FT2 in the low five command bits.",
+        "Current MAME and the existing E-Di implementation copy only the low five bits.",
+        "E-Di's CLUT4 decoder currently derives packed-pixel expansion from ICM, so the Validation Disc image appears correct despite stale DCR.CM."
+      ],
+      "falsifying_test": "Execute Philips commands 0x78000400 and 0x78000500 through both ICA and DCA. If BP_DOUBLE does not select DCR.CM on real hardware or another authoritative Philips implementation, retain the low-bit mapping and document the Green Book-to-MCD212 translation boundary. Otherwise require BP_DOUBLE to set CM while preserving PRF/RMS behavior.",
+      "citations": [
+        "Green Book Release 2, Figure V.49 Load Display Parameters Instruction",
+        "Philips/Microware ucm.h in FPD804, FPD805, and CD-i developer-disc source: _OP_DPRM and cp_dprm",
+        "Motorola MCD212 Revision 0, Tables 5-2, 5-11, 6-5, 6-6, 9-11, and 9-14",
+        "Philips Validation Disc Europe Disc 1 capture, plane A RAM offset 0x23cf0"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "green-book-field-mapping",
+      "context": {
+        "base_revision": "883e90e",
+        "dirty_diff_hash": "92d44ea51bd8035450a95061bced051be014a3e1a2c4d6928b5b952aa0ba75b6",
+        "component_fingerprints": {
+          "mcd212-control-program": "Green Book cp_dprm field decoder"
+        },
+        "dependencies": {
+          "hardware-model": "Mono-I MCD212 base case",
+          "extended-bp-high": "unsupported"
+        },
+        "disc_fingerprint": "032c326a5dbd94715cfe79d79c79bc214cbae5d4",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega present but unused",
+        "scenario": "synthetic ICA/DCA commands matching Philips cp_dprm plus captured Validation Disc command",
+        "timing": "ICA at field start and one DCA line"
+      },
+      "hypothesis_id": "green-book-cp-dprm-fields-drive-mcd212-state",
+      "strategy": "Add a failing test for captured command 0x78000500, then decode BP from bits 9:8 while preserving PRF/RMS in bits 3:0. Cover BP_DOUBLE and BP_NORMAL through both ICA and DCA.",
+      "symbols": [
+        "cdi_core::Mcd212::set_display_parameters",
+        "cdi_core::Mcd212::process_ica",
+        "cdi_core::Mcd212::process_dca"
+      ],
+      "assumptions": [
+        "Mono-I supports Green Book BP_NORMAL and BP_DOUBLE; BP_HIGH remains an extended-case mode outside this device.",
+        "The fixed bit 10 in Philips _OP_DPRM is opcode structure, not part of BP."
+      ],
+      "expected": "0x78000500 selects DCR.CM without changing DDR PRF/RMS, while 0x78000400 clears DCR.CM; low PRF/RMS values remain independent.",
+      "actual": "The pre-correction test failed because DCR.CM remained clear. After decoding the Philips fields, ICA and DCA tests pass for BP_NORMAL, BP_DOUBLE, PRF, and RMS; all 100 cdi-core tests pass.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "MCD212 register state now matches Philips-authored display commands.",
+        "Removed dependence on the MAME-style low-five-bit interpretation for BP.",
+        "Preserved the validated framebuffer output path without title-specific behavior."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "Mono-I MCD212 Green Book BP_NORMAL and BP_DOUBLE commands"
+        ],
+        "invalidated_by": [
+          "Changes to ICA/DCA command decoding",
+          "Implementation of extended-case BP_HIGH or a different video decoder"
+        ],
+        "repeat_when": [
+          "DCR.CM begins driving additional pixel-fetch or geometry behavior",
+          "Extended-case hardware is added"
+        ]
+      }
+    }
+  ],
+  "manual_verification": [
+    {
+      "result": "reproduced",
+      "revision": "883e90e+dirty:4c62707d6a57a1869db9ef1e174c88dd45bfac323d18e7414fe531eb6f0cb1ff",
+      "notes": "The opt-in capture records command 0x78000500 at plane-A RAM offset 0x23cf0, ICM CLUT4, and DCR.CM clear. This incident concerns register/command fidelity, not the authored static lines, which were independently resolved as correct."
+    },
+    {
+      "result": "automated-device-test",
+      "revision": "883e90e+dirty:92d44ea51bd8035450a95061bced051be014a3e1a2c4d6928b5b952aa0ba75b6",
+      "notes": "A failing ICA test reproduced the stale CM bit before correction. ICA and DCA now pass Philips cp_dprm field tests, and the full cdi-core suite passes 100 tests."
+    }
+  ]
+}

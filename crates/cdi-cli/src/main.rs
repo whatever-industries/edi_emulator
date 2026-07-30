@@ -452,7 +452,11 @@ fn boot(
         println!("NVRAM restored from {}", path.display());
     }
     if diagnostics.is_some() {
-        machine.enable_diagnostics(50_000);
+        let capacity = std::env::var("EDI_DIAGNOSTIC_EVENT_CAPACITY")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(50_000);
+        machine.enable_diagnostics(capacity);
     }
     if dump_vmpeg_es.is_some() {
         if let Some(dvc) = &mut machine.bus.dvc {

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "id": "7th-guest-philips-logo-audio-hits",
+  "title": "The 7th Guest Philips-logo audio hits",
+  "symptom": "One or two brief audible hits or glitches occur near the start of the opening Philips logo clip.",
+  "expected": "The opening Philips logo audio plays cleanly without transient hits while the clip and following MPEG sequence remain synchronized.",
+  "status": "reported",
+  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "last_reproduced_revision": null,
+  "last_verified_revision": null,
+  "evidence_status": "reported-current",
+  "revalidation_reason": null,
+  "components": [
+    "dvc",
+    "mpeg-audio",
+    "audio",
+    "cdic"
+  ],
+  "disc_fingerprint": "451de6f0f71e9b6c3442608c3987837d62aa69a8",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": [
+      "manual click through pre-title Philips logo clip"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "initial-mp2-sync-or-audio-buffer-boundary",
+      "hardware_explanation": "The short transient may occur while the MPEG Layer-II path acquires its first complete frame or while the emulated VMPEG/audio mixer begins presenting a newly primed buffer.",
+      "supporting_evidence": [
+        "The hits occur only once or twice near the start of the opening clip.",
+        "The following MPEG stages and gameplay audio continue normally in the same run."
+      ],
+      "contradicting_evidence": [
+        "No bounded audio-event trace or captured waveform has yet located the transient.",
+        "The sound may be authored in the source clip or introduced at the host audio transport boundary rather than inside VMPEG."
+      ],
+      "falsifying_test": "Capture the on-disc MP2 payload, decoded PCM before mixing, mixed core PCM, and frontend output around clip start. The first stage containing the transient identifies whether it is authored, decoder/buffer behavior, mixing, or CPAL presentation.",
+      "citations": [
+        "docs/debugging-workflow.md",
+        "docs/mpeg-dvc-plan.md#vmpeg-hardware-contract",
+        "docs/specification-research.md#mpeg-end-and-transition-behavior"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported",
+      "revision": "42fe2b5+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
+      "notes": "During a clean-NVRAM seven-stage opening pass, the user heard one or two brief audio hits near the start of the opening Philips logo. The remainder of the title/post-title/gameplay sequence proceeded."
+    }
+  ]
+}

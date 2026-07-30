@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "naked-gun-europe-disc1-windowboxing",
+  "title": "The Naked Gun Europe Disc 1 MPEG windowboxing",
+  "symptom": "The MPEG presentation is inset on all four sides. It is not yet classified as authored framing or an incorrect MCD251/MCD212 window/aperture interaction.",
+  "expected": "Presentation should match the title-programmed VMPEG window and real-player framing, preserving authored margins but adding no emulator-side inset.",
+  "status": "reproduced",
+  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "last_reproduced_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "dvc",
+    "mcd212",
+    "frontend"
+  ],
+  "disc_fingerprint": "2706e270a09ba45e92e1ca383b3339b88cb40c42",
+  "scenario": {
+    "model": null,
+    "video_standard": null,
+    "dvc": null,
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "authored-vmpeg-window-versus-extra-aperture-inset",
+      "hardware_explanation": "The inset may be the title-programmed MCD251 MPEG display window, or it may be an additional MCD212/frontend aperture inset applied after that hardware window. Screenshot appearance alone cannot distinguish them.",
+      "supporting_evidence": [
+        "The screenshot shows margins on all four sides during MPEG playback.",
+        "The title already has a verified native VMPEG release path, so live MCD251 position/window state can be captured without bypassing firmware."
+      ],
+      "contradicting_evidence": [
+        "No real-player reference or raw MPEG dimensions have yet been compared at this exact frame.",
+        "Other titles intentionally author letterboxed or windowboxed MPEG."
+      ],
+      "falsifying_test": "Record raw MPEG dimensions, live MCD251 X/Y/window registers, core hardware aperture, and frontend destination rectangle at the same frame. If each presentation stage preserves the programmed rectangle exactly, the windowboxing is authored rather than an emulator defect.",
+      "citations": [
+        "docs/display-geometry.md",
+        "docs/mpeg-dvc-plan.md#vmpeg-hardware-contract",
+        "docs/debugging-workflow.md"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported-unclassified",
+      "revision": "42fe2b5+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
+      "notes": "User supplied a windowboxed MPEG screenshot. Next: confirm whether the inset stays constant across shots and whether base-graphics menus use the full aperture. Do not classify as a defect until programmed-window or hardware evidence is available."
+    },
+    {
+      "result": "reproduced-clean-nvram",
+      "revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+      "notes": "Naked Gun Europe Disc 1 windowboxing remains after all current and backup player NVRAM stores were cleared. Persistence is therefore not the cause; authored MCD251 windowing versus an extra composition/aperture inset remains unresolved."
+    }
+  ]
+}

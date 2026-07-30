@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "id": "playboys-complete-massage-europe-black-audio",
+  "title": "Playboy's Complete Massage Europe black video with audio",
+  "symptom": "The PAL/50 Hz European disc starts on black while audio continues. This was first reported after the USA pressing had been played, but PAL and NTSC VMPEG NVRAM use separate files.",
+  "expected": "With a clean PAL VMPEG NVRAM store, the European title should present its intended opening video while audio plays.",
+  "status": "resolved",
+  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "last_reproduced_revision": null,
+  "last_verified_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "dvc",
+    "mcd212",
+    "nvram"
+  ],
+  "disc_fingerprint": "98194fdf15253b727d33aef3d76fc00159b826cd",
+  "scenario": {
+    "model": null,
+    "video_standard": null,
+    "dvc": null,
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "stale-pal-nvram-resume-state",
+      "hardware_explanation": "The PAL title may resume an invalid saved program state from its own Mono-I PAL+VMPEG NVRAM store, selecting audio while leaving external video hidden or seeking to a non-picture boundary.",
+      "supporting_evidence": [
+        "The title starts with audio but a black picture, which is compatible with an invalid resume position or external-video state.",
+        "A nonempty PAL VMPEG NVRAM file existed before this report.",
+        "After all player NVRAM stores were cleared, the Europe pressing was booted first and played normally."
+      ],
+      "contradicting_evidence": [
+        "PAL and NTSC VMPEG stores are separate, so the European title did not directly read the USA title's NTSC file."
+      ],
+      "falsifying_test": "Boot the European disc from the now-clean PAL VMPEG store. If it remains black with audio, stale NVRAM is falsified and the first CDIC/VMPEG visibility or stream divergence must be traced.",
+      "citations": [
+        "crates/cdi-frontend/src/storage.rs",
+        "docs/debugging-workflow.md"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported",
+      "revision": "42fe2b5+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
+      "notes": "User reproduced a black PAL/50 Hz opening while audio played. Next: boot Europe first with the clean PAL VMPEG store, wait ten seconds without clicking, and report whether video appears and whether audio continues or loops."
+    },
+    {
+      "result": "accepted",
+      "revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+      "notes": "With all PAL/NTSC/legacy NVRAM stores cleared, the user booted the Europe pressing first and it played normally. This confirms persistence affected the prior black-with-audio boot, but because PAL and NTSC stores were separate it does not prove the USA save itself was read by Europe. Windowboxing remains a separate presentation observation."
+    }
+  ]
+}

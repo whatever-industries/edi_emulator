@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "id": "playboys-complete-massage-usa-video-position-jitter",
+  "title": "Playboy's Complete Massage USA video position and jitter",
+  "symptom": "VMPEG video shows slight side margins and a bottom black bar, then intermittently jumps rapidly up/down for a few seconds; after snapping into another position it can cover the bottom bar.",
+  "expected": "The authored video window should remain at the cartridge/title-programmed position without transient vertical field or window displacement.",
+  "status": "reproduced",
+  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "last_reproduced_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "dvc",
+    "mcd212",
+    "timing"
+  ],
+  "disc_fingerprint": "3d0f1e3222c69d0bbee495e33325b3d13217bff7",
+  "scenario": {
+    "model": null,
+    "video_standard": null,
+    "dvc": null,
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "non-atomic-vmpeg-window-or-field-position",
+      "hardware_explanation": "The guest or VMPEG driver may update the MCD251 display position/window near a field boundary, while the emulator applies related position state non-atomically or against the wrong field. That could alternate the composed MPEG plane between two vertical positions before settling.",
+      "supporting_evidence": [
+        "The user observed rapid vertical up/down movement lasting a few seconds at multiple later points in the video.",
+        "When the picture settled into the lower position it covered the prior bottom black bar.",
+        "Playboy's Complete Massage (USA) screenshot.png shows slight side margins and a bottom bar; screenshot2.png shows the picture occupying the lower edge."
+      ],
+      "contradicting_evidence": [
+        "No register/field trace has yet shown alternating display-position values.",
+        "A title-authored window change could explain two stable positions, though not necessarily the rapid oscillation."
+      ],
+      "falsifying_test": "Capture MCD251 X/Y/window writes, MCD212 field parity, and final external-plane bounds across one jitter episode. If the hardware-visible position is stable while only frontend output moves, this device-level explanation is false.",
+      "citations": [
+        "docs/debugging-workflow.md",
+        "docs/mpeg-dvc-plan.md#vmpeg-hardware-contract",
+        "docs/specification-research.md"
+      ]
+    },
+    {
+      "id": "authored-window-versus-extra-composition-inset",
+      "hardware_explanation": "The stable margins may be the title-programmed VMPEG display window, or an extra inset introduced while composing that window through MCD212 and the frontend aperture. The same title's European pressing also windowboxes, making this a cross-region presentation question rather than an NTSC-save artifact.",
+      "supporting_evidence": [
+        "Both USA and Europe pressings show inset MPEG presentation after their respective NVRAM stores were cleared.",
+        "The USA screenshot shows slight side margins plus a lower margin before the separate intermittent vertical movement."
+      ],
+      "contradicting_evidence": [
+        "No real-player reference or same-frame MCD251 register capture is available.",
+        "The stable authored window and the intermittent USA vertical jitter may be separate behaviors."
+      ],
+      "falsifying_test": "At the same frame in both pressings, compare raw MPEG dimensions, programmed MCD251 X/Y/window, composed core bounds, and frontend destination. Exact preservation at every stage classifies the margins as authored.",
+      "citations": [
+        "docs/display-geometry.md",
+        "docs/mpeg-dvc-plan.md#vmpeg-hardware-contract",
+        "data/compatibility/incidents/naked-gun-europe-disc1-windowboxing.json"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported",
+      "revision": "42fe2b5+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
+      "notes": "User reproduced slight side margins and a bottom bar plus intermittent rapid vertical movement lasting a few seconds; after settling lower, the picture could cover the bar. Next: replay with clean NTSC VMPEG NVRAM through at least two episodes and note whether audio remains continuous."
+    },
+    {
+      "result": "reproduced-clean-nvram",
+      "revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+      "notes": "After all current and backup NVRAM stores were removed, the USA pressing retained the same margins, bottom bar, and intermittent vertical jitter. The Europe pressing played normally but also showed windowboxing."
+    }
+  ]
+}

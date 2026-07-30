@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "id": "7th-guest-intermittent-music-stutter",
+  "title": "The 7th Guest intermittent music stutter",
+  "symptom": "Music occasionally contains a brief stutter or repetition glitch during otherwise working playback.",
+  "expected": "Music remains continuous and correctly synchronized without intermittent repeated or stalled samples.",
+  "status": "reported",
+  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "last_reproduced_revision": null,
+  "last_verified_revision": null,
+  "evidence_status": "reported-current",
+  "revalidation_reason": null,
+  "components": [
+    "dvc",
+    "mpeg-audio",
+    "audio",
+    "cdic",
+    "timing"
+  ],
+  "disc_fingerprint": "451de6f0f71e9b6c3442608c3987837d62aa69a8",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "audio-source-underrun-or-repeat",
+      "hardware_explanation": "A short-lived CDIC or VMPEG audio-buffer underrun, duplicate presentation event, or host-output starvation may repeat the most recent samples before normal delivery resumes.",
+      "supporting_evidence": [
+        "The fault is occasional and brief rather than a permanent loop.",
+        "The same run otherwise preserves MPEG progression, gameplay, and audio termination."
+      ],
+      "contradicting_evidence": [
+        "The exact scene and whether the affected music is VMPEG MP2, CDIC XA/CD-DA, or another title-controlled source are not yet recorded.",
+        "No core PCM, mixed PCM, CPAL callback, or underflow event has been captured at the audible glitch."
+      ],
+      "falsifying_test": "Reproduce while recording source-selection, CDIC and VMPEG buffer events, pre-mix PCM hashes, mixed-output hashes, and CPAL callback occupancy. If all emulator stages are continuous and only the host capture stutters, the emulated-device explanation is false.",
+      "citations": [
+        "docs/debugging-workflow.md",
+        "docs/specification-research.md#the-three-cd-i-time-bases",
+        "docs/specification-research.md#mpeg-end-and-transition-behavior"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported",
+      "revision": "42fe2b5+dirty:cf2a064eb5d7d1db114873227674338482b2fad6",
+      "notes": "The user reports a pre-existing intermittent fault: music occasionally has a small stutter glitch during otherwise working The 7th Guest playback. The exact scene and audio source have not yet been isolated."
+    }
+  ]
+}

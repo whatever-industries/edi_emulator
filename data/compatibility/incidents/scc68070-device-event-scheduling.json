@@ -1,0 +1,247 @@
+{
+  "schema_version": 1,
+  "id": "scc68070-device-event-scheduling",
+  "title": "SCC68070 timing and device-event scheduling",
+  "symptom": "Restoring Philips section-6.2 instruction timing corrects guest cadence but regresses The 7th Guest transition under instruction-boundary device advancement",
+  "expected": "Accurate SCC68070 timing and asynchronous device/DMA events coexist while preserving the seven-stage The 7th Guest sequence and neighboring regressions",
+  "status": "resolved",
+  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "last_reproduced_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "last_verified_revision": "42fe2b5+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "cpu-timing",
+    "scheduler",
+    "dma",
+    "dvc",
+    "mcd212"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega.rom",
+    "instruction_limit": 550000000,
+    "input_events": [
+      "498000000:588,265,1"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "instruction-boundary-event-lumping",
+      "hardware_explanation": "An instruction's complete elapsed time is delivered to every device only after all of its bus accesses and state changes, so a device deadline or DMA handshake inside a long instruction is observed in the wrong order.",
+      "supporting_evidence": [
+        "Machine::step executes Cpu::step to completion before ticking any device.",
+        "The existing Scheduler is not connected to Machine.",
+        "Philips TN 94 describes asynchronous disc/audio, video-field, and system-tick time bases."
+      ],
+      "contradicting_evidence": [
+        "The SCC68070 samples interrupts at instruction boundaries.",
+        "The longest ordinary instruction is short compared with a video line or CD sector, so instruction-boundary latency alone may be too small to explain the title-scale transition failure."
+      ],
+      "falsifying_test": "Add a synthetic machine/device test with a deadline and DMA handshake strictly inside one long CPU instruction. If bounded device advancement preserves the same ordering and state as the current lumped step, this explanation is insufficient.",
+      "citations": [
+        "docs/core-compatibility-audit.md",
+        "docs/specification-research.md",
+        "crates/cdi-core/src/machine.rs::Machine::step",
+        "crates/cdi-core/src/sched.rs"
+      ]
+    },
+    {
+      "id": "dma-bus-ownership-and-backpressure",
+      "hardware_explanation": "DMAREQ2 is clock-paced but does not arbitrate for the bus or expose request/backpressure transitions at transfer boundaries, so accurate CPU timing changes the native driver's observable transfer/completion relationship.",
+      "supporting_evidence": [
+        "The exact historical incident proved one-word-per-instruction DMA wrong.",
+        "Burst DMA reached gameplay but skipped video; clock-paced DMA restored temporal pacing but still left the transition black."
+      ],
+      "contradicting_evidence": [
+        "The current transport produces deterministic matching payloads and no PCL overwrite in sustained runs, so this may affect timing only rather than data integrity."
+      ],
+      "falsifying_test": "First test DMA transfer count, request deassertion, completion, and interrupt ordering across a CPU step whose elapsed cycles span multiple six-clock transfers. If transfer-boundary slicing changes none of those observations, bus arbitration must be investigated separately.",
+      "citations": [
+        "Philips SCC68070 April 1993 sections 8.1, 8.2, 8.3, and 8.5.2",
+        "tests-data/local/diagnostics/7th-guest-pre-game-video-freeze/incident.json",
+        "crates/cdi-core/src/machine.rs::service_dvc_dma"
+      ]
+    },
+    {
+      "id": "guest-timeout-exposes-device-contract",
+      "hardware_explanation": "The slower, correct CPU cadence changes when guest polling reaches an already inaccurate VMPEG status transition; the real defect may be a missing device status/IRQ contract rather than generic scheduler granularity.",
+      "supporting_evidence": [
+        "Accurate timing changes the guest/device ratio.",
+        "Earlier specification-backed FMA EOI sequencing was genuinely wrong but insufficient, demonstrating that multiple device contracts can be exposed at the same transition."
+      ],
+      "contradicting_evidence": [
+        "The exact working/freezing tree boundary follows the timing batch, and exception timing alone was falsified."
+      ],
+      "falsifying_test": "Compare the first normalized VMPEG register/IRQ/DMA divergence between the accurate-timing and compatibility-timing runs. A divergence before any within-instruction deadline supports a device-contract issue over generic event slicing.",
+      "citations": [
+        "tests-data/local/diagnostics/7th-guest-pre-game-video-freeze/incident.json",
+        "docs/mpeg-dvc-plan.md"
+      ]
+    },
+    {
+      "id": "pcl-transition-sampling-alias",
+      "hardware_explanation": "The apparent delayed PCL publication may be a diagnostic sampling artifact rather than guest behavior: the tracker currently samples PCL state only when a DMA, watched-buffer write, or DVC-register write is pending.",
+      "supporting_evidence": [
+        "The accurate trace first reports sector A's PCL as full at the following channel-0 DMA event.",
+        "Machine::sample_dma_and_pcl_diagnostics returns without sampling PCLs when its three observation queues are empty.",
+        "Writes to a PCL control/count field are outside the watched CDIC payload region and therefore do not themselves enqueue a guest-memory observation."
+      ],
+      "contradicting_evidence": [
+        "The channel-1 payload order is genuinely different, so at least one guest-visible ordering difference remains even if the recorded PCL transition cycle is late."
+      ],
+      "falsifying_test": "Sample already-discovered PCLs on every diagnostic instruction boundary without changing emulation state. If sector A still becomes full only after sector B is copied, the delayed publication is real; otherwise the earlier timing inference was invalid.",
+      "citations": [
+        "crates/cdi-core/src/machine.rs::sample_dma_and_pcl_diagnostics",
+        "crates/cdi-core/src/diagnostics.rs::PclOwnershipTracker::sample",
+        "tests-data/local/diagnostics/scc68070-device-event-scheduling/accurate-timing-evidence.json"
+      ]
+    },
+    {
+      "id": "vmpeg-shared-in4-daisy-chain",
+      "hardware_explanation": "On the CD-i 220 base case, CDIC and the FMV extension share SCC68070 input IN4 through a daisy chain. Once an owner asserts the shared request, a later requester cannot preempt it before release; interrupt acknowledge returns the latched owner's programmed vector. IN5 is unused.",
+      "supporting_evidence": [
+        "The Philips CD-i 220 service schematic exposes one FMV INTREQN/IACKN path and daisy-chain logic; its signal glossary explicitly marks SCC68070 IN5 unused.",
+        "The first accurate-timing divergence occurs when VMPEG interrupts an active CDIC IN4 handler before guest PC $42A594 advances the PCL producer pointer.",
+        "The VMPEG consumer then releases that PCL and the resumed CDIC handler skips the pointer advance, allowing the next sector to overwrite the same ring position.",
+        "A focused test first reproduced the old implementation requesting IPL5 for VMPEG."
+      ],
+      "contradicting_evidence": [
+        "The earlier emulator model and planning notes assigned VMPEG to level 5, but neither matched the CD-i 220 service documentation."
+      ],
+      "falsifying_test": "Model CDIC and VMPEG as a latched shared-IN4 chain, then rerun the identical accurate-timing 550-million-instruction scenario. If the first PCL reorder and MPEG rejection remain, the interrupt-chain mismatch is not sufficient.",
+      "citations": [
+        "svcmanuals/cdi220.pdf, PDF p. 66 and signal glossary",
+        "crates/cdi-core/src/machine.rs::MachineBus::arbitrate_shared_in4",
+        "tests-data/local/diagnostics/scc68070-device-event-scheduling/runs/run-0006/evidence.json",
+        "tests-data/local/diagnostics/scc68070-device-event-scheduling/runs/run-0008/evidence.json"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "dma0-completion-after-final-operand",
+      "context": {
+        "base_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+        "dirty_diff_hash": "45d999ba9a60f90f3f6d374582ad59d9f54f58eab602937d33c4472e010b01a5",
+        "component_fingerprints": {
+          "cdic": "81334a065f8cd9712d268427dbf4f42ebbd9d55a6c03c66458f5c80ba4c2d034",
+          "machine_bus": "c586479c205749718fbae4576393dcf46157513a89f6757868b35f2e61cf3485",
+          "scc68070_periph": "b2b440f9ee19eac61bac483dcc5475dfc5ecf5ee9206f637ab452efb55100d8d"
+        },
+        "dependencies": {
+          "cdic_sector_period": "200000 PAL CPU clocks",
+          "cpu_timing": "Philips SCC68070 April 1993 section-6.2 batch",
+          "diagnostic_click": "instruction-count scheduled"
+        },
+        "disc_fingerprint": "local The 7th Guest Europe Disc 1 CUE from incident inventory",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "bounded title-menu click through first failing post-title stream",
+        "timing": "600000000 instructions; click 498000000:588,265,1"
+      },
+      "hypothesis_id": "dma-bus-ownership-and-backpressure",
+      "strategy": "In an isolated accurate-timing worktree, make SO set Channel Active, decrement MTC and advance MAC during CDIC DMA, and raise COC only after the final word. Add focused SCC68070 and MachineBus lifecycle tests.",
+      "symbols": [
+        "Peripherals::write8($4007)",
+        "Peripherals::advance_dma0_words",
+        "MachineBus::cdic_dma"
+      ],
+      "assumptions": [
+        "The bounded click schedule reaches the same native playback path as the prior accurate-timing trace.",
+        "The original PCL timing observations represent actual transition timing."
+      ],
+      "expected": "Sector A reaches VMPEG before sector B and the MPEG picture rejection disappears.",
+      "actual": "The exact DCT rejection remained at bit 2101, with the same 63 packs, 18 video frames, 23 audio frames, one video error, and three audio underflows. The guest still entered the repeated CDIC stop/start loop.",
+      "outcome": "hypothesis-falsified",
+      "regressions": [],
+      "improvements": [
+        "Synthetic DMA0 lifecycle now matches SCC68070 sections 8.4.1 and 8.4.3.1."
+      ],
+      "reverted": true,
+      "evidence_quality": "high for the bounded scenario; manual frontend behavior not retested",
+      "confidence": "high that premature COC is not the cause of this first payload reorder",
+      "applicability": {
+        "conditions": [
+          "The accurate-timing batch, CDIC pump, and bounded click schedule remain unchanged."
+        ],
+        "invalidated_by": [
+          "A later finding that the bounded click schedule selected a materially different guest path.",
+          "A correction to PCL diagnostic sampling that changes the inferred first divergence."
+        ],
+        "repeat_when": [
+          "DMA bus arbitration or CDIC request timing changes the completion boundary materially."
+        ]
+      }
+    },
+    {
+      "id": "shared-in4-owner-arbitration",
+      "context": {
+        "base_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+        "dirty_diff_hash": "48c5df7ebaa3c0e8e5568ee49251da4c42cc1190c7b73f536751b97bd5180d0c",
+        "component_fingerprints": {
+          "cpu-timing": "0334b631b27ec6d70a7cac319a225dce83c56f97145c063844dc5d273898ae2e",
+          "dvc": "1c8abdab806a941447e986a7b646888c1d84d96c4a108a9a95f47de9a70b539a",
+          "mcd212": "ce3175a9004a937aa0be2c7157c2259eb0aa539057536c7090dbd5422a320efa"
+        },
+        "dependencies": {
+          "Cargo.lock": "da94ce470c588c776fa91786d0bde983413f1c4326ee68511062718483067305"
+        },
+        "disc_fingerprint": "local The 7th Guest Europe Disc 1 CUE from incident inventory",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "bounded title-menu click through first failing post-title stream",
+        "timing": "550000000 instructions; click 498000000:588,265,1"
+      },
+      "hypothesis_id": "vmpeg-shared-in4-daisy-chain",
+      "strategy": "Route CDIC and VMPEG through one latched IN4 owner, hold that owner until its request deasserts, keep IN5 low, and route level-4 acknowledge to the owner's programmed vector. Add focused level and no-preemption tests.",
+      "symbols": [
+        "MachineBus::arbitrate_shared_in4",
+        "MachineBus::refresh_external_interrupts",
+        "MachineBus::iack"
+      ],
+      "assumptions": [
+        "The CD-i 220 service manual describes the base-case/FMVDVC wiring used by the cdi220b model.",
+        "The bounded click schedule reaches the same native playback path as the failing accurate-timing trace."
+      ],
+      "expected": "The CDIC handler completes its producer-pointer update before VMPEG consumes/releases the PCL; the post-title MPEG stream continues without the DCT rejection.",
+      "actual": "The identical run advanced from 18 decoded video frames and one video error to 768 decoded and 744 presented video frames, 1,141 audio frames, two completed program ends, and zero demux/video/audio errors. Removing the unrelated DMA0 experiment and repeating produced identical counters.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "Accurate SCC68070 section-6.2 timing now remains compatible with the native The 7th Guest CDIC-to-VMPEG transport.",
+        "The implementation and durable planning notes now match the CD-i 220 IN4/IN5 hardware contract."
+      ],
+      "reverted": false,
+      "evidence_quality": "high: primary service schematic, pre-fix failing unit test, deterministic title trace, and isolation rerun",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "CD-i 220/Mono-I base case with the 22ER9141-style FMV extension chain."
+        ],
+        "invalidated_by": [
+          "Primary hardware evidence showing a different interrupt strap on a separately modeled player or DVC."
+        ],
+        "repeat_when": [
+          "Adding another expansion interrupt source or a later player/DVC model."
+        ]
+      }
+    }
+  ],
+  "manual_verification": [
+    {
+      "result": "neighboring-regressions-pass",
+      "revision": "42fe2b5+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
+      "notes": "User reports the requested checks other than the save-skipped The 7th Guest opening work well. The 7th Guest seven-stage manual check remains pending after NVRAM clearance."
+    },
+    {
+      "result": "accepted",
+      "revision": "42fe2b5+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
+      "notes": "With clean NVRAM, the user confirmed the pre-title clip, title MPEG, both post-title MPEG stages, transition animation, automatic gameplay entry, and gameplay audio all proceed. Three brief black intervals are tracked separately and do not block the resolved scheduling/interrupt regression."
+    }
+  ]
+}

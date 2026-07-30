@@ -40,21 +40,39 @@ The adjacent historical root `ef2f5858` fails the transition. Between
 - SCC68070 instruction/bus timing in `cpu.rs`, `ea.rs`, and `exec.rs`.
 - CDIC sound-map completion signaling.
 
-Controlled historical hybrids established that the SCC68070 timing batch is
+Controlled historical hybrids established that the SCC68070 timing batch was
 sufficient to expose the failure, while the exception/interrupt subset alone
-is not. This does not prove the datasheet timing values are wrong. It proves
-that the rest of the emulator does not remain behaviorally correct when all
-device time is advanced in instruction-sized batches under those values.
+was not. This did not prove the datasheet timing values wrong; it supplied a
+reliable first-divergence scenario for the inaccurate device contract
+described below.
 
 The Philips documentation pass adds a second constraint to that
 reconstruction. TN 94 says disc/audio, video-field, and system-tick time bases
 are asynchronous. The CD-i 205 service manual specifies a 30.0000/15.000 MHz
 PAL system/CPU clock but a 30.2098 MHz NTSC system clock, matching the
 MCD212's 525-TV timing table. The current global 30/15 MHz scheduler cannot
-represent that distinction. This strengthens the event-interleaving
-hypothesis; it does not justify changing an isolated clock constant while
-devices still advance in instruction-sized batches. See
+represent that distinction. It remains a player-clock modeling limitation,
+but it was not the cause of this transition failure. See
 `docs/specification-research.md`.
+
+## Resolved device-contract boundary
+
+Instruction-boundary PCL and register diagnostics located the first causal
+divergence. CDIC filled a native PCL and entered its interrupt handler, then
+VMPEG preempted that active service on the emulator's separately modeled IN5
+before guest PC `$42A594` advanced the PCL producer pointer. VMPEG released
+the PCL; the resumed CDIC handler skipped the pointer update; the next sector
+then overwrote the same ring position and damaged MPEG ordering.
+
+The Philips CD-i 220 service schematic and signal glossary resolve the
+hardware ambiguity: the FMV extension and CDIC share a daisy-chained IN4, and
+IN5 is unused. The corrected model latches the active IN4 owner until its
+request releases and routes interrupt acknowledge to that owner's programmed
+vector. With section-6.2 CPU timing enabled, the identical
+550-million-instruction run advances from 18 decoded video frames and one
+video error to 768 decoded/744 presented frames, two completed program ends,
+and zero demux/video/audio errors. Removing an unrelated DMA0 experiment and
+repeating gives identical results.
 
 ## Classification
 
@@ -79,17 +97,17 @@ emulation loop.
 Each batch has useful evidence, but must be retested against the preserved
 seven-stage transition and its neighboring titles.
 
-### Quarantine pending reconstruction
+### Deferred or separately scoped
 
-- Datasheet SCC68070 instruction timing when devices advance only after a
-  complete instruction.
 - DMAREQ2 burst/cycle-steal pacing added during the failed transition
   investigation.
 - VMPEG completion changes whose synthetic tests pass but did not restore the
   reported sequence.
 
-Quarantine means the change remains preserved in `af3ca1d`; it is not evidence
-that the underlying hardware hypothesis is false.
+The datasheet SCC68070 timing batch is no longer quarantined: its four
+table-driven checks are active and the shared-IN4 correction preserves the
+bounded title transition. The items above remain contextual evidence, not
+prohibitions on a later experiment with changed prerequisites.
 
 ## Regression gates
 
@@ -131,3 +149,14 @@ Gate gameplay/firing audio on the `ac20dcd` diagnostic working tree. Both
 played without the historical looping fault. Alien Gate's separate missing-HUD
 edge report is display-only and is tracked in
 `data/compatibility/incidents/alien-gate-hud-lower-edge-missing.json`.
+
+Later on 2026-07-26, the corrected shared-IN4 build passed the deterministic
+550-million-instruction The 7th Guest transition checkpoint twice under the
+section-6.2 timing model, including one run with the unrelated DMA0 experiment
+removed. On 2026-07-29 the user completed the clean-NVRAM frontend pass: the
+pre-title clip, title MPEG, both post-title MPEG stages, the transition into
+the stairwell, automatic gameplay entry, and gameplay audio all proceed. The
+neighboring Earth Command, Naked Gun, Alien Gate, Merlin's Apprentice, and The
+Apprentice checks had already passed. This closes the shared-IN4 scheduling
+regression. Three brief black intervals and one or two early Philips-logo
+audio hits remain separate presentation/audio incidents.

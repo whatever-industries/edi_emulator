@@ -72,12 +72,34 @@ struct GuestMemoryWriteObservation {
     source_dma_bytes: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DvcRegisterWriteObservation {
+    address: u32,
+    value: u8,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DmaRegisterWriteObservation {
+    channel: u8,
+    register_offset: u32,
+    value: u8,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RawGuestWriteObservation {
+    address: u32,
+    changed: bool,
+}
+
 #[derive(Debug, Default)]
 struct DmaDiagnosticCapture {
     pending: Vec<DmaDiagnosticObservation>,
     dvc_in_flight: Option<DvcDmaDiagnosticInFlight>,
     watched_cdic_regions: Vec<WatchedDmaRegion>,
     pending_guest_writes: Vec<GuestMemoryWriteObservation>,
+    pending_dvc_register_writes: Vec<DvcRegisterWriteObservation>,
+    pending_dma_register_writes: Vec<DmaRegisterWriteObservation>,
+    pending_raw_guest_writes: Vec<RawGuestWriteObservation>,
     cdic_dma_active: bool,
 }
 
@@ -98,7 +120,15 @@ impl DmaDiagnosticCapture {
     }
 
     fn observe_guest_write(&mut self, address: u32, before: u8, after: u8) {
-        if self.cdic_dma_active || before == after {
+        if self.cdic_dma_active {
+            return;
+        }
+        self.pending_raw_guest_writes
+            .push(RawGuestWriteObservation {
+                address,
+                changed: before != after,
+            });
+        if before == after {
             return;
         }
         let Some(source) = self
@@ -154,6 +184,19 @@ fn ranges_overlap(left: u32, left_bytes: u32, right: u32, right_bytes: u32) -> b
     left < right_end && right < left_end
 }
 
+fn diagnostic_read_u32(regions: &[RamDiagnosticRegion<'_>], address: u32) -> Option<u32> {
+    let region = regions.iter().find(|region| {
+        address >= region.base
+            && address
+                .checked_add(4)
+                .is_some_and(|end| end <= region.base + region.bytes.len() as u32)
+    })?;
+    let offset = (address - region.base) as usize;
+    Some(u32::from_be_bytes(
+        region.bytes[offset..offset + 4].try_into().unwrap(),
+    ))
+}
+
 /// Stub identifiers for devices that are not yet implemented; accesses are
 /// logged so BIOS expectations become visible during bring-up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,6 +240,18 @@ enum Page {
     /// Page contains more than one region (or a sub-page device window);
     /// resolve by walking the region list.
     Slow,
+}
+
+/// Latched owner of the CD-i 220's CDIC/VMPEG interrupt daisy chain.
+///
+/// The FMV cartridge uses `INTREQN`; SCC68070 IN5 is unused. See Philips
+/// CD-i 220 service manual section 6.6.1 and the `INTREQN`/`INTENN` glossary.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum SharedIn4Owner {
+    #[default]
+    Idle,
+    Cdic,
+    Vmpeg,
 }
 
 /// MK48T08 timekeeper clock registers (device offsets $1FF8-$1FFF), BCD.
@@ -253,6 +308,8 @@ pub struct MachineBus {
     pub disc: Option<DiscImage>,
     /// Optional Digital Video Cartridge. M3 supports the VMPEG variant.
     pub dvc: Option<Vmpeg>,
+    /// Source whose programmed vector owns the shared IN4 acknowledge.
+    shared_in4_owner: SharedIn4Owner,
     /// SCC68070-clock budget for the asynchronous DMAREQ2 transfer engine.
     dvc_dma_cycles: u64,
     /// Present only while bounded diagnostics are enabled.
@@ -340,6 +397,7 @@ impl MachineBus {
             cdic: Cdic::new(),
             disc: None,
             dvc: None,
+            shared_in4_owner: SharedIn4Owner::Idle,
             dvc_dma_cycles: 0,
             dma_diagnostics: None,
         };
@@ -389,6 +447,9 @@ impl MachineBus {
         if let Some(dvc) = &mut self.dvc {
             dvc.reset();
         }
+        self.shared_in4_owner = SharedIn4Owner::Idle;
+        self.periph.in4_line = false;
+        self.periph.in5_line = false;
         self.dvc_dma_cycles = 0;
         if let Some(capture) = &mut self.dma_diagnostics {
             *capture = DmaDiagnosticCapture::default();
@@ -397,13 +458,52 @@ impl MachineBus {
 
     pub fn attach_dvc(&mut self, config: DvcConfig) -> Result<(), String> {
         self.dvc = Some(Vmpeg::new(config)?);
+        self.shared_in4_owner = SharedIn4Owner::Idle;
         self.dvc_dma_cycles = 0;
+        self.refresh_external_interrupts();
         Ok(())
     }
 
     pub fn detach_dvc(&mut self) {
         self.dvc = None;
+        self.shared_in4_owner = SharedIn4Owner::Idle;
         self.dvc_dma_cycles = 0;
+        self.refresh_external_interrupts();
+    }
+
+    fn refresh_external_interrupts(&mut self) {
+        self.arbitrate_shared_in4(
+            self.cdic.int_line(),
+            self.dvc.as_ref().is_some_and(Vmpeg::irq),
+        );
+    }
+
+    fn arbitrate_shared_in4(&mut self, cdic_request: bool, vmpeg_request: bool) {
+        let owner_still_requests = match self.shared_in4_owner {
+            SharedIn4Owner::Idle => false,
+            SharedIn4Owner::Cdic => cdic_request,
+            SharedIn4Owner::Vmpeg => vmpeg_request,
+        };
+        if !owner_still_requests {
+            self.shared_in4_owner = SharedIn4Owner::Idle;
+        }
+        if self.shared_in4_owner == SharedIn4Owner::Idle {
+            // The extension is later in the physical daisy chain and wins
+            // only when both requests first arrive at the same boundary.
+            self.shared_in4_owner = if vmpeg_request {
+                SharedIn4Owner::Vmpeg
+            } else if cdic_request {
+                SharedIn4Owner::Cdic
+            } else {
+                SharedIn4Owner::Idle
+            };
+        }
+        self.periph.in4_line = match self.shared_in4_owner {
+            SharedIn4Owner::Idle => false,
+            SharedIn4Owner::Cdic => cdic_request,
+            SharedIn4Owner::Vmpeg => vmpeg_request,
+        };
+        // The base player's service manual explicitly marks IN5 unused.
         self.periph.in5_line = false;
     }
 
@@ -437,7 +537,7 @@ impl MachineBus {
                 0x0000..=0x3BFF => self.cdic.ram_read8(addr),
                 0x3C00..=0x3FFF => {
                     let v = self.cdic.read8(addr);
-                    self.periph.in4_line = self.cdic.int_line();
+                    self.refresh_external_interrupts();
                     v
                 }
                 _ => 0,
@@ -480,14 +580,27 @@ impl MachineBus {
                     _ => self.nvram[idx] = val,
                 }
             }
-            DevSlot::OnChip => self.periph.write8(addr, val),
+            DevSlot::OnChip => {
+                if matches!(addr, 0x4000..=0x406F) {
+                    if let Some(capture) = &mut self.dma_diagnostics {
+                        capture
+                            .pending_dma_register_writes
+                            .push(DmaRegisterWriteObservation {
+                                channel: u8::from(addr >= 0x4040),
+                                register_offset: addr,
+                                value: val,
+                            });
+                    }
+                }
+                self.periph.write8(addr, val);
+            }
             DevSlot::Cdic => match addr {
                 0x0000..=0x3BFF => self.cdic.ram_write8(addr, val),
                 0x3C00..=0x3FFF => {
                     if let Some(dma_word) = self.cdic.write8(addr, val) {
                         self.cdic_dma(dma_word);
                     }
-                    self.periph.in4_line = self.cdic.int_line();
+                    self.refresh_external_interrupts();
                 }
                 _ => {}
             },
@@ -742,6 +855,27 @@ impl MachineBus {
             .unwrap_or_default()
     }
 
+    fn take_dvc_register_write_observations(&mut self) -> Vec<DvcRegisterWriteObservation> {
+        self.dma_diagnostics
+            .as_mut()
+            .map(|capture| std::mem::take(&mut capture.pending_dvc_register_writes))
+            .unwrap_or_default()
+    }
+
+    fn take_dma_register_write_observations(&mut self) -> Vec<DmaRegisterWriteObservation> {
+        self.dma_diagnostics
+            .as_mut()
+            .map(|capture| std::mem::take(&mut capture.pending_dma_register_writes))
+            .unwrap_or_default()
+    }
+
+    fn take_raw_guest_write_observations(&mut self) -> Vec<RawGuestWriteObservation> {
+        self.dma_diagnostics
+            .as_mut()
+            .map(|capture| std::mem::take(&mut capture.pending_raw_guest_writes))
+            .unwrap_or_default()
+    }
+
     fn diagnostic_ram_regions(&self) -> Vec<RamDiagnosticRegion<'_>> {
         let mut regions = Vec::new();
         if let Some(dvc) = &self.dvc {
@@ -786,7 +920,34 @@ impl MachineBus {
             return self.dev_write8(DevSlot::OnChip, addr - ONCHIP_BASE, val);
         }
         let a24 = addr & 0x00FF_FFFF;
+        let dvc_ram_before = if matches!(a24, 0x00D0_0000..=0x00DF_FFFF) {
+            self.dvc
+                .as_ref()
+                .map(|dvc| dvc.extension_ram()[(a24 - 0x00D0_0000) as usize])
+        } else {
+            None
+        };
         if self.dvc.as_mut().is_some_and(|dvc| dvc.write8(a24, val)) {
+            if let Some(before) = dvc_ram_before {
+                self.observe_guest_memory_write(a24, before, val);
+            }
+            let fma_control = matches!(a24, 0x00E0_3000..=0x00E0_30FF)
+                && matches!((a24 - 0x00E0_3000) & 0xFE, 0x00 | 0x08 | 0x0C);
+            let fmv_control = matches!(a24, 0x00E0_4000..=0x00E0_40FF)
+                && matches!(
+                    (a24 - 0x00E0_4000) & 0xFE,
+                    0x02 | 0x04 | 0x64 | 0x70..=0x88 | 0xC0 | 0xC2 | 0xC4 | 0xDC
+                );
+            if matches!(a24, 0x00E0_1000..=0x00E0_1FFF) || fma_control || fmv_control {
+                if let Some(capture) = &mut self.dma_diagnostics {
+                    capture
+                        .pending_dvc_register_writes
+                        .push(DvcRegisterWriteObservation {
+                            address: a24,
+                            value: val,
+                        });
+                }
+            }
             return;
         }
         match self.pages[(a24 >> PAGE_SHIFT) as usize] {
@@ -932,8 +1093,8 @@ impl Machine {
             interrupts: InterruptDiagnosticSnapshot {
                 pending_ipl: self.bus.periph.pending_ipl(),
                 slave_in2: self.bus.periph.in2_line,
-                cdic_in4: self.bus.periph.in4_line,
-                dvc_in5: self.bus.periph.in5_line,
+                cdic_in4: self.bus.cdic.int_line(),
+                dvc_in4: self.bus.dvc.as_ref().is_some_and(Vmpeg::irq),
             },
             dma: DmaDiagnosticSnapshot {
                 cdic_channel: DmaChannelDiagnosticSnapshot {
@@ -1006,6 +1167,19 @@ impl Machine {
     fn diagnostic_probe(&self) -> DiagnosticProbe {
         let cdic = self.bus.cdic.diagnostic_snapshot();
         let dvc = self.dvc_stats().unwrap_or_default();
+        let mut dvc_state = self.bus.dvc.as_ref().map(Vmpeg::register_snapshot);
+        if let Some(registers) = &mut dvc_state {
+            // These are free-running clocks. Retain their live values in the
+            // emitted event, but do not create one event per clock change.
+            registers.dclk = 0;
+            registers.timer_counter = 0;
+            // The shared 45 kHz timer regularly asserts ISR bit $0100. It is
+            // useful context at a native-driver transition, but its periodic
+            // assert/ack cadence would otherwise evict the MPEG transition
+            // history from a bounded long-run capture.
+            registers.fma_isr &= !0x0100;
+            registers.fmv_isr &= !0x0100;
+        }
         DiagnosticProbe {
             frame: self.bus.mcd212.frame_count,
             cdic_mode: cdic.disc_mode,
@@ -1026,6 +1200,7 @@ impl Machine {
                 dvc.audio_underflow_events,
                 dvc.stream_errors,
             ],
+            dvc_state,
         }
     }
 
@@ -1100,6 +1275,14 @@ impl Machine {
                 stream_errors: current.dvc_errors[5],
             });
         }
+        if current.dvc_state != previous.dvc_state {
+            if let Some(registers) = self.bus.dvc.as_ref().map(Vmpeg::register_snapshot) {
+                self.push_diagnostic_event(MachineDiagnosticEvent::DvcState {
+                    cycle: self.cpu.cycles,
+                    registers,
+                });
+            }
+        }
         if let Some((_, _, stored)) = &mut self.diagnostic_events {
             *stored = current;
         }
@@ -1111,9 +1294,9 @@ impl Machine {
         }
         let observations = self.bus.take_dma_diagnostic_observations();
         let guest_writes = self.bus.take_guest_memory_write_observations();
-        if observations.is_empty() && guest_writes.is_empty() {
-            return;
-        }
+        let dvc_register_writes = self.bus.take_dvc_register_write_observations();
+        let dma_register_writes = self.bus.take_dma_register_write_observations();
+        let raw_guest_writes = self.bus.take_raw_guest_write_observations();
         let cycle = self.cpu.cycles;
         let mut events = Vec::new();
         {
@@ -1122,6 +1305,35 @@ impl Machine {
             };
             let regions = self.bus.diagnostic_ram_regions();
             events.extend(tracker.sample(cycle, &regions));
+            let known_pcls = tracker.known_pcl_addresses();
+            let mut pointer_writes = Vec::new();
+            for write in raw_guest_writes {
+                for byte_offset in 0..4 {
+                    let candidate = write.address.saturating_sub(byte_offset);
+                    let Some(value) = diagnostic_read_u32(&regions, candidate) else {
+                        continue;
+                    };
+                    if known_pcls.contains(&value) {
+                        if let Some(existing) = pointer_writes
+                            .iter_mut()
+                            .find(|(address, pcl, _)| *address == candidate && *pcl == value)
+                        {
+                            existing.2 |= write.changed;
+                        } else {
+                            pointer_writes.push((candidate, value, write.changed));
+                        }
+                    }
+                }
+            }
+            for (memory_address, pcl_address, changed) in pointer_writes {
+                events.push(MachineDiagnosticEvent::PclPointerWrite {
+                    cycle,
+                    cpu_pc: self.cpu.pc,
+                    memory_address,
+                    pcl_address,
+                    changed,
+                });
+            }
             for write in guest_writes {
                 events.push(MachineDiagnosticEvent::GuestMemoryWrite {
                     cycle,
@@ -1133,6 +1345,22 @@ impl Machine {
                     source_dma_address: write.source_dma_address,
                     source_dma_bytes: write.source_dma_bytes,
                     pcl_addresses: tracker.matching_buffers(write.memory_address, write.bytes),
+                });
+            }
+            for write in dvc_register_writes {
+                events.push(MachineDiagnosticEvent::DvcRegisterWrite {
+                    cycle,
+                    address: write.address,
+                    value: write.value,
+                });
+            }
+            for write in dma_register_writes {
+                events.push(MachineDiagnosticEvent::DmaRegisterWrite {
+                    cycle,
+                    cpu_pc: self.cpu.pc,
+                    channel: write.channel,
+                    register_offset: write.register_offset,
+                    value: write.value,
                 });
             }
             for observation in observations {
@@ -1163,6 +1391,11 @@ impl Machine {
                     transport_payload_hash: observation.transport_payload_hash,
                     pcl_addresses,
                 });
+            }
+        }
+        for event in &mut events {
+            if let MachineDiagnosticEvent::PclState { cpu_pc, .. } = event {
+                *cpu_pc = self.cpu.pc;
             }
         }
         for event in events {
@@ -1221,8 +1454,7 @@ impl Machine {
             }
         }
         bus.periph.in2_line = bus.slave.irq();
-        bus.periph.in4_line = bus.cdic.int_line();
-        bus.periph.in5_line = bus.dvc.as_ref().is_some_and(Vmpeg::irq);
+        bus.refresh_external_interrupts();
         bus.periph.set_int1(bus.mcd212.int_line());
         self.sample_diagnostics();
         cycles
@@ -1343,13 +1575,15 @@ impl Bus68k for MachineBus {
     }
 
     fn iack(&mut self, level: u8) -> u8 {
-        // The CDIC on IN4 supplies its own programmed vector.
         if level == 4 && self.periph.in4_line {
-            return self.cdic.intack();
-        }
-        if level == 5 && self.periph.in5_line {
-            if let Some(dvc) = &mut self.dvc {
-                return dvc.intack();
+            match self.shared_in4_owner {
+                SharedIn4Owner::Cdic => return self.cdic.intack(),
+                SharedIn4Owner::Vmpeg => {
+                    if let Some(dvc) = &mut self.dvc {
+                        return dvc.intack();
+                    }
+                }
+                SharedIn4Owner::Idle => {}
             }
         }
         self.periph.iack(level)
@@ -1548,6 +1782,188 @@ mod tests {
         assert!(matches!(
             events[1],
             MachineDiagnosticEvent::Frame { frame: 3, .. }
+        ));
+    }
+
+    #[test]
+    fn dvc_diagnostics_record_state_changes_without_clock_noise() {
+        let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
+        machine
+            .attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
+            .unwrap();
+        machine.enable_diagnostics(8);
+
+        machine.bus.dvc.as_mut().unwrap().tick(10_000);
+        machine.sample_diagnostics();
+        assert!(
+            machine.take_diagnostic_events().is_empty(),
+            "free-running DCLK and timer changes must not flood bounded evidence"
+        );
+
+        // FMV system-command write: select video as the DMA target.
+        machine.bus.raw_write8(0x00E0_40C0, 0x80);
+        machine.bus.raw_write8(0x00E0_40C1, 0x00);
+        machine.sample_diagnostics();
+        let events = machine.take_diagnostic_events();
+        assert_eq!(events.len(), 3);
+        assert!(matches!(
+            events[0],
+            MachineDiagnosticEvent::DvcRegisterWrite {
+                address: 0x00E0_40C0,
+                value: 0x80,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[1],
+            MachineDiagnosticEvent::DvcRegisterWrite {
+                address: 0x00E0_40C1,
+                value: 0,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[2],
+            MachineDiagnosticEvent::DvcState { registers, .. }
+                if registers.dma_target == 1 && registers.dclk != 0
+        ));
+    }
+
+    #[test]
+    fn vmpeg_interrupt_uses_the_shared_in4_daisy_chain() {
+        let mut bus = machine();
+        bus.attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
+            .unwrap();
+        let dvc = bus.dvc.as_mut().unwrap();
+        dvc.write8(0xE0_300C, 0x00);
+        dvc.write8(0xE0_300D, 0x5A);
+        dvc.write8(0xE0_301C, 0x01);
+        dvc.write8(0xE0_301D, 0x00);
+        dvc.tick(200_000);
+        assert!(dvc.irq());
+
+        bus.refresh_external_interrupts();
+
+        assert_eq!(bus.periph.pending_ipl(), 4);
+        assert!(bus.periph.in4_line);
+        assert!(!bus.periph.in5_line);
+        assert_eq!(bus.iack(4), 0x5A);
+    }
+
+    #[test]
+    fn shared_in4_owner_is_not_preempted_until_its_request_is_released() {
+        let mut bus = machine();
+
+        bus.arbitrate_shared_in4(true, false);
+        assert_eq!(bus.shared_in4_owner, SharedIn4Owner::Cdic);
+        assert_eq!(bus.periph.pending_ipl(), 4);
+
+        bus.arbitrate_shared_in4(true, true);
+        assert_eq!(bus.shared_in4_owner, SharedIn4Owner::Cdic);
+
+        bus.arbitrate_shared_in4(false, true);
+        assert_eq!(bus.shared_in4_owner, SharedIn4Owner::Vmpeg);
+        assert_eq!(bus.periph.pending_ipl(), 4);
+
+        bus.arbitrate_shared_in4(false, false);
+        assert_eq!(bus.shared_in4_owner, SharedIn4Owner::Idle);
+        assert_eq!(bus.periph.pending_ipl(), 0);
+        assert!(!bus.periph.in5_line);
+    }
+
+    #[test]
+    fn diagnostics_sample_discovered_pcl_without_an_unrelated_bus_observation() {
+        let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
+        machine
+            .attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
+            .unwrap();
+        machine.enable_diagnostics(16);
+        let pcl = 0x300usize;
+        let buffer = 0x1000u32;
+        {
+            let ram = &mut machine.bus.ram[0];
+            ram[pcl + 2] = 0x62;
+            ram[pcl + 3] = 0x0F;
+            ram[pcl + 6..pcl + 10].copy_from_slice(&(pcl as u32).to_be_bytes());
+            ram[pcl + 10..pcl + 14].copy_from_slice(&buffer.to_be_bytes());
+            ram[pcl + 14..pcl + 18].copy_from_slice(&1u32.to_be_bytes());
+        }
+        {
+            let regions = machine.bus.diagnostic_ram_regions();
+            machine
+                .pcl_diagnostics
+                .as_mut()
+                .unwrap()
+                .observe_cdic_dma(0, &regions, buffer, 2324);
+        }
+        machine.take_diagnostic_events();
+
+        machine.bus.ram[0][pcl] = 1;
+        machine.bus.ram[0][pcl + 24..pcl + 28].copy_from_slice(&2324u32.to_be_bytes());
+        machine.sample_diagnostics();
+        let expected_pc = machine.cpu.pc;
+
+        assert!(machine
+            .take_diagnostic_events()
+            .iter()
+            .any(|event| matches!(
+                event,
+                MachineDiagnosticEvent::PclState {
+                    cpu_pc,
+                    transition: crate::diagnostics::PclTransition::BufferFull,
+                    pcl: snapshot,
+                    ..
+                } if *cpu_pc == expected_pc && snapshot.address == pcl as u32
+            )));
+
+        let pointer_slot = 0x00D0_0200u32;
+        for (offset, byte) in (pcl as u32).to_be_bytes().into_iter().enumerate() {
+            machine.bus.raw_write8(pointer_slot + offset as u32, byte);
+        }
+        machine.sample_diagnostics();
+        assert!(machine
+            .take_diagnostic_events()
+            .iter()
+            .any(|event| matches!(
+                event,
+                MachineDiagnosticEvent::PclPointerWrite {
+                    memory_address,
+                    pcl_address,
+                    changed: true,
+                    ..
+                } if *memory_address == pointer_slot && *pcl_address == pcl as u32
+            )));
+    }
+
+    #[test]
+    fn diagnostics_record_guest_dma_register_writes_with_cpu_context() {
+        let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
+        machine.enable_diagnostics(8);
+        machine.cpu.pc = 0x42_A100;
+
+        machine.bus.raw_write8(0x8000_400C, 0x00);
+        machine.bus.raw_write8(0x8000_400D, 0xD1);
+        machine.sample_diagnostics();
+
+        let events = machine.take_diagnostic_events();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                MachineDiagnosticEvent::DmaRegisterWrite {
+                    cpu_pc: 0x42_A100,
+                    channel: 0,
+                    register_offset: 0x400C,
+                    value: 0,
+                    ..
+                },
+                MachineDiagnosticEvent::DmaRegisterWrite {
+                    cpu_pc: 0x42_A100,
+                    channel: 0,
+                    register_offset: 0x400D,
+                    value: 0xD1,
+                    ..
+                }
+            ]
         ));
     }
 

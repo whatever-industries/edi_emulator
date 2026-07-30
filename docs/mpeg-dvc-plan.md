@@ -1,11 +1,11 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-07-25
+Status date: 2026-07-26
 
 ## Current implementation status
 
 - [x] M3.1 optional DVC firmware identification and attachment
-- [x] M3.2 VMPEG memory map, initial registers, IRQ5, and SCC68070 DMAREQ2 transport
+- [x] M3.2 VMPEG memory map, initial registers, shared-IN4 interrupt arbitration, and SCC68070 DMAREQ2 transport
 - [x] M3.3 incremental MPEG-1 system-stream demultiplexing
 - [x] M3.4 MPEG-1 video and Layer-II audio decoding
 - [x] M3.5 MCD212 external-video composition and mixed audio
@@ -15,7 +15,7 @@ Status date: 2026-07-25
 - [x] M3.9 interlaced field/base-cursor composition and CCIR presentation range
 - [x] M3.10 masked FMV VSYNC status and native release-path completion
 - [x] M3.11 seven-stage The 7th Guest transition compatibility reference
-- [ ] M3.12 reconcile SCC68070 datasheet timing with device scheduling
+- [x] M3.12 reconcile SCC68070 datasheet timing with VMPEG/CDIC interrupt arbitration
 - [ ] M3.13 seamless-branch B-picture recovery (five rare failures remain in the full run)
 
 The specification-driven diagnostic checkpoint adds bounded DVC error,
@@ -126,14 +126,13 @@ is present. Contents are streamed to a guarded temporary directory so the
 existing CD-i and Photo CD sector readers remain unchanged; compressed,
 encrypted, unsafe-path, and multi-CUE archives are rejected explicitly.
 
-Next action: reconcile SCC68070 datasheet instruction timing with
-whole-machine/device scheduling while preserving the verified seven-stage
-The 7th Guest transition. The exact `2a1d9038` reference and the modern audit
-hybrid play the pre-title clip, title MPEG, both post-title MPEGs, enter
-gameplay automatically, and avoid stuttering/looping audio. Applying the
-section-6.2 timing batch while devices advance only at instruction boundaries
-breaks that sequence. The audit therefore quarantines, but does not discard,
-the four timing assertions. See `docs/core-compatibility-audit.md`.
+The SCC68070 section-6.2 timing reconciliation is complete. The accurate
+timing exposed the incorrect split interrupt model; the CD-i 220 service
+manual instead proves CDIC and VMPEG share a daisy-chained IN4 while IN5 is
+unused. The four timing-table tests are active, and latched shared-IN4
+ownership preserves the verified seven-stage The 7th Guest transition. See
+`docs/core-compatibility-audit.md` and the tracked
+`scc68070-device-event-scheduling` incident.
 Manual neighboring checks on the committed audit baseline also pass Earth
 Command sound-map termination, The Naked Gun 2 1/2's copyright-to-menu
 release, Alien Gate pointer/firing audio, Merlin's Apprentice (Europe) as a
@@ -141,8 +140,17 @@ PAL base-graphics title, and The Apprentice (USA) as an NTSC base-graphics
 title. Every required neighboring-title gate now passes before scheduling
 reconstruction.
 
-After the timing/scheduling reconciliation, resolve the five cumulative
-B-picture decode failures (including two captured during The 7th Guest's
+The 2026-07-29 clean-NVRAM frontend pass manually verifies this checkpoint
+under the accurate SCC68070 timing/shared-IN4 tree: the pre-title clip, title
+MPEG, both post-title MPEG stages, the visible transition into the stairwell,
+automatic gameplay entry, and gameplay audio all proceed. Three brief black
+intervals are now recorded around these working stages; earlier notes that
+described two entirely missing transition animations are superseded pending a
+same-sequence hardware reference. One or two early audio hits in the opening
+Philips clip are tracked separately.
+
+Next, resolve the five cumulative B-picture decode failures (including two
+captured during The 7th Guest's
 branched third play), then turn gameplay into repeatable long-run A/V-drift,
 pause/continue, stream-switch, and repeated-transition regressions. The known
 cake-puzzle freeze remains an extended compatibility gate rather than an M3
@@ -266,8 +274,13 @@ CPU-visible map for the later VMPEG cartridge used by the CD-i 220:
 The real data path is CDIC -> main RAM through SCC68070 DMA channel 0, then
 main RAM -> VMPEG through the second DMA block at `$80004040`
 (DMAREQ2/DMAACK2). The driver can send an initial handful of words through a
-transfer register before starting DMA. VMPEG sources share external interrupt
-level 5 and return their programmed vector during acknowledge.
+transfer register before starting DMA. On the CD-i 220, the CDIC and FMV
+extension share SCC68070 input IN4 through a hardware daisy chain. The current
+request owner remains latched until it releases the line, and interrupt
+acknowledge returns that owner's programmed vector. IN5 is unused on this
+base-case model. This is established by the CD-i 220 service schematic and
+glossary (`svcmanuals/cdi220.pdf`, PDF p. 66 and signal descriptions), not by
+title-specific ordering.
 
 MPEG data is ISO/IEC 11172 system/video/audio carried in 2324-byte Mode-2
 Form-2 sectors. Green Book video sectors normally use submode `0x62` and
@@ -326,7 +339,8 @@ fields creates visible combing as The 7th Guest's hand wags its finger.
 2. Add the optional VMPEG overlay map without changing the Mono-I board
    definition. Verify firmware discovery and extension RAM before decoding.
 3. Generalize SCC68070 DMA access for channel 1 and implement paced
-   memory-to-DVC FIFO transfers, completion state, and IRQ5 acknowledge.
+   memory-to-DVC FIFO transfers, completion state, and shared-IN4
+   daisy-chain acknowledge.
 4. Implement the VCD/FMA/FMV register state machines and an incremental
    MPEG-system demultiplexer. Keep FIFO/interrupt/timer behavior testable
    without any commercial ROM.
@@ -390,11 +404,25 @@ contains only two decoded video frames followed by roughly ten seconds of
 MPEG audio. The title then pauses/stops both streams, hides external video,
 and calls the native VMPEG release routine, which polls FMV ISR for a vertical
 sync before returning. FMV IER is `$2000` at that point, but VSYNC status
-`$0800` must still latch and remain readable without asserting IRQ5. Tying the
+`$0800` must still latch and remain readable without asserting the shared IN4
+request. Tying the
 status event to the MCD212 frame boundary changes the former permanent black
 screen into the interactive Disc 1 chapter menu in a 500-million-instruction
 headless run. Unit coverage verifies masked latching, IRQ gating, and ISR
 read-clear semantics.
+
+The SCC68070 section-6.2 timing pass exposed a previously hidden interrupt
+contract error. In the failing 550-million-instruction The 7th Guest trace,
+CDIC filled a native PCL and entered its IN4 handler, then VMPEG incorrectly
+preempted it on the separately modeled IN5 before the guest advanced the PCL
+producer pointer. The VMPEG consumer released that PCL, the resumed CDIC
+handler skipped the pointer update, and the next sector overwrote the same
+ring position. With the service-manual shared-IN4 daisy chain and latched
+owner, the identical run decodes 768 video frames and 1,141 audio frames,
+presents 744 frames, completes both program ends, and reports zero
+demux/video/audio errors. Repeating the run after removing an unrelated DMA0
+experiment gives identical results, isolating interrupt arbitration as the
+cause.
 
 Later visual testing exposed three presentation issues and one remaining
 transport/decoder edge case. The MCD212 formerly bobbed each 50 Hz field over

@@ -6,6 +6,7 @@
 //! count; the UI thread copies the latest completed frame into a texture.
 
 mod disc_profiles;
+mod library;
 mod presentation;
 mod storage;
 mod store_zip;
@@ -22,6 +23,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use disc_profiles::{DiscIdentity, VideoStandardRecommendation};
+use library::{
+    dpad_direction as library_dpad_direction, is_zip_path, pad_action as library_pad_action,
+    resolve_disc_source, Effect as LibraryEffect, LibraryModel, PadAction as LibraryPadAction,
+    OPEN_FOCUS as LIBRARY_OPEN_FOCUS, SLOTS as LIBRARY_SLOTS,
+};
 use presentation::{
     display_aperture, fit_aspect, pointer_mapping, presentation_aspect, screenshot_image,
     DisplayArea,
@@ -387,104 +393,6 @@ impl Default for Prefs {
 struct DiscOverride {
     /// A manually selected hardware standard for this exact pressing.
     video_standard: Option<VideoStandardRecommendation>,
-}
-
-/// Disc library slots, in UI order. CD-BGM is a CD-i-based background-music
-/// format the player handles like an ordinary CD-i disc.
-const LIBRARY_SLOTS: [&str; 4] = ["Philips CD-i", "Photo CD", "Video CD", "CD-BGM"];
-const LIBRARY_FOCUS_COUNT: usize = LIBRARY_SLOTS.len() + 1;
-const LIBRARY_OPEN_FOCUS: usize = LIBRARY_SLOTS.len();
-const LIBRARY_REPEAT_DELAY: Duration = Duration::from_millis(300);
-const LIBRARY_REPEAT_INTERVAL: Duration = Duration::from_millis(75);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LibraryPadAction {
-    PreviousTab,
-    NextTab,
-    PreviousDisc,
-    NextDisc,
-    Activate,
-    Back,
-}
-
-fn library_pad_action(
-    button: gilrs::Button,
-    primary: gilrs::Button,
-    secondary: gilrs::Button,
-) -> Option<LibraryPadAction> {
-    use gilrs::Button;
-    match button {
-        Button::LeftTrigger | Button::LeftTrigger2 => Some(LibraryPadAction::PreviousTab),
-        Button::RightTrigger | Button::RightTrigger2 => Some(LibraryPadAction::NextTab),
-        Button::DPadUp => Some(LibraryPadAction::PreviousDisc),
-        Button::DPadDown => Some(LibraryPadAction::NextDisc),
-        Button::South => Some(LibraryPadAction::Activate),
-        Button::East => Some(LibraryPadAction::Back),
-        other if other == primary => Some(LibraryPadAction::Activate),
-        other if other == secondary => Some(LibraryPadAction::Back),
-        _ => None,
-    }
-}
-
-fn cycle_library_focus(current: usize, forward: bool) -> usize {
-    if forward {
-        (current + 1) % LIBRARY_FOCUS_COUNT
-    } else {
-        (current + LIBRARY_FOCUS_COUNT - 1) % LIBRARY_FOCUS_COUNT
-    }
-}
-
-/// Normalize either a mapped D-pad button or an unmapped hat Y axis into a
-/// vertical Library direction. Gilrs reports up as positive Y.
-fn library_dpad_direction(axis_y: f32, up_button: bool, down_button: bool) -> i8 {
-    let up = up_button || axis_y > 0.5;
-    let down = down_button || axis_y < -0.5;
-    match (up, down) {
-        (true, false) => -1,
-        (false, true) => 1,
-        _ => 0,
-    }
-}
-
-/// Edge-trigger a new direction, then repeat it at a bounded menu-navigation
-/// cadence while held. Restarting the interval from the current poll avoids a
-/// burst of catch-up movements after the UI was blocked by a file dialog.
-#[derive(Default)]
-struct LibraryDpadRepeat {
-    direction: i8,
-    next_repeat: Option<Instant>,
-}
-
-impl LibraryDpadRepeat {
-    fn update(&mut self, direction: i8, now: Instant) -> i8 {
-        if direction == 0 {
-            self.reset();
-            return 0;
-        }
-        if direction != self.direction {
-            self.direction = direction;
-            self.next_repeat = Some(now + LIBRARY_REPEAT_DELAY);
-            return direction;
-        }
-        if self.next_repeat.is_some_and(|deadline| now >= deadline) {
-            self.next_repeat = Some(now + LIBRARY_REPEAT_INTERVAL);
-            return direction;
-        }
-        0
-    }
-
-    fn reset(&mut self) {
-        self.direction = 0;
-        self.next_repeat = None;
-    }
-}
-
-/// One disc found while scanning the configured library folders.
-struct LibraryEntry {
-    title: String,
-    /// Index into [`LIBRARY_SLOTS`] naming the category it was found under.
-    category: usize,
-    cue: PathBuf,
 }
 
 /// Settings window tabs.
@@ -1188,22 +1096,6 @@ fn display_name(path: &std::path::Path) -> String {
         || path.display().to_string(),
         |name| name.to_string_lossy().into(),
     )
-}
-
-fn is_zip_path(path: &std::path::Path) -> bool {
-    path.extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-}
-
-fn resolve_disc_source(
-    path: &std::path::Path,
-) -> Result<(PathBuf, Option<Arc<tempfile::TempDir>>), String> {
-    if !is_zip_path(path) {
-        return Ok((path.to_owned(), None));
-    }
-    let extracted = store_zip::extract(path)?;
-    let guard = Arc::new(extracted.temp_dir);
-    Ok((extracted.cue_path, Some(guard)))
 }
 
 fn start_audio(
@@ -2030,29 +1922,14 @@ struct App {
     pcd_tx: mpsc::Sender<PcdCmd>,
     pcd_rx: mpsc::Receiver<PcdEvent>,
     photocd: Option<PhotoCdUi>,
-    libraries: [Option<String>; LIBRARY_SLOTS.len()],
-    library: Vec<LibraryEntry>,
+    library: LibraryModel,
     show_library: bool,
-    /// Selected format tab in the library view (index into [`LIBRARY_SLOTS`]).
-    library_tab: usize,
-    /// Controller focus across the four format tabs plus Open .cue.
-    library_focus: usize,
-    /// Controller-selected row within the active format.
-    library_selection: usize,
-    /// Edge and hold-repeat state for mapped D-pad/hat row navigation.
-    library_dpad_repeat: LibraryDpadRepeat,
-    /// Discard egui's persisted scroll offset when entering the Library.
-    library_scroll_to_top: bool,
-    /// Center the controller-highlighted row after its selection changes.
-    library_scroll_to_selection: bool,
     /// Host-side controller menu shown over the current title.
     quick_menu_open: bool,
     /// Selected quick-menu row: Library or Return to Current Title.
     quick_menu_selection: usize,
     /// Last D-pad/hat direction, for edge-triggered quick-menu navigation.
     quick_menu_dpad_y: i8,
-    /// Measured width of the library tab strip, used to center it next frame.
-    library_strip_w: f32,
     /// Current window title, so it is only pushed when the disc changes.
     window_title: String,
     save_dir: Option<String>,
@@ -2098,6 +1975,8 @@ impl App {
         // that obsolete field; discard entries which now contain no
         // hardware-standard override so saving preferences prunes them.
         disc_overrides.retain(|_, settings| settings.video_standard.is_some());
+        let library = LibraryModel::new(&prefs.libraries);
+        let show_library = !has_initial_disc && library.has_configured_folder();
         let mut app = Self {
             shared,
             texture: None,
@@ -2149,29 +2028,13 @@ impl App {
             pcd_tx,
             pcd_rx,
             photocd: None,
-            libraries: {
-                // Normalize the stored list to the fixed slot count so an
-                // added category can't shift or drop existing folders.
-                let mut libs: [Option<String>; LIBRARY_SLOTS.len()] = Default::default();
-                for (slot, value) in prefs.libraries.iter().take(LIBRARY_SLOTS.len()).enumerate() {
-                    libs[slot] = value.clone();
-                }
-                libs
-            },
-            library: Vec::new(),
+            library,
             // Open into the library when folders are configured and no disc was
             // passed on the command line.
-            show_library: !has_initial_disc && prefs.libraries.iter().flatten().next().is_some(),
-            library_tab: 0,
-            library_focus: 0,
-            library_selection: 0,
-            library_dpad_repeat: LibraryDpadRepeat::default(),
-            library_scroll_to_top: true,
-            library_scroll_to_selection: false,
+            show_library,
             quick_menu_open: false,
             quick_menu_selection: 0,
             quick_menu_dpad_y: 0,
-            library_strip_w: 0.0,
             window_title: APP_NAME.to_owned(),
             save_dir: prefs.save_dir.clone(),
             diagnostic_capture_root: std::env::var_os("EDI_DIAGNOSTICS_DIR").map(PathBuf::from),
@@ -2197,7 +2060,7 @@ impl App {
         app.shared
             .audio_suppressed
             .store(app.show_library, Ordering::Relaxed);
-        app.scan_libraries();
+        app.library.scan();
         app
     }
 
@@ -2245,97 +2108,18 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Rebuild the library list from the configured folders. Each library is
-    /// a folder of per-disc subdirectories (each holding a `.cue` or eligible
-    /// Store ZIP), matching how the disc images are organized; loose CUE/ZIP
-    /// files are also picked up.
-    fn scan_libraries(&mut self) {
-        self.library.clear();
-        for (category, dir) in self.libraries.iter().enumerate() {
-            let Some(dir) = dir.as_ref().map(PathBuf::from).filter(|p| p.is_dir()) else {
-                continue;
-            };
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            let mut paths: Vec<PathBuf> =
-                entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
-            paths.sort_by_key(|p| p.file_name().map(|s| s.to_ascii_lowercase()));
-            for path in paths {
-                let cue = if path.is_dir() {
-                    std::fs::read_dir(&path).ok().and_then(|inner| {
-                        let mut candidates: Vec<PathBuf> = inner
-                            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-                            .filter(|candidate| {
-                                candidate.extension().is_some_and(|extension| {
-                                    extension.eq_ignore_ascii_case("cue")
-                                        || extension.eq_ignore_ascii_case("zip")
-                                })
-                            })
-                            .collect();
-                        candidates.sort_by_key(|candidate| {
-                            (
-                                is_zip_path(candidate),
-                                candidate.file_name().map(|name| name.to_ascii_lowercase()),
-                            )
-                        });
-                        candidates.into_iter().find(|candidate| {
-                            !is_zip_path(candidate) || store_zip::is_eligible(candidate)
-                        })
-                    })
-                } else if path.extension().is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case("cue")
-                        || (extension.eq_ignore_ascii_case("zip") && store_zip::is_eligible(&path))
-                }) {
-                    Some(path.clone())
-                } else {
-                    None
-                };
-                if let Some(cue) = cue {
-                    let title = if path.is_dir() { &path } else { &cue }
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| cue.display().to_string());
-                    self.library.push(LibraryEntry {
-                        title,
-                        category,
-                        cue,
-                    });
-                }
-            }
-        }
-        // Open on a format that actually has discs. Done here rather than per
-        // frame so a deliberate click onto an empty tab is not undone.
-        if !self.library.iter().any(|e| e.category == self.library_tab) {
-            if let Some(entry) = self.library.first() {
-                self.library_tab = entry.category;
-                self.library_focus = entry.category;
-            }
-        }
-        let visible_count = self
-            .library
-            .iter()
-            .filter(|entry| entry.category == self.library_tab)
-            .count();
-        self.library_selection = self.library_selection.min(visible_count.saturating_sub(1));
-    }
-
     /// Draw the disc-library browser and return a disc to load if clicked.
     fn paint_library(&mut self, ctx: &egui::Context) -> Option<PathBuf> {
         // Per-format disc counts. Every tab stays clickable: selecting a
         // format with no folder set is how the user reaches its prompt.
-        let mut counts = [0usize; LIBRARY_SLOTS.len()];
-        for entry in &self.library {
-            counts[entry.category] += 1;
-        }
-
-        let mut selected = self.library_tab;
+        let counts = self.library.counts();
+        let mut selected = self.library.tab();
         let mut load_path = None;
         let mut needs_open = false;
-        let scroll_to_top = std::mem::take(&mut self.library_scroll_to_top);
-        let scroll_to_selection = std::mem::take(&mut self.library_scroll_to_selection);
+        let (scroll_to_top, scroll_to_selection) = self.library.take_scroll_requests();
         // Library folder to configure, set from the empty-state link.
         let mut pick_slot: Option<usize> = None;
+        let mut clicked_row = None;
         egui::CentralPanel::default().show(ctx, |ui| {
             let visuals = ui.visuals();
             let hover_fill = visuals.widgets.hovered.weak_bg_fill;
@@ -2349,8 +2133,8 @@ impl App {
             // the strip width measured last frame.
             let container_fill = ui.visuals().faint_bg_color;
             const GROUP_GAP: f32 = 8.0;
-            let pad = ((ui.available_width() - self.library_strip_w) * 0.5).max(0.0);
-            let mut strip_w = self.library_strip_w;
+            let pad = ((ui.available_width() - self.library.strip_width()) * 0.5).max(0.0);
+            let mut strip_w = self.library.strip_width();
             let mut open_clicked = false;
             let squircle = || {
                 egui::Frame::new()
@@ -2369,12 +2153,12 @@ impl App {
                         if counts[slot] == 0 && selected != slot {
                             text = text.weak();
                         }
-                        if ui.selectable_label(selected == slot, text).clicked() {
+                        if ui
+                            .selectable_label(self.library.tab_is_highlighted(slot), text)
+                            .clicked()
+                        {
                             selected = slot;
-                            self.library_focus = slot;
-                            self.library_selection = 0;
-                            self.library_scroll_to_top = true;
-                            self.library_scroll_to_selection = false;
+                            self.library.select_tab(slot);
                         }
                     }
                 });
@@ -2382,28 +2166,41 @@ impl App {
                 let open = squircle().show(ui, |ui| {
                     if ui
                         .selectable_label(
-                            self.library_focus == LIBRARY_OPEN_FOCUS,
+                            self.library.focus() == LIBRARY_OPEN_FOCUS,
                             egui::RichText::new("Open .cue").size(15.0),
                         )
                         .clicked()
                     {
-                        self.library_focus = LIBRARY_OPEN_FOCUS;
+                        self.library.focus_open();
                         open_clicked = true;
                     }
                 });
                 strip_w = tabs.response.rect.width() + GROUP_GAP + open.response.rect.width();
             });
-            self.library_strip_w = strip_w;
+            self.library.set_strip_width(strip_w);
             ui.add_space(10.0);
             if open_clicked {
                 needs_open = true;
+            }
+
+            // Open `.cue` is an action rather than a library category. Keep
+            // the prior category internally so returning focus is seamless,
+            // but do not present its entries as though they belong here.
+            if self.library.focus() == LIBRARY_OPEN_FOCUS {
+                ui.add_space(48.0);
+                ui.vertical_centered(|ui| {
+                    ui.weak("Open a disc image outside your configured libraries.");
+                    ui.add_space(4.0);
+                    ui.weak("Press the controller confirm button or click Open .cue to browse.");
+                });
+                return;
             }
 
             // Per-format empty state: prompt for the selected format's folder.
             if counts[selected] == 0 {
                 ui.add_space(48.0);
                 ui.vertical_centered(|ui| {
-                    let configured = self.libraries[selected].is_some();
+                    let configured = self.library.folder(selected).is_some();
                     ui.weak(if configured {
                         "No discs found in this folder."
                     } else {
@@ -2432,12 +2229,7 @@ impl App {
                 ui.vertical_centered(|ui| {
                     ui.set_max_width(col_w);
                     ui.add_space(4.0);
-                    for (row, entry) in self
-                        .library
-                        .iter()
-                        .filter(|e| e.category == selected)
-                        .enumerate()
-                    {
+                    for (row, entry) in self.library.entries(selected).enumerate() {
                         let row_h = 30.0;
                         let (rect, resp) = ui.allocate_exact_size(
                             egui::vec2(ui.available_width(), row_h),
@@ -2445,7 +2237,7 @@ impl App {
                         );
                         let hovered = resp.hovered();
                         let controller_selected =
-                            self.library_focus == selected && row == self.library_selection;
+                            self.library.focus() == selected && row == self.library.selection();
                         if controller_selected && scroll_to_selection {
                             ui.scroll_to_rect(rect, Some(egui::Align::Center));
                         }
@@ -2459,7 +2251,7 @@ impl App {
                         ui.painter().text(
                             egui::pos2(rect.left() + 12.0, rect.center().y),
                             egui::Align2::LEFT_CENTER,
-                            &entry.title,
+                            entry.title(),
                             egui::FontId::proportional(15.0),
                             if hovered || controller_selected {
                                 text_strong
@@ -2468,23 +2260,28 @@ impl App {
                             },
                         );
                         if resp.clicked() {
-                            self.library_focus = selected;
-                            self.library_selection = row;
-                            load_path = Some(entry.cue.clone());
+                            clicked_row = Some(row);
+                            load_path = Some(entry.cue().to_owned());
                         }
                     }
                     ui.add_space(16.0);
                 });
             });
         });
-        self.library_tab = selected;
+        if self.library.tab() != selected {
+            self.library.select_tab(selected);
+        }
+        if let Some(row) = clicked_row {
+            self.library.select_row(selected, row);
+        }
         if let Some(slot) = pick_slot {
             if let Some(dir) = rfd::FileDialog::new()
                 .set_title(format!("Choose the {} library folder", LIBRARY_SLOTS[slot]))
                 .pick_folder()
             {
-                self.libraries[slot] = Some(dir.display().to_string());
-                self.scan_libraries();
+                self.library
+                    .set_folder(slot, Some(dir.display().to_string()));
+                self.library.scan();
             }
         }
         if needs_open {
@@ -2498,12 +2295,7 @@ impl App {
         self.quick_menu_open = false;
         self.show_library = true;
         self.shared.audio_suppressed.store(true, Ordering::Relaxed);
-        self.scan_libraries();
-        self.library_focus = self.library_tab;
-        self.library_selection = 0;
-        self.library_dpad_repeat.reset();
-        self.library_scroll_to_top = true;
-        self.library_scroll_to_selection = false;
+        self.library.enter();
     }
 
     fn paint_quick_menu(&mut self, ctx: &egui::Context) {
@@ -2580,7 +2372,8 @@ impl App {
             .add_filter("CD-i discs", &["cue", "zip"]);
         // Start in the first configured library folder that exists.
         if let Some(dir) = self
-            .libraries
+            .library
+            .folders()
             .iter()
             .flatten()
             .map(PathBuf::from)
@@ -2840,16 +2633,17 @@ impl App {
                         .set_title(format!("Choose the {name} library folder"))
                         .pick_folder()
                     {
-                        self.libraries[slot] = Some(dir.display().to_string());
+                        self.library
+                            .set_folder(slot, Some(dir.display().to_string()));
                         libraries_changed = true;
                     }
                 }
-                if self.libraries[slot].is_some() && ui.button("Clear").clicked() {
-                    self.libraries[slot] = None;
+                if self.library.folder(slot).is_some() && ui.button("Clear").clicked() {
+                    self.library.set_folder(slot, None);
                     libraries_changed = true;
                 }
             });
-            match &self.libraries[slot] {
+            match self.library.folder(slot) {
                 Some(path) => {
                     ui.monospace(path);
                 }
@@ -2860,7 +2654,7 @@ impl App {
             ui.add_space(6.0);
         }
         if libraries_changed {
-            self.scan_libraries();
+            self.library.scan();
         }
 
         ui.separator();
@@ -3367,6 +3161,27 @@ impl App {
                 }
             }
         }
+        let (left_trigger, right_trigger) =
+            gilrs
+                .gamepads()
+                .fold((0.0_f32, 0.0_f32), |(left, right), (_, pad)| {
+                    (
+                        left.max(
+                            pad.button_data(gilrs::Button::LeftTrigger2)
+                                .map_or(0.0, |data| data.value()),
+                        ),
+                        right.max(
+                            pad.button_data(gilrs::Button::RightTrigger2)
+                                .map_or(0.0, |data| data.value()),
+                        ),
+                    )
+                });
+        actions.extend(
+            self.library
+                .analog_trigger_actions(left_trigger, right_trigger)
+                .into_iter()
+                .flatten(),
+        );
         let dpad_y = gilrs
             .gamepads()
             .map(|(_, pad)| {
@@ -3378,60 +3193,18 @@ impl App {
             })
             .find(|&direction| direction != 0)
             .unwrap_or(0);
-        let repeated_direction = self.library_dpad_repeat.update(dpad_y, Instant::now());
-        if repeated_direction < 0 {
-            actions.push(LibraryPadAction::PreviousDisc);
-        } else if repeated_direction > 0 {
-            actions.push(LibraryPadAction::NextDisc);
+        if let Some(action) = self.library.repeated_action(dpad_y, Instant::now()) {
+            actions.push(action);
         }
 
         let mut load_path = None;
         let mut open_disc = false;
         for action in actions {
-            match action {
-                LibraryPadAction::PreviousTab | LibraryPadAction::NextTab => {
-                    self.library_focus = cycle_library_focus(
-                        self.library_focus,
-                        action == LibraryPadAction::NextTab,
-                    );
-                    self.library_selection = 0;
-                    self.library_scroll_to_top = true;
-                    self.library_scroll_to_selection = false;
-                    if self.library_focus < LIBRARY_SLOTS.len() {
-                        self.library_tab = self.library_focus;
-                    }
-                }
-                LibraryPadAction::PreviousDisc | LibraryPadAction::NextDisc => {
-                    if self.library_focus >= LIBRARY_SLOTS.len() {
-                        continue;
-                    }
-                    let count = self
-                        .library
-                        .iter()
-                        .filter(|entry| entry.category == self.library_tab)
-                        .count();
-                    if count == 0 {
-                        self.library_selection = 0;
-                    } else if action == LibraryPadAction::NextDisc {
-                        self.library_selection = (self.library_selection + 1) % count;
-                    } else {
-                        self.library_selection = (self.library_selection + count - 1) % count;
-                    }
-                    self.library_scroll_to_selection = true;
-                }
-                LibraryPadAction::Activate => {
-                    if self.library_focus == LIBRARY_OPEN_FOCUS {
-                        open_disc = true;
-                    } else {
-                        load_path = self
-                            .library
-                            .iter()
-                            .filter(|entry| entry.category == self.library_tab)
-                            .nth(self.library_selection)
-                            .map(|entry| entry.cue.clone());
-                    }
-                }
-                LibraryPadAction::Back => {
+            match self.library.apply(action) {
+                LibraryEffect::None => {}
+                LibraryEffect::Load(path) => load_path = Some(path),
+                LibraryEffect::OpenDisc => open_disc = true,
+                LibraryEffect::Close => {
                     self.show_library = false;
                     self.shared.audio_suppressed.store(false, Ordering::Relaxed);
                 }
@@ -3592,7 +3365,7 @@ impl App {
 impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         let prefs = Prefs {
-            libraries: self.libraries.to_vec(),
+            libraries: self.library.folders_vec(),
             save_dir: self.save_dir.clone(),
             show_fps: self.show_fps,
             smooth_scaling: self.smooth_scaling,
@@ -3994,12 +3767,7 @@ impl eframe::App for App {
                 .audio_suppressed
                 .store(self.show_library, Ordering::Relaxed);
             if self.show_library {
-                self.scan_libraries();
-                self.library_focus = self.library_tab;
-                self.library_selection = 0;
-                self.library_dpad_repeat.reset();
-                self.library_scroll_to_top = true;
-                self.library_scroll_to_selection = false;
+                self.library.enter();
                 self.pad_buttons = 0;
                 self.pad_frac = egui::Vec2::ZERO;
                 if self.mouse_captured {
@@ -4012,7 +3780,7 @@ impl eframe::App for App {
         let mut photo_decode = false;
         let mut photo_save: Option<(String, cdi_photocd::decode::DecodedImage)> = None;
         let mut photo_entered_view = false;
-        if let (false, Some(p)) = (fullscreen, &mut self.photocd) {
+        if let (false, false, Some(p)) = (fullscreen, self.show_library, &mut self.photocd) {
             egui::TopBottomPanel::bottom("photocd_panel")
                 .resizable(false)
                 .frame(chrome_frame())
@@ -4338,12 +4106,11 @@ mod tests {
     use super::presentation::{screenshot_dimensions, DisplayAperture};
     use super::{
         backup_nvram, configure_ui, configured_nvram_path, controller_deflection,
-        controller_dpad_deflection, controller_stick_deflection, cycle_library_focus,
-        disc_load_action, display_aperture, fill_audio, fit_aspect, library_dpad_direction,
-        library_pad_action, load_nvram, parental_passcode, pointer_mapping, presentation_aspect,
-        region_is_pal, screenshot_image, write_nvram, DiscLoadAction, DiscOverride, DisplayArea,
-        LibraryDpadRepeat, LibraryPadAction, SharedFrame, LIBRARY_OPEN_FOCUS, LIBRARY_REPEAT_DELAY,
-        LIBRARY_REPEAT_INTERVAL, UI_SELECTED_TEXT,
+        controller_dpad_deflection, controller_stick_deflection, disc_load_action,
+        display_aperture, fill_audio, fit_aspect, library_dpad_direction, library_pad_action,
+        load_nvram, parental_passcode, pointer_mapping, presentation_aspect, region_is_pal,
+        screenshot_image, write_nvram, DiscLoadAction, DiscOverride, DisplayArea, LibraryPadAction,
+        SharedFrame, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
 
@@ -4464,11 +4231,9 @@ mod tests {
 
     #[test]
     fn library_triggers_cycle_all_tabs_and_open_cue() {
-        assert_eq!(cycle_library_focus(0, false), LIBRARY_OPEN_FOCUS);
-        assert_eq!(cycle_library_focus(LIBRARY_OPEN_FOCUS, true), 0);
         assert_eq!(
             library_pad_action(
-                gilrs::Button::LeftTrigger2,
+                gilrs::Button::LeftTrigger,
                 gilrs::Button::South,
                 gilrs::Button::East,
             ),
@@ -4481,6 +4246,16 @@ mod tests {
                 gilrs::Button::East,
             ),
             Some(LibraryPadAction::NextTab)
+        );
+        // Analog L2/R2 travel is thresholded separately instead of accepting
+        // gilrs' earliest digital ButtonPressed edge.
+        assert_eq!(
+            library_pad_action(
+                gilrs::Button::LeftTrigger2,
+                gilrs::Button::South,
+                gilrs::Button::East,
+            ),
+            None
         );
     }
 
@@ -4528,58 +4303,6 @@ mod tests {
         assert_eq!(library_dpad_direction(0.0, false, true), 1);
         assert_eq!(library_dpad_direction(0.0, true, true), 0);
         assert_eq!(library_dpad_direction(0.2, false, false), 0);
-    }
-
-    #[test]
-    fn library_dpad_hold_repeats_after_delay_without_catch_up_bursts() {
-        let start = std::time::Instant::now();
-        let mut repeat = LibraryDpadRepeat::default();
-        assert_eq!(repeat.update(1, start), 1);
-        assert_eq!(repeat.update(1, start + LIBRARY_REPEAT_DELAY / 2), 0);
-        assert_eq!(repeat.update(1, start + LIBRARY_REPEAT_DELAY), 1);
-        assert_eq!(
-            repeat.update(
-                1,
-                start + LIBRARY_REPEAT_DELAY + LIBRARY_REPEAT_INTERVAL / 2
-            ),
-            0
-        );
-        assert_eq!(
-            repeat.update(1, start + LIBRARY_REPEAT_DELAY + LIBRARY_REPEAT_INTERVAL),
-            1
-        );
-
-        // A long blocked frame produces one movement, not a queued burst.
-        assert_eq!(
-            repeat.update(1, start + std::time::Duration::from_secs(5)),
-            1
-        );
-        assert_eq!(
-            repeat.update(
-                1,
-                start + std::time::Duration::from_secs(5) + LIBRARY_REPEAT_INTERVAL / 2
-            ),
-            0
-        );
-    }
-
-    #[test]
-    fn library_dpad_release_and_reversal_are_immediate_edges() {
-        let start = std::time::Instant::now();
-        let mut repeat = LibraryDpadRepeat::default();
-        assert_eq!(repeat.update(1, start), 1);
-        assert_eq!(
-            repeat.update(-1, start + std::time::Duration::from_millis(1)),
-            -1
-        );
-        assert_eq!(
-            repeat.update(0, start + std::time::Duration::from_millis(2)),
-            0
-        );
-        assert_eq!(
-            repeat.update(1, start + std::time::Duration::from_millis(3)),
-            1
-        );
     }
 
     #[test]

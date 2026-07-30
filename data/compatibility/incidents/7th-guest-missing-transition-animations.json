@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
   "id": "7th-guest-missing-transition-animations",
-  "title": "The 7th Guest transition animations",
-  "symptom": "Two authored transition animations are replaced by brief black intervals between otherwise working MPEG and gameplay stages.",
-  "expected": "Both transition animations remain visible while both post-title MPEG sequences and automatic gameplay entry continue to work.",
+  "title": "The 7th Guest black transition intervals",
+  "symptom": "Three brief black intervals occur across the otherwise working post-title MPEG and gameplay handoff. The transition animation into the stairwell is visible, with a black interval both before and after it.",
+  "expected": "Determine from hardware evidence which pauses or blank fields are authored/loading behavior and which, if any, replace missing transition imagery while preserving both post-title MPEG sequences and automatic gameplay entry.",
   "status": "reproduced",
   "reported_revision": "18beb7f",
   "last_reproduced_revision": "53165b3+dirty:c8aee56743ec102de4d59f44b7df8c13bd0f747fc13e0fc796b1d5d0ea77a31b",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "The latest PAL/VMPEG GUI run used blank ephemeral player storage and otherwise plays as before. This confirms that the stable title/post-title/gameplay sequence does not depend on the prior save; the separately reported transition-animation gaps remain unresolved.",
+  "revalidation_reason": "The latest clean-NVRAM PAL/VMPEG GUI run completed the entire opening and clarified the observation: three black intervals are visible, and the animation turning into the gameplay stairwell plays between the latter two. Earlier evidence describing two wholly missing animations is superseded; real-hardware comparison is still needed before classifying the blank intervals.",
   "components": [
     "dvc",
     "mpeg",
@@ -43,6 +43,11 @@
       "result": "stable-regression",
       "revision": "53165b3+dirty:c8aee56743ec102de4d59f44b7df8c13bd0f747fc13e0fc796b1d5d0ea77a31b",
       "notes": "The user confirmed that The 7th Guest plays as before when launched with blank ephemeral PAL/VMPEG player storage."
+    },
+    {
+      "result": "observation-refined",
+      "revision": "42fe2b5+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
+      "notes": "The full sequence proceeds. Three brief black intervals are visible in total. The transition animation turning into the gameplay stairwell is not missing: it plays between a black interval before it and another immediately before the stairwell gameplay frame. Whether any interval is an emulation defect remains unproven."
     }
   ]
 }

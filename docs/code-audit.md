@@ -27,9 +27,10 @@ immutable UI snapshot and a typed command channel.
 
 `presentation::display_aperture` still detects non-black pixels near the bottom
 of a 525-line frame and changes the vertical aperture. That is content-based
-presentation behavior, conflicts with the specification-driven geometry rule
-in `docs/display-geometry.md`, and is specifically listed as something not to
-restore in `TODO.md`.
+presentation behavior rather than specification-derived hardware geometry.
+`docs/display-geometry.md` documents it explicitly as a temporary frontend
+compatibility rule, and `TODO.md` prohibits extending this approach into
+title-specific or general border detection.
 
 Do not silently remove it during a structural refactor: it affects current
 title framing and needs a diagnostic incident with before/after captures,

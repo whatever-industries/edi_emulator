@@ -12,14 +12,15 @@ to full-motion video gameplay.
 - **M0–M2 complete** — SCC68070 core and on-chip peripherals, MCD212 video,
   SLAVE and CDIC, and CUE/BIN disc playback covering data sectors, XA-ADPCM,
   CD-DA, and CD-i Ready.
-- **M3 complete** — VMPEG cartridge with safe-Rust MPEG-1 video and Layer-II
-  audio, reaching interactive gameplay in *The 7th Guest*.
+- **M3 operational and in progress** — VMPEG cartridge with safe-Rust MPEG-1
+  video and Layer-II audio, reaching interactive gameplay in *The 7th Guest*.
+  Remaining work covers decoder edge cases, repeated transitions, long-run
+  synchronization, and precise MCD251 presentation behavior.
 
-Current work is title compatibility. Video CD playback has known faults:
-discs with several MPEG tracks are rejected by the player application, and
-playback shows cyclic artefacts — both tracked in the project's TODO. IMPEG
-and non-Mono-I boards remain future work; the architecture accommodates them
-through typed cartridge and data-driven board definitions.
+Current work is title compatibility. Video CD playback is experimental and
+still has known presentation and menu-control faults tracked in the project's
+TODO. IMPEG and non-Mono-I boards remain future work; the architecture
+accommodates them through typed cartridge and data-driven board definitions.
 
 Beyond emulation, the desktop app provides a disc library browser, mouse,
 keyboard and gamepad input with rebindable controls, a Photo CD viewer for

@@ -8,20 +8,21 @@
 that hardware geometry.
 
 An analog television did not necessarily expose every generated sample. The
-frontend therefore offers one global presentation choice:
+frontend therefore offers two presentation choices:
 
-- **Typical CRT** (default): on a full 525-line 384x240 signal, present the
-  360x220 normal-resolution television area. Four-sided windowboxed material
-  uses the centered host aperture x=24, y=20, width=720, height=440. When at
-  least one quarter of the bottom ten source lines contains picture, use the
-  bottom-aligned y=40 aperture instead; this removes the authored top overscan
-  margin used by full-screen title/game screens. PAL and hardware
-  Compatibility Mode are left unchanged.
+- **Typical CRT** (default): presents a conventional television-safe area. Its
+  current 525-line implementation retains a temporary frontend heuristic from
+  earlier compatibility work: four-sided windowboxed material uses the
+  centered host aperture x=24, y=20, width=720, height=440, while picture
+  content in the bottom ten source lines selects a bottom-aligned y=40
+  aperture. PAL and hardware Compatibility Mode are left unchanged.
 - **Full signal**: present the complete MCD212 hardware aperture.
 
-The small edge rule is independent of title names and disc hashes. It does not
-search for arbitrary borders or zoom windowboxed material. The same selected
-aperture drives texture UVs, screenshots, window aspect, and pointer
+The 525-line edge heuristic is independent of title names and disc hashes, but
+it is content-sensitive and therefore is not part of the specification-derived
+`DisplayGeometry`. It remains isolated in frontend presentation code pending a
+hardware-derived replacement, as tracked in `docs/code-audit.md`. The same
+selected aperture drives texture UVs, screenshots, window aspect, and pointer
 endpoints. Raw square pixels remain available separately as a diagnostic;
 normal presentation uses the measured Philips player pixel aspect.
 

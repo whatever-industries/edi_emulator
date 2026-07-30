@@ -9,10 +9,10 @@ changing a device. It is not a collection of title-specific workarounds.
 
 ## Source corpus and reproducible OCR
 
-The local source archive is:
+Set `$CDI_REFERENCE_ROOT` to the location of the local source archive:
 
-```text
-<local-spec-library>
+```sh
+export CDI_REFERENCE_ROOT=/path/to/icdia-site-documents
 ```
 
 It currently contains 187 PDF files among 422 files (about 2.1 GiB). Original
@@ -21,7 +21,7 @@ SHA-256 manifest are generated under ignored `references/spec-text/`:
 
 ```sh
 scripts/ocr-cdi-specs.sh \
-  "<local-spec-library>" \
+  "$CDI_REFERENCE_ROOT" \
   references/spec-text
 ```
 

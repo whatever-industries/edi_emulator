@@ -24,10 +24,10 @@ changes.
 | Keyboard | `docs/keyboards_1996.pdf`, `docs/keyboard_drivers.pdf` | planned serial input-device boundary | documented K/T packet fixtures pending |
 | Photo CD | `faq/cdifaq5.html`, `sw_app/photocd_on_cdi_32.zip` | `cdi-photocd`, disc inventory, frontend | host viewer implemented; Bridge/native-application classification pending |
 
-The local ICDIA mirror normally resides at:
+Set `$CDI_REFERENCE_ROOT` to the location of the local ICDIA research mirror:
 
-```text
-/Volumes/Projects/Coding/disc specs/Philips CD-i - icdia-site-documents-2026-07-18
+```sh
+export CDI_REFERENCE_ROOT=/path/to/icdia-site-documents
 ```
 
 Useful exact files include:
@@ -69,7 +69,7 @@ Run:
 
 ```sh
 scripts/ocr-cdi-specs.sh \
-  "/Volumes/Projects/Coding/disc specs/Philips CD-i - icdia-site-documents-2026-07-18" \
+  "$CDI_REFERENCE_ROOT" \
   references/spec-text
 ```
 

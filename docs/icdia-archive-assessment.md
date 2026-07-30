@@ -7,8 +7,8 @@
 > `docs/core-compatibility-audit.md` for present core conclusions, and
 > `data/compatibility/compliance-matrix.json` for machine-readable status.
 
-Source tree (local research material, not redistributed):
-`/Volumes/Projects/Coding/disc specs/Philips CD-i - icdia-site-documents-2026-07-18`
+The local research mirror is referred to as `$CDI_REFERENCE_ROOT` throughout
+this document. It is not redistributed with the repository.
 
 The mirror contains 342 files, including 187 PDFs, 123 HTML files and 29 ZIP
 archives. This index records what has actually been assessed so later work can
@@ -91,11 +91,12 @@ and visually checked; text extraction was not treated as sufficient evidence.
   header address 00:02:16. Real rips may not follow every tentative duration
   recommendation, so recognition must remain content-based rather than require
   a three-minute pregap.
-- The 18x notes are not a license to make every Mono-I player buggy. Several
-  defects (CLUT banks 2/3, matte x=0, selected-sector loss after seek and the
-  early-main-channel “twilight zone”) are explicitly listed as fixed in the 605
-  and consumer generation. Compatibility quirks must be attached to a machine
-  profile and enabled only when a title proves it needs them.
+- Hardware defects documented for 18x players must not be generalized to all
+  Mono-I models. Several defects (CLUT banks 2/3, matte x=0, selected-sector
+  loss after seek and the early-main-channel “twilight zone”) are explicitly
+  listed as fixed in the 605 and consumer generation. Compatibility quirks
+  must be attached to a machine profile and enabled only when evidence shows
+  they apply.
 - CD-RTOS 1.1 audio priority is not last-writer-wins: memory sound maps retain
   priority over incoming real-time-file ADPCM, which continues streaming and
   resumes afterward. Starting a sound map during CD-DA aborts the CD-DA play.

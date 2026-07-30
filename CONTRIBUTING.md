@@ -8,10 +8,10 @@
   attribution comment naming the MAME source file and authors, preserve its
   copyright notice in `NOTICE.md`, and keep the applicable terms in
   `LICENSES/BSD-3-Clause.txt`.
-- **CeDImu is study-only.** It has no license, so copying or closely
-  transliterating its code is not permitted. If you have looked at CeDImu
-  source while writing a patch, re-derive the logic from the datasheets or
-  MAME instead.
+- CeDImu is not an implementation source. No open-source license has been
+  identified, so contributions must not copy or closely transliterate its
+  code. Changes informed by observed behavior must be independently supported
+  by specifications or license-compatible sources.
 - Supported system/DVC firmware may be distributed in `firmware/`. Never
   commit game disc images or excerpts of commercial-title media (including in
   test fixtures). Synthetic fixtures only.

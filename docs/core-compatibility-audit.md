@@ -127,8 +127,8 @@ be confused with the resolved post-title playback and audio regressions.
 
 ## Manual neighboring-title validation
 
-On 2026-07-25 the user manually verified the committed modern audit baseline
-(`18beb7f`) against the three highest-risk neighboring regressions:
+Manual validation on 2026-07-25 checked the committed modern audit baseline
+(`18beb7f`) against the highest-risk neighboring regressions:
 
 - Earth Command's menu audio terminates instead of looping.
 - The Naked Gun 2 1/2 releases its copyright clip and reaches the disc menu.
@@ -144,19 +144,19 @@ baseline. Together with the accepted seven-stage The 7th Guest run, every
 manual neighboring-title gate required before timing/scheduling
 reconstruction now passes.
 
-On 2026-07-26 the user revalidated Earth Command audio termination and Alien
-Gate gameplay/firing audio on the `ac20dcd` diagnostic working tree. Both
-played without the historical looping fault. Alien Gate's separate missing-HUD
-edge report is display-only and is tracked in
+Manual validation on 2026-07-26 rechecked Earth Command audio termination and
+Alien Gate gameplay/firing audio at revision `ac20dcd`. Both played without
+the historical looping fault. Alien Gate's separate missing-HUD edge report
+is display-only and is tracked in
 `data/compatibility/incidents/alien-gate-hud-lower-edge-missing.json`.
 
 Later on 2026-07-26, the corrected shared-IN4 build passed the deterministic
 550-million-instruction The 7th Guest transition checkpoint twice under the
 section-6.2 timing model, including one run with the unrelated DMA0 experiment
-removed. On 2026-07-29 the user completed the clean-NVRAM frontend pass: the
-pre-title clip, title MPEG, both post-title MPEG stages, the transition into
-the stairwell, automatic gameplay entry, and gameplay audio all proceed. The
-neighboring Earth Command, Naked Gun, Alien Gate, Merlin's Apprentice, and The
-Apprentice checks had already passed. This closes the shared-IN4 scheduling
+removed. A clean-NVRAM frontend pass on 2026-07-29 confirmed that the pre-title
+clip, title MPEG, both post-title MPEG stages, transition into the stairwell,
+automatic gameplay entry, and gameplay audio all proceed. The neighboring
+Earth Command, Naked Gun, Alien Gate, Merlin's Apprentice, and The Apprentice
+checks had already passed. This closes the shared-IN4 scheduling
 regression. Three brief black intervals and one or two early Philips-logo
 audio hits remain separate presentation/audio incidents.

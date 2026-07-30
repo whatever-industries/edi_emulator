@@ -35,10 +35,9 @@ LGPL-2.0-or-later by the same author.
 
 ## CeDImu
 
-CeDImu (https://github.com/Stovent/CeDImu) was consulted as a *study-only*
-reference. It carries no open-source license; **no code from CeDImu has been
-copied into this project**, and contributions that do so will be rejected
-(see CONTRIBUTING.md).
+CeDImu (https://github.com/Stovent/CeDImu) was consulted for behavioral
+comparison. No open-source license was identified, and no CeDImu source code
+has been incorporated into this project (see CONTRIBUTING.md).
 
 ## SingleStepTests
 

@@ -25,7 +25,7 @@ pub struct InterruptDiagnosticSnapshot {
     pub pending_ipl: u8,
     pub slave_in2: bool,
     pub cdic_in4: bool,
-    pub dvc_in5: bool,
+    pub dvc_in4: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +167,39 @@ pub enum MachineDiagnosticEvent {
         audio_underflows: u64,
         stream_errors: u64,
     },
+    /// A guest-visible VMPEG register or transport-state transition.
+    ///
+    /// Free-running DCLK/timer values do not trigger these events, but their
+    /// values are included when another state change is observed. This keeps
+    /// long diagnostic runs bounded while preserving the clock relationship
+    /// at each native-driver interaction.
+    DvcState {
+        cycle: u64,
+        registers: DvcRegisterSnapshot,
+    },
+    /// One byte written by the native driver to a VMPEG control register.
+    ///
+    /// Recording writes separately from sampled status makes it possible to
+    /// compare guest command sequences across CPU timing models without
+    /// treating periodic VSYNC/timer acknowledges or MPEG payload writes as
+    /// an immediate divergence.
+    DvcRegisterWrite {
+        cycle: u64,
+        address: u32,
+        value: u8,
+    },
+    /// One byte written by guest software to an SCC68070 DMA register.
+    ///
+    /// The register offset is relative to the on-chip block at `$80000000`.
+    /// Retaining the CPU PC lets timing comparisons distinguish a changed
+    /// native-driver decision from a device-side transfer discrepancy.
+    DmaRegisterWrite {
+        cycle: u64,
+        cpu_pc: u32,
+        channel: u8,
+        register_offset: u32,
+        value: u8,
+    },
     DmaTransfer {
         cycle: u64,
         /// Zero is CDIC/main-memory DMA; one is main-memory/VMPEG DMA.
@@ -201,12 +234,26 @@ pub enum MachineDiagnosticEvent {
     },
     PclState {
         cycle: u64,
+        /// CPU program counter immediately after the instruction that made
+        /// this transition observable.
+        cpu_pc: u32,
         transition: PclTransition,
         data_kind: PclDataKind,
         channel: Option<u8>,
         pcb_address: Option<u32>,
         cil_address: Option<u32>,
         pcl: PclDiagnosticSnapshot,
+    },
+    /// Guest software stored the address of a discovered PCL in RAM.
+    ///
+    /// This exposes producer/consumer cursor movement without depending on
+    /// title-specific symbols or firmware addresses.
+    PclPointerWrite {
+        cycle: u64,
+        cpu_pc: u32,
+        memory_address: u32,
+        pcl_address: u32,
+        changed: bool,
     },
     PclOverwriteRisk {
         cycle: u64,
@@ -230,6 +277,7 @@ pub(crate) struct DiagnosticProbe {
     pub cdic_state: [u16; 5],
     pub cdic_interrupt: bool,
     pub dvc_errors: [u64; 6],
+    pub dvc_state: Option<DvcRegisterSnapshot>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -322,6 +370,13 @@ impl PclOwnershipTracker {
         self.watched
             .iter()
             .filter(|watch| range_contains(watch.snapshot, address, bytes))
+            .map(|watch| watch.snapshot.address)
+            .collect()
+    }
+
+    pub fn known_pcl_addresses(&self) -> Vec<u32> {
+        self.watched
+            .iter()
             .map(|watch| watch.snapshot.address)
             .collect()
     }
@@ -434,6 +489,7 @@ fn pcl_state_event(
 ) -> MachineDiagnosticEvent {
     MachineDiagnosticEvent::PclState {
         cycle,
+        cpu_pc: 0,
         transition,
         data_kind: context.data_kind,
         channel: context.channel,

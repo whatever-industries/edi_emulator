@@ -11,7 +11,8 @@ changes continue to use `docs/debugging-workflow.md`.
 
 | Area | Size | Risk | Main concern |
 | --- | ---: | --- | --- |
-| `cdi-frontend/src/main.rs` | 4,722 lines after the first extraction | Medium | UI, input, storage, worker control, and application state remain coupled |
+| `cdi-frontend/src/main.rs` | 4,582 lines after the library extraction | Medium | UI, input, worker control, and application state remain coupled |
+| `cdi-frontend/src/library.rs` | 451 lines | Low | Host-only discovery, Store-ZIP resolution, selection, repeat navigation, and scroll intent |
 | `cdi-core/src/dvc.rs` | 2,134 lines | High | VMPEG registers, transport, decode state, and A/V scheduling share one state machine |
 | `cdi-core/src/mcd212.rs` | 1,711 lines | High | Timing, planes, cursor, compositing, and diagnostics are tightly ordered |
 | `cdi-core/src/machine.rs` | 1,517 lines | High | Scheduling, bus mapping, DMA, interrupts, and device ownership meet here |
@@ -42,7 +43,7 @@ Until then, keep it isolated and clearly visible in the presentation module.
 - [x] Extract rendering, screenshot, pointer, and aspect calculations into
   `presentation.rs` without changing behavior.
 - [x] Extract NVRAM path/load/write/backup operations into `storage.rs`.
-- [ ] Extract library scanning, ZIP media resolution, and focused-list
+- [x] Extract library scanning, ZIP media resolution, and focused-list
   navigation behind a `LibraryModel`.
 - [ ] Extract Settings panels into small view functions which mutate a
   `Prefs` value and emit typed actions.

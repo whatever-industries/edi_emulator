@@ -3,9 +3,10 @@
 //! additions (MOVE from CCR, format/vector exception frames).
 //!
 //! Semantics follow the M68000 Programmer's Reference Manual; SCC68070
-//! deviations are marked. The compatibility timing model is retained while
-//! whole-machine bus/device scheduling is audited against the verified
-//! VMPEG transition reference.
+//! deviations are marked. Cycle counts follow Philips SCC68070 (April 1993),
+//! section 6.2. Bus transfers and effective-address internal clocks are
+//! charged by [`Cpu`] and `ea`; instruction-specific internal clocks live
+//! beside the corresponding operation below.
 
 use crate::bus::Bus68k;
 use crate::cpu::{sr_bits, Cpu, Vector};
@@ -17,8 +18,21 @@ const SR_Z: u16 = sr_bits::Z;
 const SR_N: u16 = sr_bits::N;
 const SR_X: u16 = sr_bits::X;
 
+/// Complete an instruction whose datasheet timing is easiest expressed as a
+/// total. `start` is sampled after the common seven clocks (opcode transfer
+/// plus internal minimum), so any future bus wait states remain additive.
+fn finish_total_timing(cpu: &mut Cpu, start: u64, total: u64) {
+    let elapsed_after_common = cpu.cycles - start;
+    let nominal_after_common = total.saturating_sub(7);
+    if elapsed_after_common < nominal_after_common {
+        cpu.cycles += nominal_after_common - elapsed_after_common;
+    }
+}
+
 pub fn execute<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
-    cpu.cycles += 4;
+    // With the four-clock opcode fetch, this is the seven-clock minimum in
+    // Tables 12-22 (MOVEQ, NOP, register ALU operations, and so on).
+    cpu.cycles += 3;
     match op >> 12 {
         0x0 => line_0(cpu, bus, op),
         0x1 => move_op(cpu, bus, op, Size::Byte),
@@ -162,13 +176,13 @@ fn line_0<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             return movep(cpu, bus, op);
         }
         let bitnum = cpu.d[((op >> 9) & 7) as usize];
-        return bit_op(cpu, bus, op, bitnum);
+        return bit_op(cpu, bus, op, bitnum, false);
     }
     let kind = (op >> 9) & 7;
     if kind == 4 {
         // Static bit ops: bit number in extension word.
         let bitnum = u32::from(cpu.fetch16(bus));
-        return bit_op(cpu, bus, op, bitnum);
+        return bit_op(cpu, bus, op, bitnum, true);
     }
     let size_bits = (op >> 6) & 3;
     let Some(size) = Size::from_bits(size_bits) else {
@@ -180,6 +194,7 @@ fn line_0<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
     // ORI/ANDI/EORI to CCR/SR (EA field = immediate).
     if mode == 7 && reg == 4 && matches!(kind, 0 | 1 | 5) {
         let imm = cpu.fetch16(bus);
+        cpu.cycles += 3;
         match size {
             Size::Byte => {
                 let ccr = cpu.sr & sr_bits::CCR_MASK;
@@ -211,6 +226,9 @@ fn line_0<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
         Size::Word => u32::from(cpu.fetch16(bus)),
         Size::Long => cpu.fetch32(bus),
     };
+    // Table 15: immediate arithmetic/logical instructions spend three
+    // internal clocks beyond their opcode/immediate/operand transfers.
+    cpu.cycles += 3;
     let ea = cpu.ea(bus, mode, reg, size);
     let dst = cpu.read_ea(bus, ea, size);
     match kind {
@@ -242,10 +260,15 @@ fn line_0<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
     }
 }
 
-fn bit_op<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16, bitnum: u32) {
+fn bit_op<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16, bitnum: u32, static_bit: bool) {
     let mode = (op >> 3) & 7;
     let reg = op & 7;
     let kind = (op >> 6) & 3; // 0=BTST 1=BCHG 2=BCLR 3=BSET
+    cpu.cycles += match (static_bit, kind) {
+        (false, 0) => 0,
+        (false, _) | (true, 0) => 3,
+        (true, _) => 6,
+    };
     if mode == 0 {
         let bit = bitnum % 32;
         let r = reg as usize;
@@ -293,12 +316,14 @@ fn movep<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
         } else {
             cpu.d[dreg] = (cpu.d[dreg] & 0xFFFF_0000) | val;
         }
+        cpu.cycles += 3 * u64::from(count - 1);
     } else {
         let val = cpu.d[dreg];
         for i in 0..count {
             let shift = 8 * (count - 1 - i);
             cpu.write8(bus, addr.wrapping_add(i * 2), (val >> shift) as u8, fc);
         }
+        cpu.cycles += 3 * u64::from(count);
     }
 }
 
@@ -336,7 +361,7 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
         0x4E70 => {
             // RESET: asserts the reset output; no internal effect.
             if privileged(cpu, bus) {
-                cpu.cycles += 128;
+                cpu.cycles += 147;
             }
             return;
         }
@@ -344,6 +369,7 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
         0x4E72 => {
             if privileged(cpu, bus) {
                 let imm = cpu.fetch16(bus);
+                cpu.cycles += 6;
                 cpu.set_sr(imm);
                 cpu.stopped = true;
             }
@@ -355,6 +381,9 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
                 let sr = cpu.pop16(bus);
                 let pc = cpu.pop32(bus);
                 let format = cpu.pop16(bus);
+                // Short-form RTE is 39 clocks (Table 22). Opcode and stack
+                // transfers account for 23 of them.
+                cpu.cycles += 16;
                 if format & 0xF000 != 0 {
                     log::warn!("RTE long frame (format {:#06x}) not implemented", format);
                 }
@@ -371,6 +400,8 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
         0x4E76 => {
             if cpu.flag(SR_V) {
                 cpu.exception(bus, Vector::TrapV as u8);
+            } else {
+                cpu.cycles += 3;
             }
             return;
         }
@@ -378,6 +409,7 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             let ccr = cpu.pop16(bus);
             cpu.set_ccr(ccr);
             let ret = cpu.pop32(bus);
+            cpu.cycles += 3;
             cpu.set_pc_checked(bus, ret);
             return;
         }
@@ -397,6 +429,7 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             let disp = cpu.fetch16(bus) as i16 as u32;
             let val = cpu.a[r];
             cpu.push32(bus, val);
+            cpu.cycles += 6;
             cpu.a[r] = cpu.a[7];
             cpu.a[7] = cpu.a[7].wrapping_add(disp);
             return;
@@ -456,6 +489,9 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
                 let ea = cpu.ea(bus, mode, reg, Size::Word);
                 let sr = cpu.sr;
                 cpu.write_ea(bus, ea, Size::Word, u32::from(sr));
+                if mode != 0 {
+                    cpu.cycles += 4;
+                }
             }
             return;
         }
@@ -464,12 +500,16 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             let ea = cpu.ea(bus, mode, reg, Size::Word);
             let ccr = u32::from(cpu.sr & sr_bits::CCR_MASK);
             cpu.write_ea(bus, ea, Size::Word, ccr);
+            if mode != 0 {
+                cpu.cycles += 4;
+            }
             return;
         }
         0x44C0 => {
             // MOVE to CCR
             let ea = cpu.ea(bus, mode, reg, Size::Word);
             let v = cpu.read_ea(bus, ea, Size::Word) as u16;
+            cpu.cycles += 3;
             cpu.set_ccr(v);
             return;
         }
@@ -478,6 +518,7 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             if privileged(cpu, bus) {
                 let ea = cpu.ea(bus, mode, reg, Size::Word);
                 let v = cpu.read_ea(bus, ea, Size::Word) as u16;
+                cpu.cycles += 3;
                 cpu.set_sr(v);
             }
             return;
@@ -488,12 +529,14 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             let dst = cpu.read_ea(bus, ea, Size::Byte);
             let r = nbcd(cpu, dst);
             cpu.write_ea(bus, ea, Size::Byte, r);
+            cpu.cycles += 3;
             return;
         }
         0x4840 => {
             // PEA
             let addr = cpu.control_addr(bus, mode, reg);
             cpu.push32(bus, addr);
+            cpu.cycles += 3;
             return;
         }
         0x4AC0 => {
@@ -504,6 +547,7 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             cpu.set_flag(SR_V, false);
             cpu.set_flag(SR_C, false);
             cpu.write_ea(bus, ea, Size::Byte, v | 0x80);
+            cpu.cycles += if mode == 0 { 3 } else { 4 };
             return;
         }
         0x4E80 => {
@@ -511,6 +555,7 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             let addr = cpu.control_addr(bus, mode, reg);
             let ret = cpu.pc;
             cpu.push32(bus, ret);
+            cpu.cycles += 3;
             cpu.set_pc_checked(bus, addr);
             return;
         }
@@ -544,14 +589,20 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             cpu.set_flag(SR_Z, val == 0);
             cpu.set_flag(SR_V, false);
             cpu.set_flag(SR_C, false);
-            if val < 0 {
+            let trapped = if val < 0 {
                 cpu.set_flag(SR_N, true);
                 cpu.exception(bus, Vector::Chk as u8);
+                true
             } else if val > bound {
                 cpu.set_flag(SR_N, false);
                 cpu.exception(bus, Vector::Chk as u8);
+                true
             } else {
                 cpu.set_flag(SR_N, val < 0);
+                false
+            };
+            if !trapped {
+                cpu.cycles += 12;
             }
             return;
         }
@@ -599,6 +650,7 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
 }
 
 fn movem<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
+    let timing_start = cpu.cycles;
     let to_regs = op & 0x0400 != 0;
     let size = if op & 0x0040 != 0 {
         Size::Long
@@ -608,8 +660,28 @@ fn movem<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
     let mode = (op >> 3) & 7;
     let reg = (op & 7) as usize;
     let mask = cpu.fetch16(bus);
+    let register_count = u64::from(mask.count_ones());
     let fc = cpu.data_fc();
     let step = size.bytes();
+    let base = if to_regs {
+        match (mode, op & 7) {
+            (2 | 3, _) => 26,
+            (5, _) | (7, 0 | 2) => 30,
+            (6, _) | (7, 3) => 33,
+            (7, 1) => 34,
+            _ => 26,
+        }
+    } else {
+        match (mode, op & 7) {
+            (2 | 4, _) => 23,
+            (5, _) | (7, 0) => 27,
+            (6, _) => 30,
+            (7, 1) => 31,
+            _ => 23,
+        }
+    };
+    let per_register = if size == Size::Long { 11 } else { 7 };
+    let total_timing = base + per_register * register_count;
 
     let read_reg = |cpu: &Cpu, idx: usize| -> u32 {
         if idx < 8 {
@@ -642,6 +714,7 @@ fn movem<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             }
         }
         cpu.a[reg] = addr;
+        finish_total_timing(cpu, timing_start, total_timing);
         return;
     }
 
@@ -677,6 +750,7 @@ fn movem<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
     if mode == 3 && to_regs {
         cpu.a[reg] = addr;
     }
+    finish_total_timing(cpu, timing_start, total_timing);
 }
 
 // --- Line 5: ADDQ/SUBQ/Scc/DBcc ------------------------------------------
@@ -690,19 +764,23 @@ fn line_5<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             // DBcc
             let disp_pc = cpu.pc;
             let disp = cpu.fetch16(bus) as i16 as u32;
-            if !condition(cpu, cc) {
+            if condition(cpu, cc) {
+                cpu.cycles += 3;
+            } else {
                 let r = reg as usize;
                 let counter = (cpu.d[r] as u16).wrapping_sub(1);
                 cpu.d[r] = (cpu.d[r] & 0xFFFF_0000) | u32::from(counter);
                 if counter != 0xFFFF {
                     cpu.set_pc_checked(bus, disp_pc.wrapping_add(disp));
                 }
+                cpu.cycles += 6;
             }
         } else {
             // Scc
             let ea = cpu.ea(bus, mode, reg, Size::Byte);
             let v = if condition(cpu, cc) { 0xFF } else { 0x00 };
             cpu.write_ea(bus, ea, Size::Byte, v);
+            cpu.cycles += if mode == 0 { 6 } else { 10 };
         }
         return;
     }
@@ -748,6 +826,13 @@ fn line_6<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
         disp8 as i8 as u32
     };
     let target = base_pc.wrapping_add(disp);
+    // Table 19: Bcc/BRA are 13 clocks for an 8-bit displacement and 14
+    // for a fetched word; BSR's stack writes bring it to 21/25.
+    if cc == 1 || disp8 != 0 {
+        cpu.cycles += 6;
+    } else {
+        cpu.cycles += 3;
+    }
     match cc {
         0 => cpu.set_pc_checked(bus, target), // BRA
         1 => {
@@ -805,6 +890,7 @@ fn line_c<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             0x0148 => cpu.a.swap(rx, ry),
             _ => std::mem::swap(&mut cpu.d[rx], &mut cpu.a[ry]),
         }
+        cpu.cycles += 6;
         return;
     }
     logic_op(cpu, bus, op, |a, b| a & b);
@@ -841,6 +927,7 @@ fn div_op<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16, signed: bool) {
         cpu.exception(bus, Vector::ZeroDivide as u8);
         return;
     }
+    cpu.cycles += if signed { 162 } else { 123 };
     let dst = cpu.d[dn];
     if signed {
         let divisor = src as u16 as i16 as i32;
@@ -890,7 +977,7 @@ fn mul_op<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16, signed: bool) {
     };
     cpu.d[dn] = result;
     set_logic_flags(cpu, result, Size::Long);
-    cpu.cycles += 34;
+    cpu.cycles += 69;
 }
 
 fn bcd_op<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16, add: bool) {
@@ -909,6 +996,7 @@ fn bcd_op<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16, add: bool) {
             bcd_sub(cpu, dst, src)
         };
         cpu.write_ea(bus, dst_ea, Size::Byte, r);
+        cpu.cycles += 6;
     } else {
         let src = cpu.d[ry] & 0xFF;
         let dst = cpu.d[rx] & 0xFF;
@@ -918,6 +1006,7 @@ fn bcd_op<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16, add: bool) {
             bcd_sub(cpu, dst, src)
         };
         cpu.d[rx] = (cpu.d[rx] & !0xFF) | r;
+        cpu.cycles += 3;
     }
 }
 
@@ -1017,6 +1106,7 @@ fn add_sub<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16, add: bool) {
                 do_sub(cpu, dst, src, size, true, true)
             };
             cpu.write_ea(bus, dst_ea, size, r);
+            cpu.cycles += 3;
         }
         return;
     }
@@ -1074,6 +1164,7 @@ fn line_b<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
         let dst_ea = cpu.ea(bus, 3, rn as u16, size);
         let dst = cpu.read_ea(bus, dst_ea, size);
         do_cmp(cpu, dst, src, size);
+        cpu.cycles += 3;
     } else {
         // EOR Dn,<ea>
         let ea = cpu.ea(bus, mode, reg, size);
@@ -1096,6 +1187,7 @@ fn line_e<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
         let val = cpu.read_ea(bus, ea, Size::Word);
         let r = shift_val(cpu, kind, left, val, 1, Size::Word);
         cpu.write_ea(bus, ea, Size::Word, r);
+        cpu.cycles += 3;
         return;
     }
     let Some(size) = Size::from_bits(size_bits) else {
@@ -1117,7 +1209,7 @@ fn line_e<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
     let val = cpu.d[reg] & size.mask();
     let r = shift_val(cpu, kind, left, val, count, size);
     cpu.d[reg] = (cpu.d[reg] & !size.mask()) | (r & size.mask());
-    cpu.cycles += 2 * u64::from(count);
+    cpu.cycles += 6 + 3 * u64::from(count);
 }
 
 /// kind: 0=AS, 1=LS, 2=ROX, 3=RO

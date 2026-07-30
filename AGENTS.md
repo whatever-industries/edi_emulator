@@ -61,22 +61,22 @@ when the corresponding interrupt is masked. This lets the native release
 routine finish after a short still/video clip; without it The Naked Gun 2 1/2
 stalls on black after its copyright screen, while the corrected run reaches
 the Disc 1 chapter menu.
-The exact historical root `2a1d9038` and a modern hybrid prove The 7th Guest's
-pre-title clip, title MPEG, both post-title MPEGs, automatic gameplay entry,
-and non-looping gameplay audio. The modern hybrid retains all current work but
-temporarily restores the pre-regression SCC68070 timing behavior. Applying the
-Philips section-6.2 timing batch while devices advance only after a complete
-instruction breaks that sequence; the four timing assertions are quarantined
-in the current `main` baseline, not deleted or treated as disproven. Two brief
-black flashes replace authored transition animations and remain a separate
-deferred incident. The slight sizzling heard in the historical executable is
-absent from the modern audit hybrid.
+The exact historical root `2a1d9038` and a modern hybrid proved The 7th
+Guest's pre-title clip, title MPEG, both post-title MPEGs, automatic gameplay
+entry, and non-looping gameplay audio. Philips section-6.2 SCC68070 timing is
+now enabled and its four timing-table tests are active. The accurate timing
+exposed that VMPEG had incorrectly been modeled on IN5: the CD-i 220 service
+manual shows CDIC and the FMV extension sharing a daisy-chained IN4 while IN5
+is unused. Latched shared-IN4 ownership restores the seven-stage transition;
+the deterministic 550-million-instruction trace decodes 768 video frames with
+zero decoder errors and completes both MPEG program ends. Two brief black
+flashes replace authored transition animations and remain a separate deferred
+incident.
 
 Use the live checklist and source ledger in `docs/mpeg-dvc-plan.md`. The next
-unchecked action is to reconcile datasheet SCC68070 timing with
-whole-machine/device scheduling while preserving the seven-stage transition.
-After that, resolve five rare B-picture failures and cover long-run A/V drift,
-pause/continue, stream switching, repeated transitions, and the cake puzzle.
+unchecked action is to resolve five rare B-picture failures, then cover
+long-run A/V drift, pause/continue, stream switching, repeated transitions,
+and the cake puzzle.
 Update that document's status and next action whenever a checkpoint is reached.
 
 ## Git and build workflow

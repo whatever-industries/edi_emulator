@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "id": "hotel-mario-player-one-stall",
+  "title": "Hotel Mario Player 1 transition stall",
+  "symptom": "Selecting Player 1 removes the menu text but never advances from the title background",
+  "expected": "Selecting Player 1 opens the NEW / RESTORE submenu",
+  "status": "fixed-unverified",
+  "reported_revision": "36b46f758770de53c4846419beffb9bb022c4615",
+  "last_reproduced_revision": "36b46f758770de53c4846419beffb9bb022c4615",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": "The deterministic correction is verified headlessly; GUI verification is still required.",
+  "components": [
+    "cdic",
+    "diagnostic-input"
+  ],
+  "disc_fingerprint": "e0f7801450fdc49bfdeae805dfc45ba8c9801bb5",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "ntsc",
+    "dvc": null,
+    "instruction_limit": 710000000,
+    "input_events": [
+      "498000000:588,265,1,300000",
+      "660000000:300,247,1,300000"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "scripted-click-reanchor-overrides-title-pointer",
+      "hardware_explanation": "The CLI re-anchored the relative CD-i pointer at the press boundary after the title had changed its position, producing a different guest input packet from the intended hover-then-click sequence.",
+      "supporting_evidence": [
+        "c012d17 stalls with the press-boundary re-anchor and reaches NEW / RESTORE when that re-anchor is removed.",
+        "04cc43b, 019fb59, and 7dc46a9 all reach NEW / RESTORE with the original hover-then-click behavior."
+      ],
+      "contradicting_evidence": [],
+      "falsifying_test": "Restore only the press-boundary absolute-pointer write while holding the ROM, disc, timing, and core revision fixed; the terminal framebuffer should remain unchanged if re-anchoring is irrelevant.",
+      "citations": [
+        "docs/debugging-workflow.md"
+      ]
+    },
+    {
+      "id": "cdic-audio-sector-routing-regression",
+      "hardware_explanation": "Selected XA sectors must update the ordinary data-buffer header while also placing a complete post-sync sector image in ADPCM buffer 4/5. Routing only the complete image to 0x2800/0x3200 deprived CD-RTOS of the data-buffer header it inspects during the transition.",
+      "supporting_evidence": [
+        "With normalized input, c012d17 reaches NEW / RESTORE while 3e02bf4 stalls.",
+        "Changing only the 3e02bf4 delivery layout restores the known-good framebuffer hash.",
+        "Mono-I test_xa_play captures show timestamp/mode words changing in the ordinary buffers while DBUF reports audio buffer 4/5.",
+        "The CDIC manual places coding at ADPCM-buffer offset 11 and the 2304-byte payload at offset 12."
+      ],
+      "contradicting_evidence": [],
+      "falsifying_test": "On Mono-I hardware, capture the ordinary data-buffer header during selected XA delivery; unchanged header words would falsify the dual-routing model.",
+      "citations": [
+        "https://github.com/Slamy/CDIC_BlackBoxAnalyzer/blob/e861f76/doc/cdic_manual.md",
+        "https://github.com/Slamy/CDIC_BlackBoxAnalyzer/blob/e861f76/src/test_xa_play.c",
+        "docs/specification-research.md: CDIC disc audio"
+      ]
+    },
+    {
+      "id": "audctl-status-regression",
+      "hardware_explanation": "AUDCTL read or write semantics caused the title to wait after selecting Player 1.",
+      "supporting_evidence": [
+        "The symptom appeared in the same change that corrected AUDCTL behavior."
+      ],
+      "contradicting_evidence": [
+        "Restoring the old AUDCTL read behavior alone did not advance the title.",
+        "Restoring the old AUDCTL write behavior alone did not advance the title."
+      ],
+      "falsifying_test": "Hold sector routing fixed and independently substitute the prior AUDCTL read and write behaviors.",
+      "citations": [
+        "https://github.com/Slamy/CDIC_BlackBoxAnalyzer/blob/e861f76/doc/cdic_manual.md"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "superseded-c012d17-versus-36b46f7-comparison",
+      "context": {
+        "base_revision": "36b46f758770de53c4846419beffb9bb022c4615",
+        "dirty_diff_hash": "clean",
+        "component_fingerprints": {},
+        "dependencies": {},
+        "disc_fingerprint": "e0f7801450fdc49bfdeae805dfc45ba8c9801bb5",
+        "model": "cdi220b",
+        "video_standard": "ntsc",
+        "dvc": "none",
+        "scenario": "Hotel Mario USA boot, shell PLAY click, then Player 1 click",
+        "timing": "710000000 instructions; 498000000:588,265,1,300000 and 660000000:300,247,1,300000"
+      },
+      "hypothesis_id": "cdic-audio-sector-routing-regression",
+      "strategy": "Compare c012d17 and 36b46f7 before normalizing the scripted input harness.",
+      "symbols": [
+        "Cdic::deliver_sector",
+        "boot"
+      ],
+      "assumptions": [
+        "The CLI generated the same guest-visible pointer sequence at both revisions."
+      ],
+      "expected": "A CDIC regression causes the revisions to diverge.",
+      "actual": "Both stalled with framebuffer SHA-256 050159189bd72c6d404bea6a4c0e1b3fb2efc54de3b32a3fe3f34b07d012ddde, but the shared press-boundary re-anchor invalidated the input-equivalence assumption.",
+      "outcome": "superseded",
+      "regressions": [],
+      "improvements": [],
+      "reverted": false,
+      "evidence_quality": "low",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "Only comparisons using the faulty press-boundary re-anchor."
+        ],
+        "invalidated_by": [
+          "Normalizing the scripted pointer sequence."
+        ],
+        "repeat_when": [
+          "Never as evidence about core CDIC behavior without first normalizing input."
+        ]
+      }
+    },
+    {
+      "id": "normalized-boundary-and-sector-routing",
+      "context": {
+        "base_revision": "36b46f758770de53c4846419beffb9bb022c4615",
+        "dirty_diff_hash": "pending-commit",
+        "component_fingerprints": {},
+        "dependencies": {
+          "cdic_blackbox_analyzer": "e861f76"
+        },
+        "disc_fingerprint": "e0f7801450fdc49bfdeae805dfc45ba8c9801bb5",
+        "model": "cdi220b",
+        "video_standard": "ntsc",
+        "dvc": "none",
+        "scenario": "Hotel Mario USA boot, shell PLAY click, then Player 1 click",
+        "timing": "710000000 instructions; 498000000:588,265,1,300000 and 660000000:300,247,1,300000"
+      },
+      "hypothesis_id": "cdic-audio-sector-routing-regression",
+      "strategy": "Remove the CLI re-anchor, bisect the CDIC subchanges, then route the selected XA header to data buffer 0/1 and the complete post-sync image to ADPCM buffer 4/5.",
+      "symbols": [
+        "Cdic::deliver_sector",
+        "boot"
+      ],
+      "assumptions": [
+        "The recorded Mono-I buffer observations apply to the CD-i 220 F2 path.",
+        "The known-good NEW / RESTORE framebuffer identifies a completed Player 1 transition."
+      ],
+      "expected": "The corrected layout reaches NEW / RESTORE while retaining DBUF 4/5, AUDCTL gating, and buffered XA playback.",
+      "actual": "The run reached NEW / RESTORE with the known-good framebuffer SHA-256 6d5538365145dfef95634bff36f756be7e646ea0b31bc7d1de294d4adce1e481, PC 0x004081aa, 3,968,270,721 CPU cycles, 381,310 exceptions, and 3,777,312 emitted audio samples. Focused CDIC tests also pass.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "Hotel Mario Player 1 transition advances deterministically.",
+        "Selected XA delivery now preserves both CD-RTOS header visibility and hardware ADPCM offsets."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "CD-i 220 F2 selected Mode-2 XA delivery and the recorded Hotel Mario scenario."
+        ],
+        "invalidated_by": [
+          "Changes to CDIC sector routing, DBUF selection, pointer packet timing, or disc identity."
+        ],
+        "repeat_when": [
+          "Any invalidating dependency changes or a real-hardware byte dump contradicts the dual-routing layout."
+        ]
+      }
+    }
+  ],
+  "manual_verification": []
+}

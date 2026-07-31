@@ -160,3 +160,29 @@ Earth Command, Naked Gun, Alien Gate, Merlin's Apprentice, and The Apprentice
 checks had already passed. This closes the shared-IN4 scheduling
 regression. Three brief black intervals and one or two early Philips-logo
 audio hits remain separate presentation/audio incidents.
+
+## Mono-I bus-error and rate calibration evidence
+
+External Mono-I development feedback on 2026-07-31 narrows the slow-boot
+hypothesis: the known BERR-sensitive probes are outside the decoded memory
+map, and correct faults shorten the firmware's early memory checks. The source
+has not checked every hole, access width, or direction, so this is not evidence
+for making every open-bus access fault unconditionally.
+
+A read-only E-Di trace at revision `36b46f7` confirms the cost that needs to be
+explained. During the first 20,000,000 instructions of a PAL cdi220b
+firmware-only boot, the current open-bus path handled 9,605,190 byte reads at
+9,075,906 distinct addresses from `$00500000` through `$00FF8003`. This proves
+that absent-memory discovery dominates that interval; it does not yet prove
+the hardware response for each address. Before enabling vector 2, diagnostics
+must retain the faulting PC, address, function code, access width/direction,
+and wait-state context, and focused tests must protect the SCC68070 bus-error
+stack frame.
+
+CPU-rate calibration is a separate question. Green Book does not prescribe a
+CPU clock, while contemporary software often assumes the de facto Mono-I
+SCC68070 rate. The external comparison implementation is itself reported to
+run slightly fast, so another emulator or FPGA core is not a sufficient timing
+oracle. Use one field-timed benchmark on a physical Mono-I player and E-Di to
+compare guest work, timer deltas, interrupt cadence, and bus waits. Do not
+compensate with host sleep or title-specific throttling.

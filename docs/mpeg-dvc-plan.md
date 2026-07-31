@@ -294,7 +294,7 @@ by `scripts/fetch-mpeg-refs.sh`.
 | Source | Pinned version | License/use | Emulator findings |
 |---|---|---|---|
 | `MiSTer-devel/CDi_MiSTer` | `bbaf100b5b7ab02af3f5932492c4989d5f91323f` | GPL-3.0, study/test only | Working experimental VMPEG, register/DMA traces, test ROM sources, known A/V and 7th Guest edge cases |
-| CD-i Emulator CD-i Types and DVC pages | snapshot dated by fetch script | `cditypes.rul` LGPL-2.0-or-later; web pages reference only | VMPEG/IMPEG taxonomy, firmware signatures, optional-memory maps, legacy support limits |
+| cdiemu.org CD-i Types and DVC pages | snapshot dated by fetch script | `cditypes.rul` LGPL-2.0-or-later; web pages reference only | VMPEG/IMPEG taxonomy, firmware signatures, optional-memory maps, legacy support limits |
 | `gen2brain/mpeg` | `27c6f084c6ca342380c99a59a6a130b3f716e9d7` | MIT, attributed translation allowed | Incremental MPEG-1 video decoder with I/P/B reordering and streaming buffer |
 | `oxideav-mp2` | crate `0.0.9` | MIT dependency | Complete frame-level MPEG-1 Layer-II decoder and persistent synthesis state |
 | MAME CD-i driver | `6effbd5b66b3062fbd1ba6c59cd1b070b5f04284` | BSD-3-Clause | Current DVC map exists but handlers return zero; not a functional decoder reference |

@@ -2,7 +2,7 @@
 //! Board and model definitions.
 //!
 //! A board is a list of devices at base addresses — the same shape as the
-//! `.brd` data files shipped with CD-i Emulator by "CD-i Fan" (see
+//! `.brd` data files published at cdiemu.org by "CD-i Fan" (see
 //! NOTICE.md), from which our tables are transliterated. A model binds a
 //! board to a system ROM and per-unit parameters (`.mdl` equivalent).
 

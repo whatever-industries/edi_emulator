@@ -771,7 +771,6 @@ impl Cdic {
             None
         };
 
-        let mut word_idx = usize::from(self.data_buffer & 0x0005) * 0xA00 / 2;
         let put = |ram: &mut [u8], idx: &mut usize, word: u16| {
             let at = (*idx * 2) & 0x3FFE;
             ram[at] = (word >> 8) as u8;
@@ -779,11 +778,34 @@ impl Cdic {
             *idx += 1;
         };
 
+        let slot = usize::from(self.data_buffer & 1);
+        let mut header_word = slot * 0x0A00 / 2;
+        // A selected XA sector still updates the ordinary data-buffer header.
+        // Mono-I captures in CDIC_BlackBoxAnalyzer test_xa_play observe the
+        // timestamp/mode words at $0000/$0a00 while DBUF reports audio slot
+        // 4/5.  CD-RTOS inspects this header even though the sector body is
+        // routed to the corresponding ADPCM buffer.
         for i in (SECTOR_HEADER..SECTOR_FILE2).step_by(2) {
-            let w = (u16::from(buffer[i]) << 8) | u16::from(buffer[i + 1]);
-            put(&mut self.ram, &mut word_idx, w);
+            let word = (u16::from(buffer[i]) << 8) | u16::from(buffer[i + 1]);
+            put(&mut self.ram, &mut header_word, word);
         }
-        for i in (SECTOR_FILE2..SECTOR_SIZE).step_by(2) {
+
+        // The ADPCM buffer contains the complete post-sync sector image: its
+        // coding byte is at offset 11 and its 2304-byte sample payload begins
+        // at offset 12 (CDIC_BlackBoxAnalyzer cdic_manual, "Playing CD-I
+        // ADPCM from CPU").  It is not a continuation of the short header
+        // copy above.
+        let mut word_idx = if realtime_audio {
+            (0x2800 + slot * 0x0A00) / 2
+        } else {
+            header_word
+        };
+        let body_start = if realtime_audio {
+            SECTOR_HEADER
+        } else {
+            SECTOR_FILE2
+        };
+        for i in (body_start..SECTOR_SIZE).step_by(2) {
             let w = (u16::from(buffer[i]) << 8) | u16::from(buffer[i + 1]);
             put(&mut self.ram, &mut word_idx, w);
         }
@@ -1154,6 +1176,8 @@ mod tests {
         c.deliver_sector(&sector, &[0; 12]);
 
         assert_eq!(c.data_buffer & 0x000F, 4);
+        assert_eq!(c.ram[0], sector[SECTOR_HEADER]);
+        assert_eq!(c.ram[1], sector[SECTOR_HEADER + 1]);
         assert_eq!(
             c.ram[0x2800 + (SECTOR_CODING2 - SECTOR_HEADER)],
             CODING_STEREO
@@ -1167,6 +1191,8 @@ mod tests {
         sector[SECTOR_DATA] = 0xA5;
         c.deliver_sector(&sector, &[0; 12]);
         assert_eq!(c.data_buffer & 0x000F, 5);
+        assert_eq!(c.ram[0x0A00], sector[SECTOR_HEADER]);
+        assert_eq!(c.ram[0x0A01], sector[SECTOR_HEADER + 1]);
         assert_eq!(c.ram[0x3200 + (SECTOR_DATA - SECTOR_HEADER)], 0xA5);
 
         c.write16(0x3FFA, 0x0800);

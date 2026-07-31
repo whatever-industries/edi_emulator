@@ -26,11 +26,11 @@ Copyright notices for the referenced MAME sources:
 - `cdicdic.cpp`: Copyright Ryan Holtz and Vincent Halver.
 - Subsequent changes in upstream MAME: Copyright MAMEdev and contributors.
 
-## CD-i Emulator data files (CD-i Fan)
+## cdiemu.org data files (CD-i Fan)
 
 Board and model definitions (`cdi-core/src/boards.rs`) are transliterated from
-the `.brd`/`.mdl` data files distributed with CD-i Emulator (www.cdiemu.org) by
-"CD-i Fan", and ROM identification rules derive from `cditypes.rul`, licensed
+the `.brd`/`.mdl` data files published at www.cdiemu.org by "CD-i Fan", and ROM
+identification rules derive from `cditypes.rul`, licensed
 LGPL-2.0-or-later by the same author.
 
 ## CeDImu

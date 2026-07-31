@@ -16,7 +16,8 @@ Status date: 2026-07-30
 - [x] M3.10 masked FMV VSYNC status and native release-path completion
 - [x] M3.11 seven-stage The 7th Guest transition compatibility reference
 - [x] M3.12 reconcile SCC68070 datasheet timing with VMPEG/CDIC interrupt arbitration
-- [ ] M3.13 seamless-branch B-picture recovery (five rare failures remain in the full run)
+- [x] M3.13 full multi-play B-picture revalidation after shared-IN4 correction
+- [ ] M3.14 transition compliance and long-run regressions
 
 The specification-driven diagnostic checkpoint adds bounded DVC error,
 underflow, CDIC transport, frame/plane/raster, and audio evidence without
@@ -167,12 +168,23 @@ described two entirely missing transition animations are superseded pending a
 same-sequence hardware reference. One or two early audio hits in the opening
 Philips clip are tracked separately.
 
-Next, resolve the five cumulative B-picture decode failures (including two
-captured during The 7th Guest's
-branched third play), then turn gameplay into repeatable long-run A/V-drift,
-pause/continue, stream-switch, and repeated-transition regressions. The known
-cake-puzzle freeze remains an extended compatibility gate rather than an M3
-boot blocker.
+M3.13 revalidated the historical five-picture failure after the shared-IN4
+transport correction. Two identical 1.1-billion-instruction runs on
+`019fb5913e60d50bcf2ede6049e47376ecb5af39` each exercised five VMPEG plays,
+16,619 system packs, 7,853 decoded and presented video frames, and 25,226
+decoded audio frames. Both finished with identical machine, framebuffer, and
+audio hashes and zero demux, video, audio, or stream errors. Decoder errors
+remain cumulative across transport resets, so the zero is not reset
+accounting. The five failures were captured on the original VMPEG checkpoint
+before the later shared-IN4 arbitration fix eliminated a proven PCL overwrite
+path; the old result is therefore superseded under changed prerequisites. No
+picture concealment, smoothing, or decoder recovery heuristic was added.
+
+Next, add project-owned TN 088 transition regressions for EOS+SOS,
+pause/continue, abort/restart stale-B-picture removal, and delayed
+last-picture display. Then turn gameplay into repeatable long-run A/V-drift,
+stream-switch, and repeated-transition regressions. The known cake-puzzle
+freeze remains an extended compatibility gate rather than an M3 boot blocker.
 
 The apparent v0.1.0-to-v0.2.0 regression in The 7th Guest's post-title video
 was isolated separately. Reverting v0.2.0's relative subcode-Q correction did
@@ -442,7 +454,7 @@ demux/video/audio errors. Repeating the run after removing an unrelated DMA0
 experiment gives identical results, isolating interrupt arbitration as the
 cause.
 
-Later visual testing exposed three presentation issues and one remaining
+Later visual testing exposed three presentation issues and one historical
 transport/decoder edge case. The MCD212 formerly bobbed each 50 Hz field over
 both output rows, studio-range black 16 was presented directly as gray, and
 VMPEG had been expanded to full RGB before hardware mixing. These are corrected
@@ -451,8 +463,10 @@ by interlaced field weaving and a single output-boundary range expansion.
 contiguous offline extraction: during the title's branched third play, runtime
 delivery diverges after 1,017,394 matching bytes and two B pictures in the
 fourth sequence/GOP reject midway through their macroblocks; the complete
-five-play acceptance run accumulates five rejected pictures. Treat seamless
-branch/reference recovery—not VLC-style smoothing—as the current next action.
+five-play acceptance run accumulated five rejected pictures. That trace
+predates the shared-IN4 correction. Two exact current five-play reruns are
+deterministic and error-free, so this evidence is retained as the superseded
+transport phenotype rather than grounds for VLC-style smoothing.
 
 Required regression commands are recorded in root `AGENTS.md`. Never add game
 disc paths to tracked test configuration and ask before committing.

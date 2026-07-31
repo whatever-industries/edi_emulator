@@ -74,9 +74,15 @@ flashes replace authored transition animations and remain a separate deferred
 incident.
 
 Use the live checklist and source ledger in `docs/mpeg-dvc-plan.md`. The next
-unchecked action is to resolve five rare B-picture failures, then cover
-long-run A/V drift, pause/continue, stream switching, repeated transitions,
-and the cake puzzle.
+unchecked action is M3.14: add project-owned TN 088 transition regressions for
+EOS+SOS, pause/continue, abort/restart stale-B-picture removal, and delayed
+last-picture display, then cover long-run A/V drift, stream switching,
+repeated transitions, and the cake puzzle. M3.13 is closed: two identical
+current 1.1-billion-instruction five-play runs decode and present 7,853 video
+frames with zero cumulative demux/video/audio errors. The historical five
+rejected pictures predated the shared-IN4 correction and are retained as
+superseded transport evidence; do not add picture smoothing or concealment for
+them.
 Update that document's status and next action whenever a checkpoint is reached.
 
 ## Git and build workflow

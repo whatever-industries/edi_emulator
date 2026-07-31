@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "id": "7th-guest-rare-b-picture-recovery",
+  "title": "The 7th Guest historical rare B-picture failures",
+  "symptom": "The original full five-play VMPEG run accumulated five rejected pictures; two captured failures followed a runtime elementary-stream divergence during the branched third play",
+  "expected": "The native CDIC/PCL/VMPEG path delivers complete MPEG pictures across repeated plays without decoder errors or a title-specific recovery path",
+  "status": "resolved",
+  "reported_revision": "191eebb58859f2e18ef0ef268dc8b804e78bbba3",
+  "last_reproduced_revision": "191eebb58859f2e18ef0ef268dc8b804e78bbba3",
+  "last_verified_revision": "019fb5913e60d50bcf2ede6049e47376ecb5af39",
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "dvc",
+    "mpeg-video",
+    "cdic",
+    "disc-cdfm"
+  ],
+  "disc_fingerprint": "451de6f0f71e9b6c3442608c3987837d62aa69a8",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega.rom",
+    "instruction_limit": 1100000000,
+    "input_events": [
+      "498000000:588,265,1"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "pre-shared-in4-runtime-divergence",
+      "hardware_explanation": "The rejected pictures were incomplete because the old separately modeled CDIC/VMPEG interrupt paths allowed native PCL ownership to be reordered and runtime elementary delivery to diverge from the complete on-disc stream.",
+      "supporting_evidence": [
+        "The historical runtime capture matched the contiguous extraction for 1,017,394 bytes before diverging.",
+        "The two captured B pictures rejected midway through macroblock parsing while the contiguous stream decoded.",
+        "The later shared-IN4 investigation proved that VMPEG could preempt the active CDIC handler before its PCL producer-pointer update, leading to reuse of that PCL."
+      ],
+      "contradicting_evidence": [
+        "The original failure trace did not independently identify the exact missing byte boundary for every one of the five rejected pictures."
+      ],
+      "falsifying_test": "Repeat the full five-play scenario after shared-IN4 arbitration while preserving cumulative decoder-error accounting; any deterministic rejection would show that interrupt arbitration was insufficient.",
+      "citations": [
+        "Philips CD-i 220 service manual section 6.6.1 and signal glossary",
+        "docs/mpeg-dvc-plan.md",
+        "data/compatibility/incidents/scc68070-device-event-scheduling.json"
+      ]
+    },
+    {
+      "id": "stale-reference-across-branch",
+      "hardware_explanation": "An abort/restart or seamless branch retained an invalid delayed-reference pair, causing otherwise complete B pictures to fail.",
+      "supporting_evidence": [
+        "Philips TN 088 documents stale B-pictures after abort/restart.",
+        "Two historical failures occurred in a branched play."
+      ],
+      "contradicting_evidence": [
+        "Stale reference pixels can corrupt prediction output but do not explain failure to parse a variable-length code midway through a macroblock.",
+        "The current decoder logic is materially unchanged and now parses the complete five-play run without error."
+      ],
+      "falsifying_test": "Decode the same complete coded picture with fresh and deliberately stale reference pixels; identical parse completion with different pixels falsifies stale references as the cause of a VLC rejection.",
+      "citations": [
+        "Philips TN 088",
+        "crates/cdi-core/src/mpeg1_video.rs",
+        "crates/cdi-core/src/dvc.rs"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "current-shared-in4-five-play-repeat",
+      "context": {
+        "base_revision": "019fb5913e60d50bcf2ede6049e47376ecb5af39",
+        "dirty_diff_hash": "6be0aaba301ad71128ad219e5732261382acad90226200e8e0a119f693d6bc64",
+        "component_fingerprints": {
+          "cdic": "514757a341f2b6da6e657f995a762d88ab67d888227a810120e202561bc4ba45",
+          "disc-cdfm": "91a9d1ca59986647d3811e5633344491b19ccce27bb29a675b8e1356e1ae320c",
+          "dvc": "d8ea191da35c93adf57a763050c35abc126758afe5e6629fa3ede2b9028f591d",
+          "mpeg-video": "91a9d1ca59986647d3811e5633344491b19ccce27bb29a675b8e1356e1ae320c"
+        },
+        "dependencies": {
+          "Cargo.lock": "da94ce470c588c776fa91786d0bde983413f1c4326ee68511062718483067305"
+        },
+        "disc_fingerprint": "451de6f0f71e9b6c3442608c3987837d62aa69a8",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "five-play The 7th Guest Europe Disc 1 run with one scripted title-menu click",
+        "timing": "1100000000 instructions; click 498000000:588,265,1"
+      },
+      "hypothesis_id": "pre-shared-in4-runtime-divergence",
+      "strategy": "Run the exact current bounded scenario twice with cumulative DVC diagnostics, then compare every retained event and the final machine, framebuffer, and audio hashes. Do not change decoder behavior.",
+      "symbols": [
+        "MachineBus::arbitrate_shared_in4",
+        "Vmpeg::update_stats",
+        "Mpeg1VideoDecoder::decode_available"
+      ],
+      "assumptions": [
+        "Five observed VMPEG play events cover the repeated-play class in which the original errors accumulated.",
+        "The cumulative video-error counter remains preserved across transport and decoder resets."
+      ],
+      "expected": "If the shared-IN4 prerequisite superseded the old transport failure, both runs finish with identical evidence and zero cumulative decoder errors.",
+      "actual": "Both 1.1-billion-instruction runs were identical: five VMPEG plays, 16,619 packs, 7,853 decoded and presented video frames, 25,226 decoded audio frames, matching machine/framebuffer/audio hashes, and zero demux, video, audio, or stream errors. The diagnostic comparator found no divergence.",
+      "outcome": "superseded",
+      "regressions": [],
+      "improvements": [
+        "The historical M3.13 blocker is removed without concealment, smoothing, or title-specific decoder behavior.",
+        "The next work is isolated TN 088 transition compliance rather than recovery for an obsolete live-stream phenotype."
+      ],
+      "reverted": false,
+      "evidence_quality": "high: two exact deterministic full runs, cumulative reset-safe counters, and retained historical transport evidence",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "CD-i 220/Mono-I with VMPEG and the shared-IN4 daisy-chain model.",
+          "The recorded disc fingerprint and five-play scripted scenario."
+        ],
+        "invalidated_by": [
+          "Changes to CDIC/VMPEG shared-IN4 arbitration, PCL ownership, DMA2 transport, decoder reset, or cumulative error accounting."
+        ],
+        "repeat_when": [
+          "Any invalidating dependency changes.",
+          "A current build reports a decoder error in a repeated or branched VMPEG play."
+        ]
+      }
+    }
+  ],
+  "manual_verification": [
+    {
+      "result": "automated-revalidation",
+      "revision": "019fb5913e60d50bcf2ede6049e47376ecb5af39",
+      "notes": "Two exact headless full runs and their final hashes/counters match. No additional manual visual check is required to close the obsolete decoder-error count; separate visual transition incidents remain open."
+    }
+  ]
+}

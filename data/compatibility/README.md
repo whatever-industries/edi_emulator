@@ -20,3 +20,10 @@ must not be presented as current behavior until it is repeated.
 `TODO.md` is the short roadmap, not the experiment ledger. Its compatibility
 items link here; detailed local logs, captures, and temporary patches remain
 under ignored `tests-data/local/diagnostics/`.
+
+`headless-suite.schema-v1.json` describes optional local compatibility-suite
+manifests. `headless-suite.example.json` is copied into ignored storage before
+its paths are edited. Runs retain local PNG/WAV/diagnostic artifacts and may be
+promoted only after manual checkpoint acceptance. Promotion updates the
+payload-free `title-matrix.json`, whose entries contain exact disc
+fingerprints and emulator configurations but no host paths or media.

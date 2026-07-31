@@ -162,8 +162,17 @@ signature `CD-XA001`. Accused and Addams Family Values VCD traces confirmed
 that type 4 makes both select the White Book 13.5 MHz sample-rate-converter
 path. Automatic exposure on insertion remains disabled, however, because the
 MCD251 sample-origin semantics are not implemented yet: exposing the native
-path centers Accused but shifts Addams. The classifier and SLAVE response are
-retained as tested prerequisites, not used as a presentation workaround.
+path removes the USA VCD right edge and centers Accused but shifts Addams UK.
+The repeated experiment therefore remains regression-causing. The classifier
+and SLAVE response are retained as tested prerequisites, not used as a
+presentation workaround.
+
+Read-only type-4 traces further show that Accused Netherlands and Addams
+Family Values UK program the same MCD251 origin/active tuple
+`Xo=65, Yo=26, Xa=384, Ya=280`; their `Xd`, `Xw`, and `Ww` display/window
+commands differ. This rules out treating `Xo` as a per-title decoded-image
+crop. The full MCD251 phase/timing definition or a synchronized real-hardware
+trace is required before repeating the exposure experiment.
 
 This exchange was verified with CD Shoot: after the reset, the BIOS consumes
 the retained `B0`, sends `B1`, loads the disc modules, starts Mode-2 streaming,

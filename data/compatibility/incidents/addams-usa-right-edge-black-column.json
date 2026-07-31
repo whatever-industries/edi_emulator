@@ -2,21 +2,21 @@
   "schema_version": 1,
   "id": "addams-usa-right-edge-black-column",
   "title": "USA Video CD right-edge black column",
-  "symptom": "Addams Family Values USA and Forrest Gump USA show a persistent vertical black line at the right edge of the picture. Forrest Gump's native bottom control panel remains correctly positioned while its MPEG picture appears shifted left.",
+  "symptom": "Addams Family Values USA, Forrest Gump USA, and Pete Townshend Live USA show a persistent vertical black line at the right edge of the picture. Forrest Gump's native bottom control panel remains correctly positioned while its MPEG picture appears shifted left. Pete Townshend's pre-concert screens appear left-biased and its concert footage clearly retains the right-side column.",
   "expected": "Base graphics, native Video CD controls, and MPEG video use their programmed hardware windows without a persistent one-sided black column.",
   "status": "reproduced",
   "reported_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
-  "last_reproduced_revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+  "last_reproduced_revision": "520133942+dirty:a5d6cb19a338f68b171c107085263ed37b1703ae87519e0fed6213b0127f5fde",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "Reproduced on the current diagnostic working tree in a second USA Video CD. The correctly placed native control panel in Forrest Gump provides new evidence that the MPEG picture and base/control presentation boundaries must be captured separately.",
+  "revalidation_reason": "A bounded comparison locates the USA column in the disabled White Book path, but manual guards confirm that exposing type 4 before implementing MCD251 sample-origin semantics is regression-causing: it removes the USA edge and centers Accused while shifting Addams UK right. The USA screenshot's additional 720-pixel crop is separately identified as the existing frontend Typical CRT aperture. Pete Townshend Live USA independently reproduces the clear MPEG right-edge column on the current build, so the incident remains current and is not specific to either previously tested authoring layout.",
   "components": [
     "mcd212",
     "dvc",
     "frontend",
     "vcd"
   ],
-  "disc_fingerprint": "Addams Family Values USA: dd9adb80a89378d97acfecaf50ce20d0f769c442; Forrest Gump USA: inventory pending",
+  "disc_fingerprint": "Addams Family Values USA: dd9adb80a89378d97acfecaf50ce20d0f769c442; Forrest Gump USA: inventory pending; Pete Townshend Live USA Disc 1: b640c77e36148e07b141b24e627aeced84c598e4",
   "scenario": {
     "model": "cdi220b",
     "video_standard": "ntsc",
@@ -31,6 +31,7 @@
       "supporting_evidence": [
         "The right-edge column is visible in both Addams Family Values USA and Forrest Gump USA.",
         "Forrest Gump's native bottom control panel is correctly positioned while the MPEG picture retains the column.",
+        "Pete Townshend Live USA clearly reproduces the right-edge column during concert MPEG footage; its preceding black-background screens also appear left-biased, although their authored bounds are less visually conclusive.",
         "The earlier Addams report described the column on both base screens and MPEG, so a DVC-only conclusion would be premature."
       ],
       "contradicting_evidence": [
@@ -43,9 +44,165 @@
         "Green Book Release 2 external-video composition",
         "docs/debugging-workflow.md display provenance stages"
       ]
+    },
+    {
+      "id": "white-book-type4-path",
+      "hardware_explanation": "A White Book CD-ROM XA Bridge disc must be reported as SLAVE disc type 4. The native VMPEG vcd module then selects the cartridge sample-rate converter at $E01000 so 352-pixel Video CD material occupies the intended screen width.",
+      "supporting_evidence": [
+        "The Addams USA baseline reports SLAVE type 2, leaves the converter disabled, and programs a 348-sample window that covers only 696 of 768 framebuffer pixels.",
+        "The same exact disc and input scenario under type 4 writes $E01000, reports the 13.5 MHz clock, and fills the captured raster without decoder or transport errors.",
+        "Philips Interactive Engineer 96/05 explicitly says 352-pixel Video CD is not full-screen in Green Book mode and is full-screen when a White Book cartridge switches mode.",
+        "The VMPEG vcd firmware module tests disc-type bit $0400 and adjusts MCD251 Xo from $004A to $0041 while enabling $E01000."
+      ],
+      "contradicting_evidence": [
+        "An earlier PAL Addams Family Values UK experiment shifted its warning screen right when type 4 was exposed.",
+        "MCD251 X-offset timing is now observable but its complete analog sample-origin semantics are not documented by the available technical summary."
+      ],
+      "falsifying_test": "With the exact candidate build, Addams USA or Forrest Gump USA retains the right-edge column, or a PAL guard that was correct under type 2 acquires a new placement or corruption regression attributable to the type-4 path.",
+      "citations": [
+        "Philips Interactive Engineer 96/05, Digital Video Cartridge compatibility note",
+        "Motorola MCD251 Technical Summary, video-control register map",
+        "VMPEG firmware vcd module at offsets $3424-$3490",
+        "docs/slave-protocol.md"
+      ]
+    },
+    {
+      "id": "mcd251-sample-origin",
+      "hardware_explanation": "The White Book clock change and MCD251 Xo/Xa timing registers jointly define the decoder's sample phase relative to the host raster; Xo is not a decoded-image crop or a title-specific screen offset.",
+      "supporting_evidence": [
+        "The MCD251 Technical Summary names Yo/Xo/Ya/Xa separately from Yd/Xd and Yw/Xw/Wh/Ww, and states that C2PIX is phase-adjusted to HSYNC.",
+        "Philips TN 098 distinguishes mv_window, which selects a decoded source window, from mv_pos, which positions it on the display.",
+        "Accused Netherlands and Addams Family Values UK program identical Xo=65, Yo=26, Xa=384, Ya=280 under the native type-4 path while selecting different Xd/Xw/Ww values.",
+        "The independent MiSTer reference corroborates Xd as a display position but does not provide a directly reusable Xo presentation equation."
+      ],
+      "contradicting_evidence": [
+        "The available 16-page MCD251 Technical Summary supplies register names but not the full origin, active-area, and phase equations.",
+        "No synchronized real-hardware register and output trace is available for either counterexample."
+      ],
+      "falsifying_test": "Obtain the full MCD251 timing definition or a real-hardware trace that demonstrates Xo/Xa are irrelevant to the White Book placement difference, or implement the documented equation and show that it cannot preserve both Accused and Addams UK while correcting the USA edge.",
+      "citations": [
+        "Motorola MCD251 Technical Summary, video-control register map and C2PIX description",
+        "Philips TN 098, mv_window and mv_pos",
+        "Philips Interactive Engineer 96/05, Green Book and White Book pixel-clock behavior"
+      ]
     }
   ],
-  "experiments": [],
+  "experiments": [
+    {
+      "id": "enable-native-white-book-path",
+      "context": {
+        "base_revision": "04cc43b14a054549d42c478e1f21ef4269afbf05",
+        "dirty_diff_hash": "4b42cd3cb22b322476c02c1b3cc5cb4c75116b455952508fee9162edbca3b144",
+        "component_fingerprints": {},
+        "dependencies": {},
+        "disc_fingerprint": "dd9adb80a89378d97acfecaf50ce20d0f769c442",
+        "model": "cdi220b",
+        "video_standard": "ntsc",
+        "dvc": "vmpega",
+        "scenario": "150M instructions; scripted PLAY click at 70M for 40M instructions",
+        "timing": "native 75-sector transport and SCC68070 timing"
+      },
+      "hypothesis_id": "white-book-type4-path",
+      "strategy": "Pass DiscImage CD-ROM XA Bridge classification through Machine to the SLAVE and compare otherwise identical bounded runs before and after the native firmware enables $E01000.",
+      "symbols": [
+        "cdi_core::Machine::set_disc",
+        "cdi_core::Machine::change_disc",
+        "cdi_core::SlaveHle::set_cd_rom_xa_bridge",
+        "cdi_core::ExternalVideo::pixel"
+      ],
+      "assumptions": [
+        "The LBA-16 CD-ROM XA Bridge signature is the hardware disc-type authority.",
+        "The native VMPEG vcd module is the correct owner of White Book clock selection.",
+        "No frontend crop or title-name behavior should participate."
+      ],
+      "expected": "The exact Addams USA run changes from type 2 / converter off / undersized external video to type 4 / converter on / full-width external video.",
+      "actual": "The baseline programs frame 352x240, display X=0, window X=4 W=348 with the converter off, predicting 696 framebuffer pixels. The candidate reports type 4, converter on, retains the same guest window, and the captured 768x480 raster no longer has the previous one-sided edge. Both runs have zero demux, video, audio, and stream errors. Manual testing confirms the USA edge is gone, Accused remains acceptable, and Addams UK shifts right. The USA menu screenshot is 720x539 because Typical CRT cropped the unchanged 768x480 hardware raster.",
+      "outcome": "regression-causing",
+      "regressions": [
+        "Addams Family Values UK warning content moves from a raw center near x=382 under type 2 to x=421 under type 4.",
+        "The candidate cannot be integrated until MCD251 Xo/Xa sample-origin behavior is implemented without a title or region branch."
+      ],
+      "improvements": [
+        "Addams Family Values USA external video fills the captured hardware raster.",
+        "The machine now follows the media-derived disc type and native VMPEG firmware path instead of suppressing it."
+      ],
+      "reverted": true,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "CD-ROM XA Bridge/White Book media on the VMPEG cartridge",
+          "The current MCD251 13.5 MHz sample-rate conversion model"
+        ],
+        "invalidated_by": [
+          "Changes to SLAVE disc typing, VMPEG firmware execution, MCD251 origin, or external-video sampling"
+        ],
+        "repeat_when": [
+          "A USA VCD still shows the right-edge column on the candidate GUI build",
+          "MCD251 X-offset/sample-origin behavior is implemented or corrected",
+          "A PAL VCD guard shows new placement or corruption"
+        ]
+      }
+    },
+    {
+      "id": "compare-pal-type4-origin-registers",
+      "context": {
+        "base_revision": "04cc43b14a054549d42c478e1f21ef4269afbf05",
+        "dirty_diff_hash": "b80287476d65fd886dff4dd680480557a6f2817bfc08b5c6a6df81cd9dac8e53",
+        "component_fingerprints": {
+          "accused_run": "tests-data/local/diagnostics/accused-vcd-origin-current/runs/run-0003/evidence.json",
+          "addams_uk_run": "tests-data/local/diagnostics/addams-uk-vcd-origin/runs/run-0004/evidence.json"
+        },
+        "dependencies": {
+          "mcd251_reference": "local ICDIA mcd251ts.pdf technical summary",
+          "type4_candidate": "temporary and reverted"
+        },
+        "disc_fingerprint": "Accused Netherlands and Addams Family Values UK local diagnostic media",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega",
+        "scenario": "bounded native type-4 runs through each warning/intro sequence",
+        "timing": "native 75-sector transport and SCC68070 timing"
+      },
+      "hypothesis_id": "mcd251-sample-origin",
+      "strategy": "Expose Yo/Xo/Ya/Xa as read-only diagnostics, temporarily restore native type 4, and compare two PAL counterexamples without applying any new positioning equation.",
+      "symbols": [
+        "cdi_core::DvcStats",
+        "cdi_core::Vmpeg::stats",
+        "cdi_core::ExternalVideo::pixel"
+      ],
+      "assumptions": [
+        "Firmware-programmed register values are stronger evidence than content bounds for distinguishing MCD251 control paths.",
+        "A generalized origin equation must explain both PAL guards without a title or region branch."
+      ],
+      "expected": "If the placement difference is caused by a different MCD251 sample-origin program, the two titles should expose distinguishable Xo/Xa state.",
+      "actual": "Both runs program Xo=65, Yo=26, Xa=384, Ya=280, use a 352x288 decoded frame, enable the 13.5 MHz clock, and report zero decoder or stream errors. Accused selects Xd=0, Xw=7, Ww=345; Addams UK selects Xd=16, Xw=0, Ww=352. The available evidence therefore distinguishes guest-authored display/window commands but not a title-independent Xo correction.",
+      "outcome": "blocked-by-prerequisite",
+      "regressions": [],
+      "improvements": [
+        "MCD251 origin and active-area registers are now available in deterministic diagnostic snapshots.",
+        "The counterexample prevents treating Xo as a decoded-image crop or an arbitrary screen shift."
+      ],
+      "reverted": true,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "The current VMPEG firmware register path and 13.5 MHz converter model",
+          "Accused Netherlands and Addams Family Values UK under native type 4"
+        ],
+        "invalidated_by": [
+          "A correction to MCD251 register writes, byte lanes, or diagnostic capture",
+          "A full MCD251 timing specification that assigns different units or latching behavior"
+        ],
+        "repeat_when": [
+          "The full MCD251/D timing description is obtained",
+          "A real CD-i 220 plus VMPEG register/output trace becomes available",
+          "MCD251 clock phase or active-area timing is implemented from primary evidence"
+        ]
+      }
+    }
+  ],
   "manual_verification": [
     {
       "result": "reproduced",
@@ -56,6 +213,16 @@
       "result": "reproduced",
       "revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
       "notes": "Forrest Gump USA reproduces the right-edge black column during MPEG playback while its native bottom Video CD control panel is correctly placed. Addams Family Values USA also still shows the previously reported column."
+    },
+    {
+      "result": "regression-causing",
+      "revision": "04cc43b+dirty:76e5d757fbe563327e163232066ce730a91992809c2d637a36738dc2c84d1468",
+      "notes": "Media-derived type 4 removes the Addams USA right edge. Accused Netherlands shows no new surprise, but Addams UK warning content is shifted right. The USA menu capture is 720x539 because the existing Typical CRT presentation aperture removes 24 source pixels per side; the raw raster remains 768x480."
+    },
+    {
+      "result": "reproduced",
+      "revision": "520133942+dirty:a5d6cb19a338f68b171c107085263ed37b1703ae87519e0fed6213b0127f5fde",
+      "notes": "Pete Townshend Live USA Disc 1 (fingerprint b640c77e36148e07b141b24e627aeced84c598e4) clearly shows the persistent black column at the right edge during concert footage. Its earlier black-background screens also appear shifted left, but those authored boundaries are not yet conclusive. The report was made after both native-CUE and store-only-ZIP loading paths passed, so archive extraction is not implicated."
     }
   ]
 }

@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "id": "laser-lords-europe-vertical-letterboxing",
+  "title": "Laser Lords (Europe)",
+  "symptom": "Gameplay and menu scenes appear vertically compressed with prominent horizontal letterboxing compared with their expected 4:3 presentation",
+  "expected": "The title uses the hardware-selected PAL raster and compatibility mode without unintended vertical compression or frontend-added letterboxing",
+  "status": "reproduced",
+  "reported_revision": "52013394225572beb9346dbefea136cf8f92596c",
+  "last_reproduced_revision": "52013394225572beb9346dbefea136cf8f92596c",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "mcd212",
+    "frontend",
+    "rtf"
+  ],
+  "disc_fingerprint": "95d94aab4e7616b5f454689d1f9e06f7c4ebb0bc",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "none",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "authored-pal-compatibility-picture",
+      "hardware_explanation": "Laser Lords intentionally selects the PAL 625-line compatibility picture, yielding a centered 720x480 active image within the larger PAL raster. The visible horizontal bars would therefore be authored hardware output rather than frontend letterboxing.",
+      "supporting_evidence": [
+        "The MCD212 specification defines a 625 compatibility mode with a centered 720x480 picture and vertical masking.",
+        "Both screenshots show coherent complete scenes rather than damaged line decoding.",
+        "The disc contains separate PAL and NTSC bumper assets, demonstrating deliberate standard-specific authoring."
+      ],
+      "contradicting_evidence": [
+        "The user reports that the picture also appears vertically squashed, which may indicate incorrect presentation rather than intentional masking.",
+        "No real-hardware Laser Lords Europe capture or live CF/ST trace has yet confirmed the selected mode."
+      ],
+      "falsifying_test": "Trace CF, ST, FD, SM, field parity, DCA start lines, and core DisplayGeometry during both submitted scenes. A standard 625 mode request with no compatibility mask would falsify the authored-compatibility explanation.",
+      "citations": [
+        "MCD212 Technical Specification tables 5-1 through 5-7 and section 5.8",
+        "Green Book V.2.2, V.2.3, and V.4.8",
+        "docs/display-geometry.md"
+      ]
+    },
+    {
+      "id": "mcd212-pal-mode-or-mask-decoding",
+      "hardware_explanation": "The emulator misinterprets the title's MCD212 CF/ST/FD/SM state or applies PAL compatibility masking to a standard-mode picture, reducing the active vertical extent and producing unintended bars.",
+      "supporting_evidence": [
+        "The reported distortion affects unrelated menu and gameplay scenes consistently.",
+        "Historical PAL/NTSC framing reports identify MCD212 mode interpretation as an unresolved shared dependency."
+      ],
+      "contradicting_evidence": [
+        "Existing table-driven DisplayGeometry tests cover the documented PAL standard and compatibility apertures.",
+        "The screenshots may be exactly consistent with intentional PAL compatibility output."
+      ],
+      "falsifying_test": "Record the guest-programmed MCD212 mode and compare the resulting geometry and masked-line fetch behavior with the specification tables. If the traced mode, mask, and aperture match the documented 625 compatibility case, this emulator-decoding hypothesis is falsified.",
+      "citations": [
+        "data/compatibility/incidents/player-menu-pal-ntsc-sizing.json",
+        "data/compatibility/incidents/legacy-display-framing-concerns.json",
+        "docs/display-geometry.md"
+      ]
+    },
+    {
+      "id": "frontend-pal-pixel-aspect",
+      "hardware_explanation": "The frontend applies the wrong PAL pixel-aspect or treats a 480-line compatibility picture as though its content fills all 560 picture rows, making correctly masked guest output look vertically compressed.",
+      "supporting_evidence": [
+        "The user perceives both letterboxing and vertical squashing in the final saved presentation."
+      ],
+      "contradicting_evidence": [
+        "Screenshots, window aspect, and mouse mapping share the same core-provided DisplayGeometry.",
+        "Other PAL titles have been manually reported as correctly proportioned on the same build."
+      ],
+      "falsifying_test": "Compare Full signal and Typical CRT presentation from one captured hardware raster, then verify the 4:3 pixel-aspect calculation against the traced geometry. Identical content proportions before and after frontend aperture selection falsify a frontend-only cause.",
+      "citations": [
+        "docs/display-geometry.md",
+        "Philips TN 093 image-format and safe-area guidance"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported-current",
+      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:a5d6cb19a338f68b171c107085263ed37b1703ae87519e0fed6213b0127f5fde",
+      "notes": "User supplied two Laser Lords Europe screenshots showing prominent horizontal bars and perceived vertical compression in distinct menu/gameplay scenes. The report is current, but correctness versus authored PAL compatibility mode remains unclassified."
+    },
+    {
+      "result": "separated-from-bottom-row-artifact",
+      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:a5d6cb19a338f68b171c107085263ed37b1703ae87519e0fed6213b0127f5fde",
+      "notes": "This incident tracks vertical geometry only. Laser Lords USA and Kether bottom-row corruption remain separate display-provenance incidents."
+    }
+  ]
+}

@@ -71,6 +71,43 @@ The inventory records OS-9 modules, root-level VCD `CDI` content, RTF/VCD
 sector classifications, and validated MPEG sequence metadata without
 extracting media.
 
+## Automated compatibility suites
+
+Use `cdi-cli compatibility` for broad, repeatable local-media passes before
+manual testing. A suite manifest stays under ignored local storage because it
+contains firmware, disc, and optional NVRAM paths. The tracked
+`data/compatibility/headless-suite.example.json` documents schema version 1.
+
+```sh
+cp data/compatibility/headless-suite.example.json \
+  tests-data/local/diagnostics/compatibility/smoke.json
+# Edit the copied paths, bounds, scripted inputs, checkpoints, and assertions.
+cargo run -p cdi-cli --release -- compatibility run \
+  tests-data/local/diagnostics/compatibility/smoke.json
+```
+
+Each case runs in a separate process with both an instruction bound and a
+wall-clock timeout. Its ignored result directory contains stdout/stderr, final
+PNG, 44.1 kHz stereo PCM WAV, deterministic diagnostic evidence, frame/audio
+hashes, and a suite summary. A process panic/non-zero exit or timeout is an
+unconditional failure. Frame, audio, unique-raster, static-raster, and DVC
+error limits are explicit per-case assertions: a static menu is not called a
+stall unless the case opts into a maximum identical-raster run.
+
+Review the artifacts and checkpoint manually. Only then promote passing cases:
+
+```sh
+cargo run -p cdi-cli -- compatibility promote \
+  tests-data/local/diagnostics/compatibility/SUITE/RUN/suite-result.json \
+  --accepted
+```
+
+Promotion strips all local paths and updates
+`data/compatibility/title-matrix.json` by exact disc fingerprint, model,
+standard, and DVC configuration. Automated process success alone never claims
+that a title reached gameplay. The manifest's checkpoint becomes accepted
+compatibility evidence only through the explicit `--accepted` step.
+
 ## Smallest distinguishing experiment
 
 Model the disc/display path explicitly:

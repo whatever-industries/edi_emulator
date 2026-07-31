@@ -350,6 +350,9 @@ struct Prefs {
     pad_analog_enabled: bool,
     pad_button1: gilrs::Button,
     pad_button2: gilrs::Button,
+    // This key intentionally differs from the short-lived development-only
+    // `host_menu_binding` preference so Start becomes the new default once.
+    host_menu_shortcut: HostMenuBinding,
     kb_speed: f32,
     kb_up: egui::Key,
     kb_down: egui::Key,
@@ -377,6 +380,7 @@ impl Default for Prefs {
             pad_analog_enabled: true,
             pad_button1: gilrs::Button::South,
             pad_button2: gilrs::Button::East,
+            host_menu_shortcut: HostMenuBinding::default(),
             kb_speed: 6.0,
             kb_up: egui::Key::ArrowUp,
             kb_down: egui::Key::ArrowDown,
@@ -401,6 +405,51 @@ enum SettingsTab {
     System,
     Input,
     Libraries,
+}
+
+/// Controller shortcuts owned by the host frontend, never by the emulated
+/// two-button CD-i pointing device.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+enum HostMenuBinding {
+    #[default]
+    Start,
+    GuideOrBumpers,
+    Guide,
+    Bumpers,
+    RightStick,
+}
+
+impl HostMenuBinding {
+    const ALL: [Self; 5] = [
+        Self::Start,
+        Self::GuideOrBumpers,
+        Self::Guide,
+        Self::Bumpers,
+        Self::RightStick,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Start => "Start",
+            Self::GuideOrBumpers => "Guide / Home or L1 + R1",
+            Self::Guide => "Guide / Home",
+            Self::Bumpers => "L1 + R1",
+            Self::RightStick => "Right stick click",
+        }
+    }
+
+    fn matches_button(self, button: gilrs::Button) -> bool {
+        match self {
+            Self::Start => button == gilrs::Button::Start,
+            Self::GuideOrBumpers | Self::Guide => button == gilrs::Button::Mode,
+            Self::RightStick => button == gilrs::Button::RightThumb,
+            Self::Bumpers => false,
+        }
+    }
+
+    fn uses_bumper_chord(self) -> bool {
+        matches!(self, Self::GuideOrBumpers | Self::Bumpers)
+    }
 }
 
 /// The keyboard binding slots, in UI order.
@@ -447,6 +496,31 @@ fn button_name(button: gilrs::Button) -> &'static str {
         B::DPadRight => "D-pad right",
         B::Unknown => "Unknown",
     }
+}
+
+fn is_quick_menu_button(binding: HostMenuBinding, button: gilrs::Button) -> bool {
+    binding.matches_button(button)
+}
+
+fn quick_menu_chord_pressed(
+    binding: HostMenuBinding,
+    chord_down: bool,
+    chord_was_down: bool,
+) -> bool {
+    binding.uses_bumper_chord() && chord_down && !chord_was_down
+}
+
+fn quick_menu_consumes_controller_poll(
+    quick_menu_was_open: bool,
+    menu_pressed: bool,
+    show_library: bool,
+) -> bool {
+    quick_menu_was_open || (menu_pressed && !show_library)
+}
+
+fn suppress_guest_buttons_until_release(physical: u8, suppressed: u8) -> (u8, u8) {
+    let still_suppressed = suppressed & physical;
+    (physical & !still_suppressed, still_suppressed)
 }
 
 /// Select one controller movement source for this poll. A held D-pad takes
@@ -716,6 +790,8 @@ struct Shared {
     auto_region: AtomicBool,
     /// Host-side turbo: run the emulation unthrottled while held.
     fast_forward: AtomicBool,
+    /// Freeze emulated device time while the host quick menu is open.
+    quick_menu_paused: AtomicBool,
     muted: Arc<AtomicBool>,
     /// Silence and drain host audio while the Library covers the player,
     /// independently of the user's persistent mute preference.
@@ -1010,6 +1086,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         pal: AtomicBool::new(model.video == cdi_core::VideoStandard::Pal),
         auto_region: AtomicBool::new(true),
         fast_forward: AtomicBool::new(false),
+        quick_menu_paused: AtomicBool::new(false),
         muted: Arc::new(AtomicBool::new(false)),
         audio_suppressed: Arc::new(AtomicBool::new(false)),
         running: AtomicBool::new(true),
@@ -1092,10 +1169,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn display_name(path: &std::path::Path) -> String {
-    path.file_name().map_or_else(
-        || path.display().to_string(),
-        |name| name.to_string_lossy().into(),
-    )
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("cue"))
+    {
+        path.file_stem().map_or_else(
+            || path.display().to_string(),
+            |stem| stem.to_string_lossy().into(),
+        )
+    } else {
+        path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into(),
+        )
+    }
 }
 
 fn start_audio(
@@ -1648,6 +1735,19 @@ fn emu_loop(
         // sector files and for system-ROM rebuilds which reopen the CUE.
         let _ = &disc_archive_guard;
 
+        if shared.quick_menu_paused.load(Ordering::Relaxed) {
+            // Host audio continues consuming its ring while suppressed.
+            // Discard newly queued core audio as well so closing the menu
+            // cannot replay a stale tail or make the scheduler catch up.
+            machine.take_audio();
+            *shared.fps.lock().unwrap() = 0.0;
+            fps_window_start = Instant::now();
+            fps_frames = 0;
+            next_frame_deadline = Instant::now();
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+
         // Apply the latest pointer state.
         {
             let input = {
@@ -1903,6 +2003,13 @@ struct App {
     pad_analog_enabled: bool,
     pad_button1: gilrs::Button,
     pad_button2: gilrs::Button,
+    host_menu_binding: HostMenuBinding,
+    /// Previous state of the host L1+R1 chord, used to generate one menu
+    /// toggle per deliberate press instead of repeating while held.
+    host_menu_chord_down: bool,
+    /// Guest buttons used to operate the host menu stay suppressed until
+    /// their physical release, including across later controller polls.
+    suppressed_pad_buttons: u8,
     /// CD-i button (0 or 1) awaiting a controller press to rebind.
     pad_rebind: Option<u8>,
     kb_speed: f32,
@@ -2007,6 +2114,9 @@ impl App {
             pad_analog_enabled: prefs.pad_analog_enabled,
             pad_button1: prefs.pad_button1,
             pad_button2: prefs.pad_button2,
+            host_menu_binding: prefs.host_menu_shortcut,
+            host_menu_chord_down: false,
+            suppressed_pad_buttons: 0,
             pad_rebind: None,
             kb_speed: prefs.kb_speed,
             kb_keys: [
@@ -2136,6 +2246,7 @@ impl App {
             let pad = ((ui.available_width() - self.library.strip_width()) * 0.5).max(0.0);
             let mut strip_w = self.library.strip_width();
             let mut open_clicked = false;
+            let mut refresh_clicked = false;
             let squircle = || {
                 egui::Frame::new()
                     .fill(container_fill)
@@ -2163,6 +2274,18 @@ impl App {
                     }
                 });
                 ui.add_space(GROUP_GAP);
+                let refresh = squircle().show(ui, |ui| {
+                    let response = ui
+                        .add_sized(
+                            egui::vec2(23.0, 23.0),
+                            egui::Button::new(egui::RichText::new("↻").size(17.0)).frame(false),
+                        )
+                        .on_hover_text("Refresh libraries");
+                    if response.clicked() {
+                        refresh_clicked = true;
+                    }
+                });
+                ui.add_space(GROUP_GAP);
                 let open = squircle().show(ui, |ui| {
                     if ui
                         .selectable_label(
@@ -2175,10 +2298,17 @@ impl App {
                         open_clicked = true;
                     }
                 });
-                strip_w = tabs.response.rect.width() + GROUP_GAP + open.response.rect.width();
+                strip_w = tabs.response.rect.width()
+                    + GROUP_GAP
+                    + refresh.response.rect.width()
+                    + GROUP_GAP
+                    + open.response.rect.width();
             });
             self.library.set_strip_width(strip_w);
             ui.add_space(10.0);
+            if refresh_clicked {
+                self.library.refresh();
+            }
             if open_clicked {
                 needs_open = true;
             }
@@ -2293,9 +2423,39 @@ impl App {
 
     fn enter_library_from_quick_menu(&mut self) {
         self.quick_menu_open = false;
+        self.shared
+            .quick_menu_paused
+            .store(false, Ordering::Relaxed);
         self.show_library = true;
         self.shared.audio_suppressed.store(true, Ordering::Relaxed);
         self.library.enter();
+    }
+
+    fn open_quick_menu(&mut self, ctx: &egui::Context, menu_dpad_y: i8) {
+        self.quick_menu_open = true;
+        self.quick_menu_selection = 0;
+        self.quick_menu_dpad_y = menu_dpad_y;
+        self.shared.quick_menu_paused.store(true, Ordering::Relaxed);
+        self.shared.audio_suppressed.store(true, Ordering::Relaxed);
+        {
+            let mut input = self.shared.input.lock().unwrap();
+            input.buttons = 0;
+            input.dx = 0;
+            input.dy = 0;
+        }
+        if self.mouse_captured {
+            self.set_mouse_capture(ctx, false);
+        }
+    }
+
+    fn close_quick_menu(&mut self) {
+        self.quick_menu_open = false;
+        self.shared
+            .quick_menu_paused
+            .store(false, Ordering::Relaxed);
+        self.shared
+            .audio_suppressed
+            .store(self.show_library, Ordering::Relaxed);
     }
 
     fn paint_quick_menu(&mut self, ctx: &egui::Context) {
@@ -2343,9 +2503,12 @@ impl App {
                             }
                             ui.add_space(4.0);
                             ui.label(
-                                egui::RichText::new("D-pad · A select · B or Start close")
-                                    .size(11.0)
-                                    .color(UI_MUTED_TEXT),
+                                egui::RichText::new(format!(
+                                    "D-pad · A select · B or {} close",
+                                    self.host_menu_binding.label()
+                                ))
+                                .size(11.0)
+                                .color(UI_MUTED_TEXT),
                             );
                         });
                     });
@@ -2353,7 +2516,7 @@ impl App {
 
         match chosen {
             Some(0) => self.enter_library_from_quick_menu(),
-            Some(1) => self.quick_menu_open = false,
+            Some(1) => self.close_quick_menu(),
             _ => {}
         }
     }
@@ -3082,6 +3245,24 @@ impl App {
                             }
                         });
                     }
+                    ui.horizontal(|ui| {
+                        ui.label("E-Di menu:");
+                        egui::ComboBox::from_id_salt("host_menu_binding")
+                            .selected_text(self.host_menu_binding.label())
+                            .show_ui(ui, |ui| {
+                                for binding in HostMenuBinding::ALL {
+                                    ui.selectable_value(
+                                        &mut self.host_menu_binding,
+                                        binding,
+                                        binding.label(),
+                                    );
+                                }
+                            });
+                    })
+                    .response
+                    .on_hover_text(
+                        "Host-only shortcut. Start and Select are not used by this menu.",
+                    );
                     if ui.button("Reset controller defaults").clicked() {
                         let defaults = Prefs::default();
                         self.pad_speed = defaults.pad_speed;
@@ -3089,6 +3270,9 @@ impl App {
                         self.pad_analog_enabled = defaults.pad_analog_enabled;
                         self.pad_button1 = defaults.pad_button1;
                         self.pad_button2 = defaults.pad_button2;
+                        self.host_menu_binding = defaults.host_menu_shortcut;
+                        self.host_menu_chord_down = false;
+                        self.suppressed_pad_buttons = 0;
                         self.pad_rebind = None;
                     }
                 }
@@ -3222,17 +3406,23 @@ impl App {
     /// left stick and d-pad move, two configurable buttons map to CD-i
     /// buttons 1/2.
     fn poll_gamepad(&mut self, ctx: &egui::Context) {
+        let host_menu_binding = self.host_menu_binding;
         let Some(gilrs) = self.gamepad.as_mut() else {
             return;
         };
         // Drain the event queue so cached gamepad state stays current; a
         // pending rebind captures the first button press seen here.
-        let mut start_pressed = false;
+        // Philips TN 73.2 defines Pause on the optional `/pck` peripheral,
+        // separate from the base two-button pointer. Until `/pck` is
+        // implemented, Start may be assigned to this configurable host
+        // shortcut and must never be emitted as a third pointer button.
+        let host_buttons_enabled = self.pad_rebind.is_none();
+        let mut menu_pressed = false;
         let mut activate_pressed = false;
         let mut back_pressed = false;
         while let Some(event) = gilrs.next_event() {
             if let gilrs::EventType::ButtonPressed(button, _) = event.event {
-                start_pressed |= button == gilrs::Button::Start;
+                menu_pressed |= is_quick_menu_button(host_menu_binding, button);
                 activate_pressed |= button == self.pad_button1 || button == gilrs::Button::South;
                 back_pressed |= button == self.pad_button2 || button == gilrs::Button::East;
                 match self.pad_rebind {
@@ -3248,12 +3438,12 @@ impl App {
                 }
             }
         }
-
         let deadzone = self.pad_deadzone;
         let mut menu_dpad_y = 0;
         let mut stick_deflection = egui::Vec2::ZERO;
         let mut dpad_deflection = egui::Vec2::ZERO;
         let mut dpad_active = false;
+        let mut bumper_chord_down = false;
         let mut buttons = 0u8;
         for (_id, pad) in gilrs.gamepads() {
             if menu_dpad_y == 0 {
@@ -3281,6 +3471,8 @@ impl App {
             );
             dpad_deflection += dpad;
             dpad_active |= active;
+            bumper_chord_down |= pad.is_pressed(gilrs::Button::LeftTrigger)
+                && pad.is_pressed(gilrs::Button::RightTrigger);
             if pad.is_pressed(self.pad_button1) {
                 buttons |= 1;
             }
@@ -3288,13 +3480,29 @@ impl App {
                 buttons |= 2;
             }
         }
+        let chord_pressed = quick_menu_chord_pressed(
+            host_menu_binding,
+            bumper_chord_down,
+            self.host_menu_chord_down,
+        );
+        self.host_menu_chord_down = bumper_chord_down;
+        menu_pressed |= chord_pressed;
+        if !host_buttons_enabled {
+            menu_pressed = false;
+        }
 
-        if start_pressed && !self.show_library {
-            self.quick_menu_open = !self.quick_menu_open;
-            self.quick_menu_selection = 0;
-            self.quick_menu_dpad_y = menu_dpad_y;
-            if self.quick_menu_open && self.mouse_captured {
-                self.set_mouse_capture(ctx, false);
+        let quick_menu_was_open = self.quick_menu_open;
+        let host_menu_consumed_input = quick_menu_consumes_controller_poll(
+            quick_menu_was_open,
+            menu_pressed,
+            self.show_library,
+        );
+
+        if menu_pressed && !self.show_library {
+            if self.quick_menu_open {
+                self.close_quick_menu();
+            } else {
+                self.open_quick_menu(ctx, menu_dpad_y);
             }
         } else if self.quick_menu_open {
             if menu_dpad_y != self.quick_menu_dpad_y {
@@ -3304,23 +3512,27 @@ impl App {
                 self.quick_menu_dpad_y = menu_dpad_y;
             }
             if back_pressed {
-                self.quick_menu_open = false;
+                self.close_quick_menu();
             } else if activate_pressed {
                 if self.quick_menu_selection == 0 {
                     self.enter_library_from_quick_menu();
                 } else {
-                    self.quick_menu_open = false;
+                    self.close_quick_menu();
                 }
             }
         }
 
-        if self.quick_menu_open {
+        if host_menu_consumed_input || self.quick_menu_open {
+            self.suppressed_pad_buttons |= buttons;
             self.pad_buttons = 0;
             self.pad_frac = egui::Vec2::ZERO;
             let mut input = self.shared.input.lock().unwrap();
             input.buttons = 0;
             return;
         }
+
+        (buttons, self.suppressed_pad_buttons) =
+            suppress_guest_buttons_until_release(buttons, self.suppressed_pad_buttons);
 
         // Don't feed the press being captured for a rebind into the game.
         if self.pad_rebind.is_some() {
@@ -3380,6 +3592,7 @@ impl eframe::App for App {
             pad_analog_enabled: self.pad_analog_enabled,
             pad_button1: self.pad_button1,
             pad_button2: self.pad_button2,
+            host_menu_shortcut: self.host_menu_binding,
             kb_speed: self.kb_speed,
             kb_up: self.kb_keys[0],
             kb_down: self.kb_keys[1],
@@ -4107,10 +4320,12 @@ mod tests {
     use super::{
         backup_nvram, configure_ui, configured_nvram_path, controller_deflection,
         controller_dpad_deflection, controller_stick_deflection, disc_load_action,
-        display_aperture, fill_audio, fit_aspect, library_dpad_direction, library_pad_action,
-        load_nvram, parental_passcode, pointer_mapping, presentation_aspect, region_is_pal,
-        screenshot_image, write_nvram, DiscLoadAction, DiscOverride, DisplayArea, LibraryPadAction,
-        SharedFrame, UI_SELECTED_TEXT,
+        display_aperture, display_name, fill_audio, fit_aspect, is_quick_menu_button,
+        library_dpad_direction, library_pad_action, load_nvram, parental_passcode, pointer_mapping,
+        presentation_aspect, quick_menu_chord_pressed, quick_menu_consumes_controller_poll,
+        region_is_pal, screenshot_image, suppress_guest_buttons_until_release, write_nvram,
+        DiscLoadAction, DiscOverride, DisplayArea, HostMenuBinding, LibraryPadAction, SharedFrame,
+        UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
 
@@ -4163,6 +4378,77 @@ mod tests {
         fill_audio(&mut output, 2, &mut consumer, true, |sample| sample);
         assert_eq!(output, [0; 4]);
         assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn host_menu_defaults_to_start_without_using_select() {
+        assert_eq!(HostMenuBinding::default(), HostMenuBinding::Start);
+        assert!(is_quick_menu_button(
+            HostMenuBinding::Start,
+            gilrs::Button::Start
+        ));
+        assert!(!is_quick_menu_button(
+            HostMenuBinding::Start,
+            gilrs::Button::Select
+        ));
+    }
+
+    #[test]
+    fn host_menu_bumper_chord_is_edge_triggered_and_configurable() {
+        assert!(quick_menu_chord_pressed(
+            HostMenuBinding::GuideOrBumpers,
+            true,
+            false
+        ));
+        assert!(!quick_menu_chord_pressed(
+            HostMenuBinding::GuideOrBumpers,
+            true,
+            true
+        ));
+        assert!(!quick_menu_chord_pressed(
+            HostMenuBinding::Guide,
+            true,
+            false
+        ));
+    }
+
+    #[test]
+    fn quick_menu_close_buttons_are_consumed_before_guest_input() {
+        assert!(quick_menu_consumes_controller_poll(true, false, false));
+        assert!(quick_menu_consumes_controller_poll(false, true, false));
+        assert!(!quick_menu_consumes_controller_poll(false, false, false));
+        assert!(!quick_menu_consumes_controller_poll(false, true, true));
+    }
+
+    #[test]
+    fn host_menu_guest_button_stays_suppressed_until_physical_release() {
+        let (effective, suppressed) = suppress_guest_buttons_until_release(0b10, 0b10);
+        assert_eq!(effective, 0);
+        assert_eq!(suppressed, 0b10);
+
+        let (effective, suppressed) = suppress_guest_buttons_until_release(0, suppressed);
+        assert_eq!(effective, 0);
+        assert_eq!(suppressed, 0);
+
+        let (effective, suppressed) = suppress_guest_buttons_until_release(0b10, suppressed);
+        assert_eq!(effective, 0b10);
+        assert_eq!(suppressed, 0);
+    }
+
+    #[test]
+    fn cue_extension_is_hidden_from_the_window_title() {
+        assert_eq!(
+            display_name(std::path::Path::new("/discs/Laser Lords (USA).cue")),
+            "Laser Lords (USA)"
+        );
+        assert_eq!(
+            display_name(std::path::Path::new("/discs/Laser Lords (USA).CUE")),
+            "Laser Lords (USA)"
+        );
+        assert_eq!(
+            display_name(std::path::Path::new("/discs/archive.zip")),
+            "archive.zip"
+        );
     }
 
     #[test]

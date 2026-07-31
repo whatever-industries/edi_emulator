@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "id": "kether-bottom-display-line-artifacts",
+  "title": "Kether (Europe) (En,Fr) (Rev 1)",
+  "symptom": "Animated scenes expose a thin multicolored artifact row along the bottom edge; its pattern changes with the animation above",
+  "expected": "The displayed active picture ends at the authored lower boundary without exposing content-correlated decoded or drawmap data from an extra row",
+  "status": "reproduced",
+  "reported_revision": "52013394225572beb9346dbefea136cf8f92596c",
+  "last_reproduced_revision": "52013394225572beb9346dbefea136cf8f92596c",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "cdic",
+    "rtf",
+    "mcd212",
+    "frontend"
+  ],
+  "disc_fingerprint": "ff7f60ad6203c1e197410896d05197881dcbc43b",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "none",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "shared-rtf-final-row-transfer",
+      "hardware_explanation": "The CDIC/CDFM-to-drawmap path copies or retains one unintended final row during real-time video updates. The row then changes with the current source image even though Kether and Laser Lords use different Green Book video codings.",
+      "supporting_evidence": [
+        "Kether's bottom-row pattern changes with the animation displayed immediately above it.",
+        "The disc inventory identifies CLUT8, RL7, and DYUV real-time video with XA audio and no MPEG/DVC requirement.",
+        "Laser Lords independently shows content-correlated bottom-row leakage while using QHY, so the shared failure is downstream of codec-specific reconstruction or in common RTF destination handling."
+      ],
+      "contradicting_evidence": [
+        "No PCL destination or drawmap capture yet establishes that the artifact exists before MCD212 fetch.",
+        "The exact Kether real-time file and coding active in each submitted screenshot have not yet been traced."
+      ],
+      "falsifying_test": "Capture the delivered real-time record, PCL destination bounds, and final two drawmap rows for a stable affected Kether frame. If the drawmap is clean while the individual MCD212 plane contains the artifact, common RTF transfer/final-row handling is not causal.",
+      "citations": [
+        "Green Book Release 2 real-time records, CDFM/PCL transfer, and DYUV/RL7/CLUT coding",
+        "data/compatibility/incidents/laser-lords-bottom-video-line-artifacts.json",
+        "docs/debugging-workflow.md display-provenance stages"
+      ]
+    },
+    {
+      "id": "mcd212-lower-boundary-extra-fetch",
+      "hardware_explanation": "The MCD212 display-file or DCA lower boundary fetches or presents one row beyond the title-programmed drawmap, exposing content-correlated data that normally lies outside the active picture.",
+      "supporting_evidence": [
+        "Both screenshots confine the artifact to a thin line at the physical bottom of the presented raster.",
+        "The same symptom occurs across PAL Kether and NTSC Laser Lords and across DYUV/RL7/CLUT8 versus QHY source coding."
+      ],
+      "contradicting_evidence": [
+        "If the unintended row is already present in the drawmap, MCD212 fetch and composition may be behaving correctly."
+      ],
+      "falsifying_test": "Compare the last two completed drawmap rows, individual decoded MCD212 planes, composed hardware raster, and frontend image for the same frame. An artifact already present in the drawmap falsifies an MCD212-only explanation.",
+      "citations": [
+        "MCD212 Technical Specification display-file, DCA, and vertical-boundary behavior",
+        "docs/display-geometry.md",
+        "docs/debugging-workflow.md display-provenance stages"
+      ]
+    },
+    {
+      "id": "frontend-exposes-nondisplay-line",
+      "hardware_explanation": "The frontend includes one lower hardware-raster line that should be outside the core-provided active aperture.",
+      "supporting_evidence": [
+        "The artifact is located at the final presented line in both submitted screenshots."
+      ],
+      "contradicting_evidence": [
+        "Rendering, screenshots, aspect, and mouse mapping already consume the same core-provided DisplayGeometry.",
+        "The line's pixels track guest animation, indicating real upstream data rather than a static host border."
+      ],
+      "falsifying_test": "Compare the composed hardware raster and core DisplayGeometry crop with the saved PNG. If the selected aperture includes exactly the core-declared rows and the artifact exists inside the composed raster, the frontend is not causal.",
+      "citations": [
+        "docs/display-geometry.md",
+        "docs/debugging-workflow.md display-provenance stages"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported-current",
+      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
+      "notes": "User manually reproduced a thin content-correlated bottom artifact line in two Kether Europe scenes. The pattern moves or changes with animation in the valid image above. Screenshots are diagnostic-only and are not tracked."
+    },
+    {
+      "result": "cross-title-corroboration",
+      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
+      "notes": "Kether uses CLUT8/RL7/DYUV RTF video and no DVC, while Laser Lords uses QHY. Their shared content-correlated lower-edge symptom weakens a codec-specific explanation and prioritizes common RTF destination, drawmap, or MCD212 boundary stages."
+    }
+  ]
+}

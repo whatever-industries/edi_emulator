@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "local-smoke",
+  "timeout_seconds": 600,
+  "cases": [
+    {
+      "id": "known-good-title",
+      "title": "Known-good local title",
+      "rom": "firmware/cdi220b.rom",
+      "disc": "tests-data/local/media/known-good-title.cue",
+      "dvc_rom": null,
+      "model": "cdi220b",
+      "video_standard": "pal",
+      "instructions": 100000000,
+      "nvram": null,
+      "click_events": [
+        "60000000:588,265,1,2000000"
+      ],
+      "checkpoint": "player shell launches the title and reaches its first interactive menu",
+      "known_issues": [],
+      "assertions": {
+        "minimum_frames": 100,
+        "minimum_audio_frames": 1,
+        "minimum_unique_rasters": 2,
+        "maximum_consecutive_identical_rasters": null,
+        "maximum_dvc_errors": null
+      }
+    }
+  ]
+}

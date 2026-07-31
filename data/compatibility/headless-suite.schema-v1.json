@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://e-di.invalid/schemas/headless-suite-v1.json",
+  "title": "E-Di local headless compatibility suite",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "cases"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "timeout_seconds": { "type": "integer", "minimum": 1 },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "rom",
+          "disc",
+          "model",
+          "video_standard",
+          "instructions",
+          "checkpoint"
+        ],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+          "title": { "type": "string", "minLength": 1 },
+          "rom": { "type": "string", "minLength": 1 },
+          "disc": { "type": "string", "minLength": 1 },
+          "dvc_rom": { "type": ["string", "null"] },
+          "model": { "type": "string", "minLength": 1 },
+          "video_standard": { "enum": ["pal", "ntsc"] },
+          "instructions": { "type": "integer", "minimum": 1 },
+          "nvram": { "type": ["string", "null"] },
+          "click_events": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "checkpoint": { "type": "string", "minLength": 1 },
+          "known_issues": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "assertions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "minimum_frames": { "type": ["integer", "null"], "minimum": 0 },
+              "minimum_audio_frames": {
+                "type": ["integer", "null"],
+                "minimum": 0
+              },
+              "minimum_unique_rasters": {
+                "type": ["integer", "null"],
+                "minimum": 0
+              },
+              "maximum_consecutive_identical_rasters": {
+                "type": ["integer", "null"],
+                "minimum": 0
+              },
+              "maximum_dvc_errors": {
+                "type": ["integer", "null"],
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

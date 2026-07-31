@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "id": "laser-lords-bottom-video-line-artifacts",
+  "title": "Laser Lords (USA)",
+  "symptom": "Shot-dependent black/white and magenta/green line patterns appear along the bottom of the post-logo video and crossfade with each shot; later menu/gameplay screens may also appear overscanned",
+  "expected": "Decoded video and base graphics follow the authored source and live hardware aperture without exposing unintended final-line data or clipping authored edges",
+  "status": "reproduced",
+  "reported_revision": "52013394225572beb9346dbefea136cf8f92596c",
+  "last_reproduced_revision": "52013394225572beb9346dbefea136cf8f92596c",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "cdic",
+    "rtf",
+    "mcd212",
+    "frontend"
+  ],
+  "disc_fingerprint": "51839dbc4bb57b6de9a12bcc4e6f1c65cb132de3",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "ntsc",
+    "dvc": "none",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "qhy-final-line-or-stride",
+      "hardware_explanation": "The non-DVC post-logo sequence uses Green Book QHY real-time video. An incorrect decoded height, destination stride, or final partial update exposes source-dependent data along the last displayed row.",
+      "supporting_evidence": [
+        "The disc inventory identifies QHY Form-2 real-time video rather than MPEG.",
+        "The line patterns change with each shot and participate in crossfades, tying them to source/drawmap updates rather than a static frontend border."
+      ],
+      "contradicting_evidence": [
+        "Kether Europe shows the same content-correlated bottom-line symptom using CLUT8/RL7/DYUV rather than QHY, so QHY decoding alone cannot explain the shared defect."
+      ],
+      "falsifying_test": "Capture the final source QHY line, PCL destination, completed drawmap, individual MCD212 plane, composed raster, and frontend output. If the artifact first appears only after the drawmap stage, source decode/stride is not the cause.",
+      "citations": [
+        "Green Book Release 2 real-time video and QHY coding",
+        "docs/debugging-workflow.md display-provenance stages"
+      ]
+    },
+    {
+      "id": "mcd212-boundary-exposes-nondisplay-data",
+      "hardware_explanation": "The title's display control program or the emulator's MCD212 line/mask boundary exposes one row beyond the intended drawmap.",
+      "supporting_evidence": [
+        "The patterns are confined to the bottom edge.",
+        "Later base-graphics screens also appear to lose edge content.",
+        "Kether Europe shows the same content-correlated bottom line using CLUT8/RL7/DYUV rather than QHY, which points to a shared downstream display boundary."
+      ],
+      "contradicting_evidence": [
+        "The pattern colors track video shot changes, so the source may already contain the bad row."
+      ],
+      "falsifying_test": "Compare the final drawmap row with the plane and hardware raster. Identical artifacts in the drawmap falsify a composition-only explanation.",
+      "citations": [
+        "MCD212 specification display-file and DCA line boundaries",
+        "docs/display-geometry.md"
+      ]
+    },
+    {
+      "id": "frontend-overscan-presentation",
+      "hardware_explanation": "The global Typical CRT aperture may be cropping screens 3 and 4 differently from the intended analog viewing area, independently of the QHY bottom-row artifact.",
+      "supporting_evidence": [
+        "Screens 3 and 4 show text and graphics touching or crossing the visible edges."
+      ],
+      "contradicting_evidence": [
+        "No real-hardware comparison or Full signal capture is recorded yet."
+      ],
+      "falsifying_test": "Capture the same stable screens using Full signal and Typical CRT. If Full signal already lacks the edge content, frontend aperture selection is not causal.",
+      "citations": [
+        "docs/display-geometry.md",
+        "Philips TN 093 image-format and safe-area guidance"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported-current",
+      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:52f9474f4fb4ca328bb894fc697c174c0e728cb711c8af4502370ee7e1b1f293",
+      "notes": "User screenshots reproduce shot-dependent bottom-row patterns during QHY video and possible edge clipping in later screens. A future pass should compare the same stable frames under Full signal and Typical CRT and capture the six display-provenance stages."
+    },
+    {
+      "result": "cross-title-corroboration",
+      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
+      "notes": "Kether Europe reproduces a content-correlated bottom artifact line with CLUT8/RL7/DYUV RTF data. This weakens a QHY-only explanation and raises common RTF destination/drawmap or MCD212 lower-boundary handling."
+    }
+  ]
+}

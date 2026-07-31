@@ -1,6 +1,6 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-07-26
+Status date: 2026-07-30
 
 ## Current implementation status
 
@@ -31,11 +31,29 @@ deferred. `DiscImage` recognizes the LBA-16 Mode-2 Form-1 PVD combination
 `CD-RTOS CD-BRIDGE` plus `CD-XA001`, and the SLAVE can report disc type 4
 instead of native CD-i type 2. Native firmware then selects `$E01000`'s
 13.5 MHz sample-rate converter and applies its MCD251 origin adjustment.
-Accused Netherlands and Addams Family Values UK confirm that classification
-and register path, but also prove that enabling it before implementing the
-MCD251 sample-origin semantics centers Accused while shifting Addams. Machine
-disc insertion therefore retains type 2 for now; the media classifier and HLE
-support remain covered for the later device-level completion.
+Philips Interactive Engineer 96/05 explicitly states that a 352-pixel Video CD
+does not fill the screen in Green Book mode and does fill it when a White Book
+cartridge switches the converter. A bounded Addams Family Values USA run
+confirmed that type 4 removes its one-sided right edge. Manual testing also
+confirmed the earlier counterexample: the same candidate shifts Addams Family
+Values UK right, while Accused Netherlands remains acceptable. The USA GUI
+screenshot's additional 720-pixel crop was the frontend's existing Typical
+CRT aperture, not a changed MCD212 raster. This is a regression-causing
+experiment, not an accepted fix. Machine disc insertion therefore retains type
+2 until the MCD251 `Xo`/`Xa` sample-origin semantics are implemented; the
+media classifier, SLAVE response, and new read-only register diagnostics
+remain covered prerequisites.
+
+A second bounded type-4 comparison made that prerequisite concrete. Accused
+Netherlands and Addams Family Values UK both program `Xo=65`, `Yo=26`,
+`Xa=384`, and `Ya=280` with a 352x288 frame and the 13.5 MHz clock enabled.
+They differ in guest-authored display/window commands: Accused uses `Xd=0`,
+`Xw=7`, `Ww=345`, while Addams UK uses `Xd=16`, `Xw=0`, `Ww=352`. The
+available MCD251 Technical Summary names the origin and active-area registers
+but does not provide the full timing/phase equation. No origin correction is
+therefore integrated from these values alone. Continue only from the complete
+MCD251 timing definition or a synchronized real-hardware register/output
+trace.
 
 The Accused warning corruption is a separate transport issue. A direct disc
 reconstruction contains 21,268 bytes while a deterministic emulator capture

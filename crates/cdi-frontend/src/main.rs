@@ -1194,11 +1194,12 @@ fn start_audio(
         .ok_or("no default audio output device")?;
     let supported = device
         .supported_output_configs()?
-        .find(|range| {
+        .filter(|range| {
             range.channels() >= 2
                 && range.min_sample_rate().0 <= AUDIO_RATE
                 && range.max_sample_rate().0 >= AUDIO_RATE
         })
+        .max_by_key(|range| audio_sample_format_preference(range.sample_format()))
         .ok_or("output device does not support 44.1 kHz stereo")?;
     let sample_format = supported.sample_format();
     let config = supported
@@ -1251,6 +1252,20 @@ fn start_audio(
             on_error,
             None,
         )?,
+        cpal::SampleFormat::U8 => device.build_output_stream(
+            &config,
+            move |data: &mut [u8], _| {
+                fill_audio(
+                    data,
+                    channels,
+                    &mut consumer,
+                    muted.load(Ordering::Relaxed) || suppressed.load(Ordering::Relaxed),
+                    signed_pcm_to_u8,
+                );
+            },
+            on_error,
+            None,
+        )?,
         format => return Err(format!("unsupported audio sample format {format}").into()),
     };
     stream.play()?;
@@ -1260,6 +1275,20 @@ fn start_audio(
         config.sample_rate.0
     );
     Ok((stream, producer))
+}
+
+fn signed_pcm_to_u8(sample: i16) -> u8 {
+    ((i32::from(sample) + 32_768) >> 8) as u8
+}
+
+fn audio_sample_format_preference(format: cpal::SampleFormat) -> u8 {
+    match format {
+        cpal::SampleFormat::I16 => 4,
+        cpal::SampleFormat::F32 => 3,
+        cpal::SampleFormat::U16 => 2,
+        cpal::SampleFormat::U8 => 1,
+        _ => 0,
+    }
 }
 
 fn fill_audio<T: Copy>(
@@ -4318,14 +4347,14 @@ impl eframe::App for App {
 mod tests {
     use super::presentation::{screenshot_dimensions, DisplayAperture};
     use super::{
-        backup_nvram, configure_ui, configured_nvram_path, controller_deflection,
-        controller_dpad_deflection, controller_stick_deflection, disc_load_action,
-        display_aperture, display_name, fill_audio, fit_aspect, is_quick_menu_button,
-        library_dpad_direction, library_pad_action, load_nvram, parental_passcode, pointer_mapping,
-        presentation_aspect, quick_menu_chord_pressed, quick_menu_consumes_controller_poll,
-        region_is_pal, screenshot_image, suppress_guest_buttons_until_release, write_nvram,
-        DiscLoadAction, DiscOverride, DisplayArea, HostMenuBinding, LibraryPadAction, SharedFrame,
-        UI_SELECTED_TEXT,
+        audio_sample_format_preference, backup_nvram, configure_ui, configured_nvram_path,
+        controller_deflection, controller_dpad_deflection, controller_stick_deflection,
+        disc_load_action, display_aperture, display_name, fill_audio, fit_aspect,
+        is_quick_menu_button, library_dpad_direction, library_pad_action, load_nvram,
+        parental_passcode, pointer_mapping, presentation_aspect, quick_menu_chord_pressed,
+        quick_menu_consumes_controller_poll, region_is_pal, screenshot_image, signed_pcm_to_u8,
+        suppress_guest_buttons_until_release, write_nvram, DiscLoadAction, DiscOverride,
+        DisplayArea, HostMenuBinding, LibraryPadAction, SharedFrame, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
 
@@ -4378,6 +4407,29 @@ mod tests {
         fill_audio(&mut output, 2, &mut consumer, true, |sample| sample);
         assert_eq!(output, [0; 4]);
         assert!(consumer.pop().is_err());
+    }
+
+    #[test]
+    fn signed_pcm_converts_to_full_unsigned_8_bit_range() {
+        assert_eq!(signed_pcm_to_u8(i16::MIN), 0);
+        assert_eq!(signed_pcm_to_u8(0), 128);
+        assert_eq!(signed_pcm_to_u8(i16::MAX), 255);
+    }
+
+    #[test]
+    fn audio_output_prefers_higher_fidelity_formats_over_u8() {
+        assert!(
+            audio_sample_format_preference(cpal::SampleFormat::I16)
+                > audio_sample_format_preference(cpal::SampleFormat::F32)
+        );
+        assert!(
+            audio_sample_format_preference(cpal::SampleFormat::F32)
+                > audio_sample_format_preference(cpal::SampleFormat::U16)
+        );
+        assert!(
+            audio_sample_format_preference(cpal::SampleFormat::U16)
+                > audio_sample_format_preference(cpal::SampleFormat::U8)
+        );
     }
 
     #[test]

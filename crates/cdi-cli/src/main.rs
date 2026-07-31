@@ -469,7 +469,11 @@ fn boot(
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(50_000);
-        machine.enable_diagnostics(capacity);
+        if std::env::var_os("EDI_DIAGNOSTIC_MILESTONES_ONLY").is_some() {
+            machine.enable_dvc_milestone_diagnostics(capacity);
+        } else {
+            machine.enable_diagnostics(capacity);
+        }
     }
     if dump_vmpeg_es.is_some() {
         if let Some(dvc) = &mut machine.bus.dvc {

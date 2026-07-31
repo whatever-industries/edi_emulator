@@ -186,6 +186,45 @@ last-picture display. Then turn gameplay into repeatable long-run A/V-drift,
 stream-switch, and repeated-transition regressions. The known cake-puzzle
 freeze remains an extended compatibility gate rather than an M3 boot blocker.
 
+The first M3.14 compliance slice is now implemented without changing device
+behavior. A project-owned 16x16 I/B/B/P elementary stream exercises EOS
+immediately followed by SOS across fragmented writes, abort/reset after a
+delayed reference remains pending, and 128 consecutive sequence transitions.
+Device-level tests prove pause does not consume current or queued pictures,
+continue resumes presentation, decoder reset clears the current picture,
+queued pictures, ISR state, and delayed-last-picture deadline, and the final
+picture/EOD/underflow events remain presentation-timed. Separate tests switch
+selected PES streams without accepting the old stream's payload or timestamp
+and map a six-hour SCR/PTS interval through the shared integer 90 kHz-to-45
+kHz clock without drift. All pass on the existing implementation, so no TN
+088 workaround or title-specific recovery was added.
+
+The local title runner now captures low-frequency VMPEG milestones and emits
+`7th-guest-transition-summary.json`. Each play records its CPU-cycle and DCLK
+bounds, cumulative-counter deltas, independent decoded-audio and
+presented-video throughput estimates, underflows/errors, and a SHA-256 over
+the ordered milestone raster hashes. The independent duration estimates are
+not labeled as A/V drift: a play epoch can legitimately continue after one
+stream ends or external video is hidden. The summary contains no MPEG payload.
+The default 1.1-billion-instruction gate requires all five expected plays,
+while shortened investigative runs can override `CDI_VMPEG_MIN_PLAYS`.
+
+Two exact five-play runs on 2026-07-30 produced byte-identical milestone
+diagnostics and byte-identical summaries. Both finished at CPU cycle
+11,673,268,782, retained all five play epochs, reported zero cumulative
+demux/video/audio decoder errors, and ended with framebuffer SHA-256
+`feb8df54d3a323b50b6f540163e28d28685390836a9d77ff89d0d663f8f6ae73`.
+Their summary SHA-256 is
+`e8cf3d4d413388eaa4596a22840d65735bcfbe6f84188bf31241cb78e44224aa`.
+Set `CDI_VMPEG_BASELINE_SUMMARY` to one local summary when running the second
+trace to make exact counter, DCLK, and raster-sequence equality an executable
+gate. The local artifacts remain ignored.
+
+Next, add a manually triggered title-level pause/continue scenario and a
+title-level stream-switch scenario. The cake puzzle remains the final extended
+M3.14 title gate. A perceptual or timestamp-based A/V drift oracle is still
+needed; deterministic throughput counters alone do not establish lip sync.
+
 The apparent v0.1.0-to-v0.2.0 regression in The 7th Guest's post-title video
 was isolated separately. Reverting v0.2.0's relative subcode-Q correction did
 not restore the video, while exact v0.2.0 with blank player storage did.

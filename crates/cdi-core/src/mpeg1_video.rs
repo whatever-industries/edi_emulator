@@ -24,6 +24,36 @@ const START_EXTENSION: u8 = 0xB5;
 const START_SEQUENCE_END: u8 = 0xB7;
 const START_GROUP: u8 = 0xB8;
 
+// Project-owned 16x16 MPEG-1 transition fixture, generated from FFmpeg's
+// synthetic `testsrc2` source:
+//
+// ffmpeg -f lavfi -i testsrc2=size=16x16:rate=25:duration=0.16 \
+//   -c:v mpeg1video -g 4 -bf 2 -q:v 8 -f mpeg1video gop.m1v
+//
+// The four display-order pictures are I/B/B/P. The final sequence_end_code
+// was appended explicitly so the delayed P picture is released. This covers
+// Philips TN 088's EOS/SOS and stale-B-picture transition cases without
+// embedding commercial media.
+#[cfg(test)]
+const SYNTHETIC_TRANSITION_GOP: &[u8] = &[
+    0x00, 0x00, 0x01, 0xB3, 0x01, 0x00, 0x10, 0x13, 0xFF, 0xFF, 0xE0, 0x18, 0x00, 0x00, 0x01, 0xB8,
+    0x00, 0x08, 0x00, 0x40, 0x00, 0x00, 0x01, 0x00, 0x00, 0x0F, 0xFF, 0xF8, 0x00, 0x00, 0x01, 0x01,
+    0x43, 0xF9, 0xC6, 0xC4, 0x22, 0x83, 0x10, 0x90, 0xD3, 0x7B, 0x01, 0xFF, 0xFF, 0xFD, 0xB6, 0xD9,
+    0x0B, 0xFC, 0x56, 0xD5, 0xA0, 0x27, 0x00, 0x38, 0x02, 0xA4, 0xC7, 0x48, 0x4A, 0x06, 0x92, 0x98,
+    0x0B, 0xE4, 0x8D, 0x7C, 0x10, 0x33, 0x32, 0x46, 0x8A, 0x67, 0xBA, 0xA0, 0x3B, 0xDF, 0x60, 0x18,
+    0x16, 0xE3, 0x32, 0x00, 0x6F, 0xB9, 0x67, 0xE4, 0x74, 0xA9, 0x1F, 0x8A, 0x70, 0xE1, 0xF6, 0xF0,
+    0xD4, 0x17, 0xC0, 0x62, 0x01, 0x58, 0xD7, 0x0C, 0x01, 0xC0, 0x05, 0x6D, 0x86, 0x72, 0xF0, 0x61,
+    0x28, 0x6B, 0x01, 0x22, 0x59, 0xA4, 0x81, 0x70, 0x18, 0x00, 0xE0, 0x0A, 0x14, 0x82, 0x9C, 0x67,
+    0x4A, 0x10, 0x90, 0x91, 0x9B, 0x3F, 0x47, 0x61, 0x87, 0x70, 0x94, 0x9E, 0x7F, 0xE2, 0xBD, 0xEE,
+    0x10, 0x80, 0xAF, 0x18, 0x18, 0x9C, 0x8C, 0x87, 0xE4, 0xCE, 0x20, 0xE4, 0xE2, 0xDD, 0xF1, 0xDC,
+    0xD5, 0x2C, 0xD8, 0x00, 0x00, 0x01, 0x00, 0x00, 0xD7, 0xFF, 0xF8, 0x80, 0x00, 0x00, 0x01, 0x01,
+    0x42, 0x98, 0x0E, 0xFF, 0xF0, 0x07, 0x24, 0x73, 0xF0, 0x52, 0xC9, 0x11, 0x10, 0x82, 0x28, 0x8B,
+    0xC2, 0xF3, 0xC0, 0x03, 0xEC, 0xFC, 0x06, 0x8E, 0xA8, 0x18, 0x00, 0x40, 0x3C, 0xC6, 0xC0, 0x1B,
+    0x11, 0x37, 0x0E, 0x51, 0xE8, 0xF0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x5F, 0xFF, 0xF8, 0x88, 0x00,
+    0x00, 0x01, 0x01, 0x42, 0xB0, 0x00, 0x00, 0x01, 0x00, 0x00, 0x9F, 0xFF, 0xF8, 0x88, 0x00, 0x00,
+    0x01, 0x01, 0x42, 0xB0, 0x00, 0x00, 0x01, 0xB7,
+];
+
 #[derive(Debug, Clone, Copy)]
 struct Vlc {
     index: i16,
@@ -1210,6 +1240,20 @@ fn idct(block: &mut [i32; 64], _max_index: usize) {
 mod tests {
     use super::*;
 
+    fn decode_in_chunks(
+        decoder: &mut Mpeg1VideoDecoder,
+        bytes: &[u8],
+        chunk_size: usize,
+    ) -> Vec<DecodedVideoFrame> {
+        let mut frames = Vec::new();
+        for chunk in bytes.chunks(chunk_size) {
+            decoder.feed(chunk);
+            frames.extend(decoder.decode_available(32));
+        }
+        frames.extend(decoder.decode_available(32));
+        frames
+    }
+
     fn sequence_header(width: u16, height: u16) -> Vec<u8> {
         let fields = [
             (u32::from(width), 12),
@@ -1304,6 +1348,101 @@ mod tests {
         assert!(!decoder.has_reference_frame);
         assert_eq!((decoder.width, decoder.height), (368, 176));
         assert_eq!(decoder.frame_forward.y.data[0], 0);
+    }
+
+    #[test]
+    fn adjacent_sequence_end_and_start_preserve_both_plays() {
+        // TN 088, printed page 4: a sector may contain both EOS and SOS.
+        // Split at seven-byte boundaries so 00 00 01 start-code prefixes also
+        // cross transport writes.
+        let mut stream = SYNTHETIC_TRANSITION_GOP.to_vec();
+        stream.extend_from_slice(SYNTHETIC_TRANSITION_GOP);
+        let boundary = SYNTHETIC_TRANSITION_GOP.len();
+        assert_eq!(
+            &stream[boundary - 4..boundary + 4],
+            &[0, 0, 1, 0xB7, 0, 0, 1, 0xB3]
+        );
+
+        let mut decoder = Mpeg1VideoDecoder::default();
+        let frames = decode_in_chunks(&mut decoder, &stream, 7);
+
+        assert_eq!(frames.len(), 8);
+        assert_eq!(decoder.sequence_headers, 2);
+        assert_eq!(decoder.sequence_ends, 2);
+        assert_eq!(decoder.errors, 0);
+        assert!(frames[0].first_in_sequence);
+        assert!(frames[3].last_in_sequence);
+        assert!(frames[4].first_in_sequence);
+        assert!(frames[7].last_in_sequence);
+    }
+
+    #[test]
+    fn repeated_sequence_transitions_remain_reference_clean() {
+        let mut decoder = Mpeg1VideoDecoder::default();
+        let mut frames = Vec::new();
+
+        // Exercise more consecutive plays than the current title-level
+        // acceptance run while varying transport fragmentation naturally at
+        // every fixture boundary.
+        for repeat in 0..128 {
+            let chunk_size = 5 + repeat % 17;
+            frames.extend(decode_in_chunks(
+                &mut decoder,
+                SYNTHETIC_TRANSITION_GOP,
+                chunk_size,
+            ));
+        }
+
+        assert_eq!(frames.len(), 128 * 4);
+        assert_eq!(decoder.sequence_headers, 128);
+        assert_eq!(decoder.sequence_ends, 128);
+        assert_eq!(decoder.errors, 0);
+        for play in frames.chunks_exact(4) {
+            assert!(play[0].first_in_sequence);
+            assert!(!play[0].last_in_sequence);
+            assert!(play[3].last_in_sequence);
+        }
+    }
+
+    #[test]
+    fn abort_reset_discards_delayed_reference_pictures_before_restart() {
+        // TN 088, printed pages 3-4: an aborted play must not leak a delayed
+        // B/reference picture into the next play. A full decoder reset is the
+        // emulated abort boundary.
+        let without_eos = &SYNTHETIC_TRANSITION_GOP[..SYNTHETIC_TRANSITION_GOP.len() - 4];
+        let mut restarted = Mpeg1VideoDecoder::default();
+        assert_eq!(decode_in_chunks(&mut restarted, without_eos, 11).len(), 2);
+        assert!(restarted.has_reference_frame);
+
+        restarted.reset();
+        assert!(!restarted.has_reference_frame);
+        let restarted_frames = decode_in_chunks(&mut restarted, SYNTHETIC_TRANSITION_GOP, 11);
+
+        let mut fresh = Mpeg1VideoDecoder::default();
+        let fresh_frames = decode_in_chunks(&mut fresh, SYNTHETIC_TRANSITION_GOP, 11);
+        assert_eq!(restarted_frames.len(), 4);
+        assert_eq!(restarted_frames.len(), fresh_frames.len());
+        for (restarted_frame, fresh_frame) in restarted_frames.iter().zip(&fresh_frames) {
+            assert_eq!(
+                (
+                    restarted_frame.width,
+                    restarted_frame.height,
+                    restarted_frame.first_in_sequence,
+                    restarted_frame.first_in_group,
+                    restarted_frame.last_in_sequence,
+                    &restarted_frame.pixels,
+                ),
+                (
+                    fresh_frame.width,
+                    fresh_frame.height,
+                    fresh_frame.first_in_sequence,
+                    fresh_frame.first_in_group,
+                    fresh_frame.last_in_sequence,
+                    &fresh_frame.pixels,
+                )
+            );
+        }
+        assert_eq!(restarted.errors, 0);
     }
 
     #[test]

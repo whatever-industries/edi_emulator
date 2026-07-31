@@ -1,0 +1,130 @@
+name: Bug report
+description: Report an emulation, compatibility, performance, or interface problem.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve E-Di. Please describe one problem per report
+        and include the exact title revision when the issue involves a disc.
+
+  - type: dropdown
+    id: affected-area
+    attributes:
+      label: Affected area
+      options:
+        - Game or disc compatibility
+        - Video or display
+        - Audio
+        - Controls or input
+        - Library or interface
+        - Performance
+        - Crash
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: edi-version
+    attributes:
+      label: E-Di version
+      description: Enter the release version or Git commit you tested.
+      placeholder: "Example: 0.3.1 or 1a2b3c4"
+    validations:
+      required: true
+
+  - type: input
+    id: host-system
+    attributes:
+      label: Host system
+      description: Include the operating system and CPU architecture.
+      placeholder: "Example: macOS 15.5, Apple Silicon"
+    validations:
+      required: true
+
+  - type: input
+    id: disc-title
+    attributes:
+      label: Disc title and revision
+      description: Copy the complete title, region, language, disc number, and revision when applicable.
+      placeholder: "Example: Kether (Europe) (En,Fr) (Rev 1)"
+
+  - type: textarea
+    id: player-configuration
+    attributes:
+      label: Player configuration
+      description: Include the player model, PAL/NTSC setting, DVC state, and any non-default settings.
+      placeholder: |
+        Player model: CD-i 220
+        Video standard: PAL
+        DVC: Inserted
+        Other changed settings:
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: List the shortest reliable sequence that demonstrates the problem.
+      placeholder: |
+        1. Open…
+        2. Select…
+        3. Observe…
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what should happen, preferably with a real-hardware or specification reference.
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+      description: Describe exactly what E-Di does instead and whether the behavior changes between attempts.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Reproducibility
+      options:
+        - Every time
+        - Most times
+        - Sometimes
+        - Happened once
+        - Unknown
+    validations:
+      required: true
+
+  - type: textarea
+    id: nvram
+    attributes:
+      label: NVRAM or saved-memory result
+      description: If relevant, state whether the issue persists after clearing saved memory. Leave blank if not applicable.
+
+  - type: textarea
+    id: comparisons
+    attributes:
+      label: Comparisons
+      description: List related titles, older E-Di builds, other emulators, or real hardware that behave differently.
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Screenshots, recordings, or logs
+      description: Drag files here and add any useful diagnostic output or reference links.
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add anything else that may help isolate the problem.

@@ -199,6 +199,10 @@ pub struct DvcStats {
     pub current_video_rgb_min: u64,
     pub current_video_rgb_max: u64,
     pub current_video_frame_hash: u64,
+    pub video_offset_x: u64,
+    pub video_offset_y: u64,
+    pub video_active_x: u64,
+    pub video_active_y: u64,
     pub video_display_x: u64,
     pub video_display_y: u64,
     pub video_window_x: u64,
@@ -788,6 +792,13 @@ impl Vmpeg {
         stats.queued_audio_samples = self.mp2.pcm.len() as u64 / 2;
         stats.playing = u64::from(self.playing);
         stats.video_visible = u64::from(self.video_visible);
+        // Motorola MCD251 Technical Summary register map: Yo/Xo/Ya/Xa.
+        // These are exposed for provenance only; the available summary does
+        // not define enough timing semantics to apply them to presentation.
+        stats.video_offset_x = u64::from(Self::word(&self.fmv_regs, 0x6E));
+        stats.video_offset_y = u64::from(Self::word(&self.fmv_regs, 0x6C));
+        stats.video_active_x = u64::from(Self::word(&self.fmv_regs, 0x72));
+        stats.video_active_y = u64::from(Self::word(&self.fmv_regs, 0x70));
         stats.video_display_x = u64::from(Self::word(&self.fmv_regs, 0x76));
         stats.video_display_y = u64::from(Self::word(&self.fmv_regs, 0x74));
         stats.video_window_x = u64::from(Self::word(&self.fmv_regs, 0x7E));
@@ -1889,6 +1900,30 @@ mod tests {
         assert_eq!(video.pixel(0, 0), 8);
         assert_eq!(video.pixel(766, 0), 352);
         assert_eq!(video.pixel(767, 0), 0);
+    }
+
+    #[test]
+    fn diagnostic_snapshot_exposes_mcd251_origin_and_active_registers() {
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+
+        for (address, value) in [
+            (0xE0_406C, 0x001A),
+            (0xE0_406E, 0x0041),
+            (0xE0_4070, 0x0118),
+            (0xE0_4072, 0x0180),
+        ] as [(u32, u16); 4]
+        {
+            let [high, low] = value.to_be_bytes();
+            assert!(dvc.write8(address, high));
+            assert!(dvc.write8(address + 1, low));
+        }
+
+        let stats = dvc.stats();
+        assert_eq!(stats.video_offset_y, 26);
+        assert_eq!(stats.video_offset_x, 65);
+        assert_eq!(stats.video_active_y, 280);
+        assert_eq!(stats.video_active_x, 384);
     }
 
     #[test]

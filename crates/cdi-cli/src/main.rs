@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
+mod compatibility;
 mod diagnose;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -136,6 +137,9 @@ enum Command {
         /// Write the final framebuffer to a PNG file.
         #[arg(long)]
         screenshot: Option<PathBuf>,
+        /// Write all generated 44.1 kHz stereo audio to a PCM WAV file.
+        #[arg(long)]
+        audio_wav: Option<PathBuf>,
         /// Write the current VMPEG play's MPEG-1 video elementary stream.
         #[arg(long)]
         dump_vmpeg_es: Option<PathBuf>,
@@ -167,6 +171,11 @@ enum Command {
     Diagnose {
         #[command(subcommand)]
         command: diagnose::DiagnoseCommand,
+    },
+    /// Run and promote bounded, local compatibility suites.
+    Compatibility {
+        #[command(subcommand)]
+        command: compatibility::CompatibilityCommand,
     },
 }
 
@@ -200,6 +209,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             click_at,
             click_events,
             screenshot,
+            audio_wav,
             dump_vmpeg_es,
             dump_video_ram,
             dump_dvc_ram,
@@ -219,6 +229,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             click_at,
             click_events,
             screenshot.as_deref(),
+            audio_wav.as_deref(),
             dump_vmpeg_es.as_deref(),
             dump_video_ram.as_deref(),
             dump_dvc_ram.as_deref(),
@@ -231,6 +242,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             inventory_json,
         } => disc_info(&cue, files, inventory_json.as_deref()),
         Command::Diagnose { command } => diagnose::execute(command),
+        Command::Compatibility { command } => compatibility::execute(command),
     }
 }
 
@@ -389,6 +401,7 @@ fn boot(
     click_at: Option<u64>,
     mut click_events: Vec<ClickEvent>,
     screenshot: Option<&std::path::Path>,
+    audio_wav: Option<&std::path::Path>,
     dump_vmpeg_es: Option<&std::path::Path>,
     dump_video_ram: Option<&std::path::Path>,
     dump_dvc_ram: Option<&std::path::Path>,
@@ -489,6 +502,12 @@ fn boot(
     let mut uart_log: Vec<u8> = Vec::new();
     let mut audio_samples: u64 = 0;
     let mut audio_hasher = sha2::Sha256::new();
+    let mut audio_writer = audio_wav
+        .map(|path| {
+            let file = std::fs::File::create(path)?;
+            WavWriter::new(std::io::BufWriter::new(file), 44_100, 2)
+        })
+        .transpose()?;
     if let Some((x, y)) = click_pos {
         click_events.push(ClickEvent {
             at: click_at.unwrap_or(instructions.saturating_mul(3) / 5),
@@ -534,8 +553,11 @@ fn boot(
         machine.step();
         let audio = machine.take_audio();
         audio_samples += audio.len() as u64 / 2;
-        for sample in audio {
+        for sample in &audio {
             audio_hasher.update(sample.to_be_bytes());
+        }
+        if let Some(writer) = &mut audio_writer {
+            writer.write_samples(&audio)?;
         }
         let out = machine.take_uart_output();
         if !out.is_empty() {
@@ -677,6 +699,15 @@ fn boot(
         encoder.write_header()?.write_image_data(&rgb)?;
         println!("Screenshot written to {}", out_path.display());
     }
+    if let Some(writer) = audio_writer {
+        writer.finish()?;
+        println!(
+            "Audio written to {}",
+            audio_wav
+                .expect("writer exists only when an output path was supplied")
+                .display()
+        );
+    }
     if let Some(out_path) = dump_vmpeg_es {
         let bytes = machine
             .bus
@@ -739,6 +770,72 @@ fn boot(
     Ok(())
 }
 
+struct WavWriter<W: std::io::Write + std::io::Seek> {
+    writer: W,
+    sample_rate: u32,
+    channels: u16,
+    data_bytes: u64,
+}
+
+impl<W: std::io::Write + std::io::Seek> WavWriter<W> {
+    fn new(
+        mut writer: W,
+        sample_rate: u32,
+        channels: u16,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        writer.write_all(&[0; 44])?;
+        Ok(Self {
+            writer,
+            sample_rate,
+            channels,
+            data_bytes: 0,
+        })
+    }
+
+    fn write_samples(&mut self, samples: &[i16]) -> Result<(), Box<dyn std::error::Error>> {
+        let mut bytes = Vec::with_capacity(samples.len() * 2);
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        self.writer.write_all(&bytes)?;
+        self.data_bytes = self
+            .data_bytes
+            .checked_add(bytes.len() as u64)
+            .ok_or("WAV data length overflow")?;
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<W, Box<dyn std::error::Error>> {
+        use std::io::SeekFrom;
+
+        let data_bytes = u32::try_from(self.data_bytes)
+            .map_err(|_| "WAV output exceeds the 4 GiB RIFF limit")?;
+        let byte_rate = self
+            .sample_rate
+            .checked_mul(u32::from(self.channels))
+            .and_then(|value| value.checked_mul(2))
+            .ok_or("WAV byte-rate overflow")?;
+        let block_align = self.channels.checked_mul(2).ok_or("WAV block overflow")?;
+        let riff_bytes = data_bytes.checked_add(36).ok_or("WAV RIFF overflow")?;
+
+        self.writer.seek(SeekFrom::Start(0))?;
+        self.writer.write_all(b"RIFF")?;
+        self.writer.write_all(&riff_bytes.to_le_bytes())?;
+        self.writer.write_all(b"WAVEfmt ")?;
+        self.writer.write_all(&16u32.to_le_bytes())?;
+        self.writer.write_all(&1u16.to_le_bytes())?;
+        self.writer.write_all(&self.channels.to_le_bytes())?;
+        self.writer.write_all(&self.sample_rate.to_le_bytes())?;
+        self.writer.write_all(&byte_rate.to_le_bytes())?;
+        self.writer.write_all(&block_align.to_le_bytes())?;
+        self.writer.write_all(&16u16.to_le_bytes())?;
+        self.writer.write_all(b"data")?;
+        self.writer.write_all(&data_bytes.to_le_bytes())?;
+        self.writer.flush()?;
+        Ok(self.writer)
+    }
+}
+
 fn info(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let image = std::fs::read(path)?;
     let modules = cdi_os9::scan_modules(&image);
@@ -793,4 +890,24 @@ fn info(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
         println!("No emulation model for this ROM type yet.");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WavWriter;
+
+    #[test]
+    fn wav_writer_emits_a_standard_stereo_pcm_header() {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = WavWriter::new(cursor, 44_100, 2).unwrap();
+        writer.write_samples(&[1, -1, 2, -2]).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        assert_eq!(&bytes[12..16], b"fmt ");
+        assert_eq!(&bytes[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 8);
+        assert_eq!(&bytes[44..52], &[1, 0, 255, 255, 2, 0, 254, 255]);
+    }
 }

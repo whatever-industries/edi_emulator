@@ -285,6 +285,49 @@ impl LibraryModel {
         self.scroll_to_selection = false;
     }
 
+    /// Rescan configured folders without unnecessarily moving the user.
+    ///
+    /// Stable paths retain their selection even if newly discovered entries
+    /// sort before them. Open `.cue` remains focused because refresh is a
+    /// separate action rather than another controller tab.
+    pub(crate) fn refresh(&mut self) {
+        let previous_tab = self.tab;
+        let previous_focus = self.focus;
+        let previous_selection = self.selection;
+        let selected_cue = self
+            .entries(previous_tab)
+            .nth(previous_selection)
+            .map(|entry| entry.cue.clone());
+
+        self.scan();
+
+        if self
+            .entries
+            .iter()
+            .any(|entry| entry.category == previous_tab)
+        {
+            self.tab = previous_tab;
+            self.selection = selected_cue
+                .as_ref()
+                .and_then(|cue| {
+                    self.entries(previous_tab)
+                        .position(|entry| entry.cue() == cue)
+                })
+                .unwrap_or_else(|| {
+                    previous_selection.min(self.entries(previous_tab).count().saturating_sub(1))
+                });
+            if previous_focus < SLOTS.len() {
+                self.focus = previous_tab;
+            }
+        }
+        if previous_focus == OPEN_FOCUS {
+            self.focus = OPEN_FOCUS;
+        }
+
+        self.scroll_to_top = false;
+        self.scroll_to_selection = false;
+    }
+
     pub(crate) fn repeated_action(&mut self, direction: i8, now: Instant) -> Option<PadAction> {
         match self.dpad_repeat.update(direction, now) {
             value if value < 0 => Some(PadAction::PreviousDisc),
@@ -528,5 +571,28 @@ mod tests {
         assert_eq!(model.apply(PadAction::NextDisc), Effect::None);
         assert_eq!(model.selection(), 0);
         assert_eq!(model.apply(PadAction::Activate), Effect::Load(first));
+    }
+
+    #[test]
+    fn refresh_preserves_selected_disc_and_open_action_focus() {
+        let root = tempfile::tempdir().unwrap();
+        let beta = root.path().join("Beta.cue");
+        std::fs::write(&beta, b"").unwrap();
+        let mut model = LibraryModel::new(&[Some(root.path().display().to_string())]);
+        model.scan();
+        assert_eq!(model.selection(), 0);
+
+        let alpha = root.path().join("Alpha.cue");
+        std::fs::write(&alpha, b"").unwrap();
+        model.refresh();
+        assert_eq!(model.counts(), [2, 0, 0, 0]);
+        assert_eq!(model.selection(), 1);
+        assert_eq!(model.take_scroll_requests(), (false, false));
+        assert_eq!(model.apply(PadAction::Activate), Effect::Load(beta));
+
+        model.focus_open();
+        model.refresh();
+        assert_eq!(model.focus(), OPEN_FOCUS);
+        assert!(!model.tab_is_highlighted(0));
     }
 }

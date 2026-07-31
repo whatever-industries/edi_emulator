@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://e-di.invalid/schemas/title-matrix-v1.json",
+  "title": "E-Di accepted compatibility title matrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "entries"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "disc_fingerprint",
+          "title",
+          "model",
+          "video_standard",
+          "dvc_required",
+          "dvc_attached",
+          "checkpoint",
+          "result",
+          "issues",
+          "last_tested_revision"
+        ],
+        "properties": {
+          "disc_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "title": { "type": "string", "minLength": 1 },
+          "model": { "type": "string", "minLength": 1 },
+          "video_standard": { "enum": ["pal", "ntsc"] },
+          "dvc_required": { "type": "boolean" },
+          "dvc_attached": { "type": "boolean" },
+          "checkpoint": { "type": "string", "minLength": 1 },
+          "result": { "const": "manually-accepted" },
+          "issues": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "last_tested_revision": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

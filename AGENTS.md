@@ -73,16 +73,21 @@ zero decoder errors and completes both MPEG program ends. Two brief black
 flashes replace authored transition animations and remain a separate deferred
 incident.
 
-Use the live checklist and source ledger in `docs/mpeg-dvc-plan.md`. The next
-unchecked action is M3.14: add project-owned TN 088 transition regressions for
-EOS+SOS, pause/continue, abort/restart stale-B-picture removal, and delayed
-last-picture display, then cover long-run A/V drift, stream switching,
-repeated transitions, and the cake puzzle. M3.13 is closed: two identical
-current 1.1-billion-instruction five-play runs decode and present 7,853 video
-frames with zero cumulative demux/video/audio errors. The historical five
-rejected pictures predated the shared-IN4 correction and are retained as
-superseded transport evidence; do not add picture smoothing or concealment for
-them.
+Use the live checklist and source ledger in `docs/mpeg-dvc-plan.md`. M3.14's
+project-owned TN 088 core regressions now cover EOS+SOS, pause/continue,
+abort/restart stale-picture removal, display-timed final-picture events, PES
+stream switching, 128 repeated transitions, and a six-hour integer A/V clock
+mapping without requiring a behavior change. The local title runner also
+emits payload-free per-play counter/DCLK summaries and milestone-raster hashes.
+Two exact 1.1-billion-instruction runs produced byte-identical five-play
+diagnostics and summaries with zero decoder errors; the runner can compare a
+new summary against a local exact baseline. The next unchecked action is a
+title-level manual pause/continue scenario, followed by a title-level stream
+switch and the cake puzzle. A timestamp- or presentation-overlap-based oracle
+is still required for perceptual A/V drift. M3.13 remains closed: the
+historical five rejected pictures predated the shared-IN4 correction and are
+retained as superseded transport evidence; do not add picture smoothing or
+concealment for them.
 Update that document's status and next action whenever a checkpoint is reached.
 
 ## Git and build workflow

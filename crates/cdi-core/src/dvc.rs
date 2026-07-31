@@ -1807,6 +1807,23 @@ impl Vmpeg {
 mod tests {
     use super::*;
 
+    fn write_fmv_system_command(dvc: &mut Vmpeg, command: u16) {
+        let [high, low] = command.to_be_bytes();
+        assert!(dvc.write8(0xE0_40C0, high));
+        assert!(dvc.write8(0xE0_40C1, low));
+    }
+
+    fn test_video_frame(pixel: u32) -> DecodedVideoFrame {
+        DecodedVideoFrame {
+            width: 1,
+            height: 1,
+            pixels: vec![pixel],
+            first_in_sequence: false,
+            first_in_group: false,
+            last_in_sequence: false,
+        }
+    }
+
     fn mpeg1_pes(stream_id: u8, payload: &[u8]) -> Vec<u8> {
         let mut packet = vec![0, 0, 1, stream_id];
         let len = u16::try_from(payload.len() + 1).unwrap();
@@ -1964,6 +1981,28 @@ mod tests {
     }
 
     #[test]
+    fn stream_switching_routes_only_the_new_selection_and_timestamp() {
+        let mut demux = MpegSystemDemux {
+            selected_video_stream: Some(0),
+            ..MpegSystemDemux::default()
+        };
+        let mut first = mpeg1_pes_with_pts(0xE0, 90_000, b"first");
+        first.extend(mpeg1_pes_with_pts(0xE1, 180_000, b"ignored"));
+        demux.feed(&first);
+        assert_eq!(demux.video.drain(..).collect::<Vec<_>>(), b"first");
+        assert_eq!(demux.last_video_pts, Some(90_000));
+
+        demux.selected_video_stream = Some(1);
+        let mut second = mpeg1_pes_with_pts(0xE0, 270_000, b"ignored");
+        second.extend(mpeg1_pes_with_pts(0xE1, 360_000, b"second"));
+        demux.feed(&second);
+        assert_eq!(demux.video.drain(..).collect::<Vec<_>>(), b"second");
+        assert_eq!(demux.last_video_pts, Some(360_000));
+        assert_eq!(demux.stats.video_packets, 2);
+        assert_eq!(demux.stats.errors, 0);
+    }
+
+    #[test]
     fn ptsless_pes_retains_the_last_timestamp() {
         let mut bytes = mpeg1_pes_with_pts(0xE0, 123_456, b"first");
         bytes.extend(mpeg1_pes(0xE0, b"second"));
@@ -2023,6 +2062,66 @@ mod tests {
         dvc.write8(0xE0_3000, 0x00);
         dvc.write8(0xE0_3001, 0x01);
         assert!(dvc.audio_demux.pending.is_empty());
+    }
+
+    #[test]
+    fn pause_continue_retains_current_and_queued_video_pictures() {
+        // TN 088, printed pages 2 and 6: pause/continue preserves decoder
+        // context. Paused device time must not consume queued pictures.
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+        dvc.decoder_enabled = true;
+        dvc.playing = true;
+        dvc.current_video_frame = Some(test_video_frame(1));
+        dvc.video_frames.push_back(test_video_frame(2));
+        dvc.video_frames.push_back(test_video_frame(3));
+        dvc.video_cycles_per_frame = 100;
+
+        write_fmv_system_command(&mut dvc, 0x0010);
+        assert!(!dvc.playing);
+        dvc.tick(1_000);
+        assert_eq!(dvc.video_frames.len(), 2);
+        assert_eq!(
+            dvc.current_video_frame
+                .as_ref()
+                .and_then(|frame| frame.pixels.first()),
+            Some(&1)
+        );
+        assert_eq!(dvc.stats.presented_video_frames, 0);
+
+        write_fmv_system_command(&mut dvc, 0x0020);
+        assert!(dvc.playing);
+        dvc.tick(100);
+        assert_eq!(dvc.video_frames.len(), 1);
+        assert_eq!(
+            dvc.current_video_frame
+                .as_ref()
+                .and_then(|frame| frame.pixels.first()),
+            Some(&2)
+        );
+        assert_eq!(dvc.stats.presented_video_frames, 1);
+    }
+
+    #[test]
+    fn decoder_abort_clears_current_and_queued_video_pictures() {
+        // TN 088's stale-picture warning is treated as a reset invariant,
+        // not as hardware behavior to reproduce.
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+        dvc.decoder_enabled = true;
+        dvc.playing = true;
+        dvc.current_video_frame = Some(test_video_frame(1));
+        dvc.video_frames.push_back(test_video_frame(2));
+        dvc.last_picture_due_dclk = Some(123);
+
+        write_fmv_system_command(&mut dvc, 0x0100);
+
+        assert!(dvc.decoder_enabled);
+        assert!(!dvc.playing);
+        assert!(dvc.current_video_frame.is_none());
+        assert!(dvc.video_frames.is_empty());
+        assert_eq!(dvc.last_picture_due_dclk, None);
+        assert_eq!(Vmpeg::word(&dvc.fmv_regs, FMV_ISR), 0);
     }
 
     #[test]
@@ -2158,6 +2257,21 @@ mod tests {
     }
 
     #[test]
+    fn six_hour_scr_pts_mapping_has_no_audio_video_clock_drift() {
+        // Both FMA and FMV use this integer 90 kHz -> 45 kHz mapping. The
+        // long interval proves the shared deadline does not accumulate a
+        // floating-point per-frame error.
+        let anchor_dclk = 123_456;
+        let anchor_scr = (1u64 << 33) - 1_000_000;
+        let six_hours_90khz = 6 * 60 * 60 * 90_000u64;
+        let pts = (anchor_scr + six_hours_90khz) & ((1u64 << 33) - 1);
+        assert_eq!(
+            Vmpeg::anchored_timestamp_deadline(anchor_dclk, anchor_scr, pts),
+            anchor_dclk.wrapping_add((six_hours_90khz / 2) as u32)
+        );
+    }
+
+    #[test]
     fn presentation_deadline_keeps_the_initial_scr_clock_mapping() {
         let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
         let mut dvc = Vmpeg::new(config).unwrap();
@@ -2173,6 +2287,9 @@ mod tests {
 
     #[test]
     fn last_picture_waits_for_pts_before_reporting_buffer_underflow() {
+        // Green Book IX.3.3.5-IX.3.3.7: the last-picture indication is a
+        // display-time event. Parsing EOS must not release the old PCL or
+        // report underflow before the final delayed reference reaches PTS.
         let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
         let mut dvc = Vmpeg::new(config).unwrap();
         dvc.decoder_enabled = true;

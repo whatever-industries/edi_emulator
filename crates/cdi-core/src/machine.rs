@@ -969,6 +969,7 @@ pub struct Machine {
     pub cpu: cdi_scc68070::Cpu,
     pub bus: MachineBus,
     diagnostic_events: Option<(usize, VecDeque<MachineDiagnosticEvent>, DiagnosticProbe)>,
+    milestone_only_diagnostics: bool,
     pcl_diagnostics: Option<PclOwnershipTracker>,
 }
 
@@ -990,6 +991,7 @@ impl Machine {
             cpu: cdi_scc68070::Cpu::new(),
             bus,
             diagnostic_events: None,
+            milestone_only_diagnostics: false,
             pcl_diagnostics: None,
         };
         m.reset();
@@ -1062,12 +1064,34 @@ impl Machine {
     pub fn enable_diagnostics(&mut self, capacity: usize) {
         if capacity == 0 {
             self.diagnostic_events = None;
+            self.milestone_only_diagnostics = false;
             self.pcl_diagnostics = None;
             self.bus.set_dma_diagnostics_enabled(false);
             return;
         }
+        self.milestone_only_diagnostics = false;
         self.bus.set_dma_diagnostics_enabled(true);
         self.pcl_diagnostics = Some(PclOwnershipTracker::default());
+        self.diagnostic_events = Some((
+            capacity,
+            VecDeque::with_capacity(capacity.min(4096)),
+            self.diagnostic_probe(),
+        ));
+    }
+
+    /// Enable only sparse VMPEG play/pause/end milestones.
+    ///
+    /// This is intended for very long A/V drift runs where per-frame raster,
+    /// DMA, and PCL evidence would add substantial overhead. Each milestone
+    /// still includes the current composed-raster hash.
+    pub fn enable_dvc_milestone_diagnostics(&mut self, capacity: usize) {
+        if capacity == 0 {
+            self.enable_diagnostics(0);
+            return;
+        }
+        self.milestone_only_diagnostics = true;
+        self.bus.set_dma_diagnostics_enabled(false);
+        self.pcl_diagnostics = None;
         self.diagnostic_events = Some((
             capacity,
             VecDeque::with_capacity(capacity.min(4096)),
@@ -1200,6 +1224,17 @@ impl Machine {
                 dvc.audio_underflow_events,
                 dvc.stream_errors,
             ],
+            dvc_milestones: [
+                dvc.play_events,
+                dvc.continue_events,
+                dvc.pause_events,
+                dvc.video_program_end_events,
+                dvc.audio_program_end_events,
+                dvc.audio_start_events,
+                dvc.audio_stop_events,
+                dvc.sequence_end_events,
+                dvc.end_of_data_events,
+            ],
             dvc_state,
         }
     }
@@ -1209,19 +1244,33 @@ impl Machine {
             return;
         };
         if events.len() == *capacity {
-            events.pop_front();
+            // VMPEG play/pause/end milestones are deliberately sparse and
+            // must survive a long run even when per-frame and DMA evidence
+            // fills the bounded ring. Evict the oldest ordinary event first.
+            if let Some(index) = events
+                .iter()
+                .position(|event| !matches!(event, MachineDiagnosticEvent::DvcMilestone { .. }))
+            {
+                events.remove(index);
+            } else if !matches!(event, MachineDiagnosticEvent::DvcMilestone { .. }) {
+                return;
+            } else {
+                events.pop_front();
+            }
         }
         events.push_back(event);
     }
 
     fn sample_diagnostics(&mut self) {
-        self.sample_dma_and_pcl_diagnostics();
+        if !self.milestone_only_diagnostics {
+            self.sample_dma_and_pcl_diagnostics();
+        }
         let current = self.diagnostic_probe();
         let Some((_, _, previous)) = &self.diagnostic_events else {
             return;
         };
         let previous = *previous;
-        if current.frame != previous.frame {
+        if !self.milestone_only_diagnostics && current.frame != previous.frame {
             let geometry = self.bus.mcd212.display_geometry();
             let pixel_count = geometry.raster_width * geometry.raster_height;
             self.push_diagnostic_event(MachineDiagnosticEvent::Frame {
@@ -1244,15 +1293,18 @@ impl Machine {
                 ),
             });
         }
-        if (current.cdic_mode, current.cdic_lba) != (previous.cdic_mode, previous.cdic_lba) {
+        if !self.milestone_only_diagnostics
+            && (current.cdic_mode, current.cdic_lba) != (previous.cdic_mode, previous.cdic_lba)
+        {
             self.push_diagnostic_event(MachineDiagnosticEvent::DiscPosition {
                 cycle: self.cpu.cycles,
                 mode: current.cdic_mode,
                 lba: current.cdic_lba,
             });
         }
-        if (current.cdic_state, current.cdic_interrupt)
-            != (previous.cdic_state, previous.cdic_interrupt)
+        if !self.milestone_only_diagnostics
+            && (current.cdic_state, current.cdic_interrupt)
+                != (previous.cdic_state, previous.cdic_interrupt)
         {
             self.push_diagnostic_event(MachineDiagnosticEvent::CdicState {
                 cycle: self.cpu.cycles,
@@ -1264,7 +1316,7 @@ impl Machine {
                 interrupt_asserted: current.cdic_interrupt,
             });
         }
-        if current.dvc_errors != previous.dvc_errors {
+        if !self.milestone_only_diagnostics && current.dvc_errors != previous.dvc_errors {
             self.push_diagnostic_event(MachineDiagnosticEvent::DvcCounters {
                 cycle: self.cpu.cycles,
                 demux_errors: current.dvc_errors[0],
@@ -1275,7 +1327,28 @@ impl Machine {
                 stream_errors: current.dvc_errors[5],
             });
         }
-        if current.dvc_state != previous.dvc_state {
+        if current.dvc_milestones != previous.dvc_milestones {
+            if let Some(stats) = self.dvc_stats() {
+                let dclk = self
+                    .bus
+                    .dvc
+                    .as_ref()
+                    .map_or(0, |dvc| dvc.register_snapshot().dclk);
+                let geometry = self.bus.mcd212.display_geometry();
+                let pixel_count = geometry.raster_width * geometry.raster_height;
+                let raster_hash = diagnostic_hash_pixels(
+                    &self.bus.mcd212.framebuffer()
+                        [..pixel_count.min(self.bus.mcd212.framebuffer().len())],
+                );
+                self.push_diagnostic_event(MachineDiagnosticEvent::DvcMilestone {
+                    cycle: self.cpu.cycles,
+                    dclk,
+                    stats: Box::new(stats),
+                    raster_hash,
+                });
+            }
+        }
+        if !self.milestone_only_diagnostics && current.dvc_state != previous.dvc_state {
             if let Some(registers) = self.bus.dvc.as_ref().map(Vmpeg::register_snapshot) {
                 self.push_diagnostic_event(MachineDiagnosticEvent::DvcState {
                     cycle: self.cpu.cycles,
@@ -1786,6 +1859,44 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_event_buffer_retains_sparse_dvc_milestones() {
+        let mut rom = vec![0u8; 512 * 1024];
+        rom[..8].copy_from_slice(&[0x00, 0x00, 0x15, 0x00, 0x00, 0x40, 0x04, 0xB8]);
+        let mut machine = Machine::new(&CDI220B, rom).unwrap();
+        machine.enable_diagnostics(2);
+        machine.push_diagnostic_event(MachineDiagnosticEvent::DvcMilestone {
+            cycle: 1,
+            dclk: 1,
+            stats: Box::new(DvcStats {
+                play_events: 1,
+                ..DvcStats::default()
+            }),
+            raster_hash: 1,
+        });
+        for frame in 2..=3 {
+            machine.push_diagnostic_event(MachineDiagnosticEvent::Frame {
+                cycle: frame,
+                frame,
+                geometry: machine.bus.mcd212.display_geometry(),
+                plane_a_hash: 0,
+                plane_b_hash: 0,
+                raster_hash: frame,
+            });
+        }
+
+        let events = machine.take_diagnostic_events();
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::DvcMilestone { stats, .. }
+                if stats.play_events == 1
+        )));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, MachineDiagnosticEvent::Frame { frame: 3, .. })));
+    }
+
+    #[test]
     fn dvc_diagnostics_record_state_changes_without_clock_noise() {
         let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
         machine
@@ -1826,6 +1937,51 @@ mod tests {
             events[2],
             MachineDiagnosticEvent::DvcState { registers, .. }
                 if registers.dma_target == 1 && registers.dclk != 0
+        ));
+    }
+
+    #[test]
+    fn dvc_diagnostics_record_play_milestones_with_cumulative_counters() {
+        let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
+        machine
+            .attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
+            .unwrap();
+        machine.enable_diagnostics(16);
+
+        machine.bus.raw_write8(0x00E0_40C0, 0x00);
+        machine.bus.raw_write8(0x00E0_40C1, 0x08);
+        machine.sample_diagnostics();
+
+        let events = machine.take_diagnostic_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::DvcMilestone {
+                stats,
+                dclk: 0,
+                ..
+            } if stats.play_events == 1
+        )));
+    }
+
+    #[test]
+    fn milestone_only_diagnostics_omit_frame_and_register_noise() {
+        let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
+        machine
+            .attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
+            .unwrap();
+        machine.enable_dvc_milestone_diagnostics(8);
+
+        machine.bus.mcd212.frame_count += 1;
+        machine.bus.raw_write8(0x00E0_40C0, 0x00);
+        machine.bus.raw_write8(0x00E0_40C1, 0x08);
+        machine.sample_diagnostics();
+
+        let events = machine.take_diagnostic_events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            MachineDiagnosticEvent::DvcMilestone { stats, .. }
+                if stats.play_events == 1
         ));
     }
 

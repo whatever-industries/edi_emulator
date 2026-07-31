@@ -167,6 +167,15 @@ pub enum MachineDiagnosticEvent {
         audio_underflows: u64,
         stream_errors: u64,
     },
+    /// A low-frequency VMPEG play/pause/end milestone with cumulative
+    /// counters. Long title runs can derive per-play deltas without recording
+    /// MPEG payloads or sampling free-running state every instruction.
+    DvcMilestone {
+        cycle: u64,
+        dclk: u32,
+        stats: Box<DvcStats>,
+        raster_hash: u64,
+    },
     /// A guest-visible VMPEG register or transport-state transition.
     ///
     /// Free-running DCLK/timer values do not trigger these events, but their
@@ -277,6 +286,7 @@ pub(crate) struct DiagnosticProbe {
     pub cdic_state: [u16; 5],
     pub cdic_interrupt: bool,
     pub dvc_errors: [u64; 6],
+    pub dvc_milestones: [u64; 9],
     pub dvc_state: Option<DvcRegisterSnapshot>,
 }
 

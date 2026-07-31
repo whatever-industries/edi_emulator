@@ -175,6 +175,29 @@ These are separate failure modes. A generalized test set should distinguish:
 5. abort/restart removal of stale B-pictures;
 6. a true dimension or sequence-header change.
 
+The M3.14 synthetic suite now covers items 1, 2, 4, and 5 directly. Its
+project-owned 16x16 I/B/B/P stream also survives 128 consecutive EOS/SOS
+transitions under varying input fragmentation. Device tests preserve queued
+pictures across pause/continue, clear all stale picture state at decoder
+reset, and delay the final picture/EOD/underflow signals until presentation.
+A selected-stream test prevents an ignored PES stream from changing the
+accepted payload or PTS, and an exact six-hour shared SCR/PTS mapping guards
+the integer A/V timebase. The tests passed without an implementation change;
+driver-level PCL release and title-level long-run timing remain the next
+evidence boundary.
+
+The headless acceptance runner now supplies that title-level timing boundary.
+Bounded diagnostic milestones retain cumulative DVC counters and the 45 kHz
+DCLK only when play, pause, first/last-picture, program-end, or audio
+start/stop state changes. A payload-free postprocessor groups milestone-raster
+hashes and counter deltas by play. Two exact 1.1-billion-instruction runs
+produced byte-identical diagnostics and summaries with five play epochs and
+zero decoder errors. Independent audio/video throughput estimates are retained
+as evidence but are deliberately not subtracted into a purported sync result:
+some epochs continue after one stream has ended or external video is hidden.
+A timestamp- or presentation-overlap-based oracle is still required for
+long-run perceptual A/V drift.
+
 ### Display and region observations
 
 TN 93 calculates theoretical pixel-height/width ratios of about 1.19 for 525

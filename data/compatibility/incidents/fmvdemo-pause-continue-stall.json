@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "id": "fmvdemo-pause-continue-stall",
+  "title": "Philips FMV Demonstration Disc native pause/continue",
+  "symptom": "The Play Control sample accepts Pause and Continue, but disc DMA, decoding, presentation, and audio do not resume",
+  "expected": "Continue resumes the paused MPEG sequence from retained state",
+  "status": "open",
+  "reported_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+  "last_reproduced_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": ["dvc", "cdic", "disc-cdfm", "audio"],
+  "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega.rom",
+    "instruction_limit": 1085000000,
+    "input_events": [
+      "60000000:588,265,1,2000000",
+      "400000000:520,240,1,2000000",
+      "650000000:630,250,1,2000000",
+      "850000000:500,225,1,2000000",
+      "1000000000:475,420,1,2000000",
+      "1080000000:415,420,1,2000000"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "cdfm-resume-contract",
+      "hardware_explanation": "CDFM ss_cont expects CDIC command $24 or retained PCL state to restart Mode-2 delivery, but the current CDIC model finishes idle without restoring the producer path.",
+      "supporting_evidence": [
+        "Philips play_control.c calls mv_continue followed by ss_cont.",
+        "VMPEG records one Continue and returns to playing, while CDIC ends idle on command $24.",
+        "DMA words and presented frames remain exactly at their paused values."
+      ],
+      "contradicting_evidence": [
+        "The exact CDIC command-$24 resume semantics have not yet been recovered from a primary driver or firmware trace."
+      ],
+      "falsifying_test": "Trace the guest ss_cont path and CDIC/PCL state from the command write through the next sector. If the guest never requests a restarted producer or command $24 is documented as reset-only, this explanation is incomplete.",
+      "citations": [
+        "Philips FMVDemo SUN/SRC/APPL/play_control.c",
+        "Philips TN 088",
+        "Philips TN 098"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "native-play-control-script",
+      "context": {
+        "base_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+        "dirty_diff_hash": "89aa7263d56789fe6114a377f936b9127fa9cf2692c0cc623e72047f3101e332",
+        "component_fingerprints": {
+          "dvc": "66eee56771d5988b98250e3d4cb1d698c4522264677c00000789d119f29af6ca",
+          "cdic": "81334a065f8cd9712d268427dbf4f42ebbd9d55a6c03c66458f5c80ba4c2d034",
+          "machine": "d8e7f01f64c1bc91d5f7d208dbff8dce3bc80b4671ad74608174f3f939f373d1"
+        },
+        "dependencies": {
+          "Cargo.lock": "da94ce470c588c776fa91786d0bde983413f1c4326ee68511062718483067305"
+        },
+        "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "FMVDemo Play Control native Pause then Continue",
+        "timing": "1085000000 instructions"
+      },
+      "hypothesis_id": "cdfm-resume-contract",
+      "strategy": "Drive the title's own controls, retain the pause and continue milestones, and require DMA and presentation counters to advance after Continue.",
+      "symbols": ["Cdic::execute_command", "Vmpeg::handle_fmv_write", "Machine::sample_diagnostics"],
+      "assumptions": ["The on-disc Play Control path is representative of native CD-RTOS pause/continue."],
+      "expected": "DMA and presented-frame counters advance after Continue with no decoder errors.",
+      "actual": "Continue count reached one and VMPEG playing returned true, but DMA remained at 1,860,244 words and presentation at 535 frames; CDIC was idle on $24 and both FIFOs underflowed.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": ["The unresolved pause path is now deterministic and executable without commercial media."],
+      "reverted": false,
+      "evidence_quality": "high: direct Philips sample source plus bounded native-title diagnostics",
+      "confidence": "high",
+      "applicability": {
+        "conditions": ["CD-i 220/Mono-I VMPEG using native CDFM pause/continue"],
+        "invalidated_by": ["Changes to CDIC command $24, CDFM/PCL resume, DMA2, or VMPEG continue semantics"],
+        "repeat_when": ["Any invalidating dependency changes or primary command documentation is found"]
+      }
+    }
+  ],
+  "manual_verification": []
+}

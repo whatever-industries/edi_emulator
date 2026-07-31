@@ -542,6 +542,15 @@ fn boot(
             let release_at = event.at.saturating_add(event.duration);
             if i == hover_at {
                 machine.bus.slave.set_pointer_absolute(event.x, event.y, 0);
+            } else if i == event.at {
+                // A title may reprogram the emulated pointer after the hover
+                // packet. Re-anchor at the press boundary so a scripted click
+                // always lands at its declared device coordinate.
+                machine.bus.slave.set_pointer_absolute(event.x, event.y, 0);
+                machine
+                    .bus
+                    .slave
+                    .set_pointer(event.x, event.y, event.buttons);
             } else if i >= hover_at {
                 let buttons = if (event.at..release_at).contains(&i) {
                     event.buttons
@@ -634,6 +643,10 @@ fn boot(
         println!(
             "VMPEG end routing: program-end video/audio {}/{}",
             stats.video_program_end_events, stats.audio_program_end_events,
+        );
+        println!(
+            "VMPEG audio stream: selected {}, {} in-place switch(es)",
+            stats.selected_audio_stream, stats.audio_stream_switch_events,
         );
     }
 

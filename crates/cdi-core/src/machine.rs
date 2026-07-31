@@ -1234,6 +1234,7 @@ impl Machine {
                 dvc.audio_stop_events,
                 dvc.sequence_end_events,
                 dvc.end_of_data_events,
+                dvc.audio_stream_switch_events,
             ],
             dvc_state,
         }

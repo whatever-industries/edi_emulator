@@ -220,10 +220,33 @@ Set `CDI_VMPEG_BASELINE_SUMMARY` to one local summary when running the second
 trace to make exact counter, DCLK, and raster-sequence equality an executable
 gate. The local artifacts remain ignored.
 
-Next, add a manually triggered title-level pause/continue scenario and a
-title-level stream-switch scenario. The cake puzzle remains the final extended
-M3.14 title gate. A perceptual or timestamp-based A/V drift oracle is still
-needed; deterministic throughput counters alone do not establish lip sync.
+Two optional local-media title scenarios now drive Philips FMVDemo through its
+own Play Control and Multilingual interfaces. They use instruction-scheduled
+device-coordinate clicks, bounded milestone diagnostics, and no extracted
+media. `scripts/test-vmpeg-pause-continue-local.sh` proves the native driver
+issues Pause and Continue, then requires disc DMA and presentation to advance.
+It currently fails: Continue changes VMPEG back to playing, but CDIC remains
+idle with command `$24`, DMA and decoded-frame counters remain frozen, and the
+audio/video FIFOs underflow. Philips `play_control.c` confirms the application
+calls `mv_continue()` followed by CDFM `ss_cont()`, so the next investigation
+is the CDIC/CDFM resume contract rather than MPEG decoder recovery.
+
+`scripts/test-vmpeg-stream-switch-local.sh` selects Japanese audio during the
+running Multilingual sample and requires both video and audio decode to
+continue without errors. Read-only diagnostics count the in-place stream
+change and expose the selected FMA stream. The title continues, but the first
+current run reports one Layer-II decode error and 54 sync-acquisition bytes.
+Philips `multilingual.c` confirms this is an uninterrupted `ma_cntrl()` stream
+change. Clearing the old compressed tail removed that error but introduced 58
+audio underflows; merely resetting decoder synchronization retained the
+original error. Both behavior changes were reverted and recorded as failed
+implementations, leaving nominal playback unchanged.
+
+Next, resolve the CDIC/CDFM pause-resume stall from primary driver evidence,
+then isolate the Layer-II boundary at an in-place FMA stream change. The cake
+puzzle remains the final extended M3.14 title gate. A perceptual or
+timestamp-based A/V drift oracle is still needed; deterministic throughput
+counters alone do not establish lip sync.
 
 The apparent v0.1.0-to-v0.2.0 regression in The 7th Guest's post-title video
 was isolated separately. Reverting v0.2.0's relative subcode-Q correction did

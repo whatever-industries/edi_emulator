@@ -81,10 +81,13 @@ mapping without requiring a behavior change. The local title runner also
 emits payload-free per-play counter/DCLK summaries and milestone-raster hashes.
 Two exact 1.1-billion-instruction runs produced byte-identical five-play
 diagnostics and summaries with zero decoder errors; the runner can compare a
-new summary against a local exact baseline. The next unchecked action is a
-title-level manual pause/continue scenario, followed by a title-level stream
-switch and the cake puzzle. A timestamp- or presentation-overlap-based oracle
-is still required for perceptual A/V drift. M3.13 remains closed: the
+new summary against a local exact baseline. Native Philips FMVDemo title gates
+now cover pause/continue and an in-place multilingual audio-stream change.
+Pause/continue currently stalls at the CDIC/CDFM resume boundary with command
+`$24` idle; the stream change continues but records one MP2 boundary error.
+The next unchecked actions are to resolve those two evidence-backed device
+gaps, followed by the cake puzzle. A timestamp- or presentation-overlap-based
+oracle is still required for perceptual A/V drift. M3.13 remains closed: the
 historical five rejected pictures predated the shared-IN4 correction and are
 retained as superseded transport evidence; do not add picture smoothing or
 concealment for them.

@@ -286,7 +286,7 @@ pub(crate) struct DiagnosticProbe {
     pub cdic_state: [u16; 5],
     pub cdic_interrupt: bool,
     pub dvc_errors: [u64; 6],
-    pub dvc_milestones: [u64; 9],
+    pub dvc_milestones: [u64; 10],
     pub dvc_state: Option<DvcRegisterSnapshot>,
 }
 

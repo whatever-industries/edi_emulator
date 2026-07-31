@@ -56,3 +56,11 @@ Go pixel-view convenience was not translated. The complete license text is in
 
 MPEG Layer-II audio decoding is provided by the unmodified MIT-licensed
 `oxideav-mp2` 0.0.9 Cargo dependency.
+
+## CDIC Black Box Analyzer (MIT)
+
+The hardware captures and register tests in
+[`Slamy/CDIC_BlackBoxAnalyzer`](https://github.com/Slamy/CDIC_BlackBoxAnalyzer),
+pinned for the CDIC audio-buffer investigation at revision
+`e861f76ece477b3aff0e9c4c70f5c6ba1715e60a`, are used as independent Mono-I
+behavioral evidence. No analyzer source code is incorporated into E-Di.

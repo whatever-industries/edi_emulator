@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "id": "fmvdemo-audio-stream-switch",
+  "title": "Philips FMV Demonstration Disc multilingual stream switch",
+  "symptom": "Switching the running Multilingual sample from Dutch to Japanese records one MP2 decode error",
+  "expected": "The native in-place audio-stream change continues cleanly without decoder errors or underflow",
+  "status": "open",
+  "reported_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+  "last_reproduced_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": ["dvc", "mpeg-audio", "disc-cdfm"],
+  "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega.rom",
+    "instruction_limit": 1120000000,
+    "input_events": [
+      "60000000:588,265,1,2000000",
+      "400000000:520,240,1,2000000",
+      "650000000:630,250,1,2000000",
+      "850000000:500,405,1,2000000",
+      "1000000000:390,468,1,2000000"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "mp2-stream-boundary",
+      "hardware_explanation": "The FMA stream selector changes at a PES boundary which need not be a Layer-II frame boundary; the host decoder currently treats expected acquisition of the new stream as loss of synchronization.",
+      "supporting_evidence": [
+        "Philips multilingual.c changes only ma_cntrl stream selection during uninterrupted playback.",
+        "The FMA register changes from stream 0 to 2 while audio and video decoding continue.",
+        "The run records one audio error and 54 resynchronization bytes, with zero demux/video errors."
+      ],
+      "contradicting_evidence": [
+        "Discarding the old compressed tail removes the decode error but creates repeated audio underflows, so the correct FIFO boundary is not yet established."
+      ],
+      "falsifying_test": "Capture the compressed audio queue and PES boundaries immediately before and after ma_cntrl. If the new selected stream begins on a complete MP2 frame and no old bytes remain, the error originates inside frame decoding rather than selection-boundary handling.",
+      "citations": ["Philips FMVDemo SUN/SRC/APPL/multilingual.c", "Philips TN 088"]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "native-multilingual-script",
+      "context": {
+        "base_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+        "dirty_diff_hash": "89aa7263d56789fe6114a377f936b9127fa9cf2692c0cc623e72047f3101e332",
+        "component_fingerprints": {
+          "dvc": "66eee56771d5988b98250e3d4cb1d698c4522264677c00000789d119f29af6ca",
+          "cdic": "81334a065f8cd9712d268427dbf4f42ebbd9d55a6c03c66458f5c80ba4c2d034"
+        },
+        "dependencies": {"Cargo.lock": "da94ce470c588c776fa91786d0bde983413f1c4326ee68511062718483067305"},
+        "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "FMVDemo Multilingual Dutch-to-Japanese switch",
+        "timing": "1120000000 instructions"
+      },
+      "hypothesis_id": "mp2-stream-boundary",
+      "strategy": "Count the native FMA stream change and require both decoders to advance afterward with zero cumulative errors.",
+      "symbols": ["Vmpeg::handle_fma_write", "MpegSystemDemux::consume_packet", "Mp2Decoder::decode_available"],
+      "assumptions": ["The Japanese button maps to FMA stream 2 as shown by Philips source and the live register."],
+      "expected": "Audio/video continue and cumulative errors remain zero.",
+      "actual": "FMA stream changed from 0 to 2; video and audio continued to 985/1,498 decoded frames, but audio accumulated one error and 54 resync bytes.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": ["The stream switch is now a deterministic, payload-free title gate."],
+      "reverted": false,
+      "evidence_quality": "high: direct Philips sample source and bounded native-title diagnostics",
+      "confidence": "high",
+      "applicability": {
+        "conditions": ["VMPEG in-place FMA audio-stream selection during playback"],
+        "invalidated_by": ["Changes to FMA stream selection, MPEG demux, MP2 FIFO ownership, or decoder error accounting"],
+        "repeat_when": ["Any invalidating dependency changes or a packet-boundary trace becomes available"]
+      }
+    },
+    {
+      "id": "discard-old-compressed-tail",
+      "context": {
+        "base_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+        "dirty_diff_hash": "uncommitted local experiment",
+        "component_fingerprints": {},
+        "dependencies": {},
+        "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "clear undecoded audio bytes and reset frame state on FMA stream change",
+        "timing": "1120000000 instructions"
+      },
+      "hypothesis_id": "mp2-stream-boundary",
+      "strategy": "Discard compressed old-stream tail while preserving decoded PCM.",
+      "symbols": ["Vmpeg::handle_fma_write", "Mp2Decoder::reset"],
+      "assumptions": ["Old compressed bytes must not prefix the newly selected stream."],
+      "expected": "No MP2 error and no audible transport interruption.",
+      "actual": "The MP2 error disappeared, but the run accumulated 58 audio underflows and 619 sync-acquisition bytes.",
+      "outcome": "regression-causing",
+      "regressions": ["Repeated audio underflow after the stream selection"],
+      "improvements": ["Removed the single malformed-frame count"],
+      "reverted": true,
+      "evidence_quality": "medium: deterministic title run, but no packet-boundary capture",
+      "confidence": "high",
+      "applicability": {
+        "conditions": ["The compressed FIFO is cleared immediately on the FMA register write"],
+        "invalidated_by": ["Evidence locating the actual hardware stream-selection boundary"],
+        "repeat_when": ["A trace identifies which bytes hardware retains or discards"]
+      }
+    },
+    {
+      "id": "decoder-state-only-reacquisition",
+      "context": {
+        "base_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+        "dirty_diff_hash": "uncommitted local experiment",
+        "component_fingerprints": {},
+        "dependencies": {},
+        "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "retain compressed/PCM queues but reset Layer-II synchronization state",
+        "timing": "1120000000 instructions"
+      },
+      "hypothesis_id": "mp2-stream-boundary",
+      "strategy": "Treat the switch as expected sync acquisition without changing buffered bytes.",
+      "symbols": ["Vmpeg::handle_fma_write", "Mp2Decoder::decode_available"],
+      "assumptions": ["The error is solely the synchronized flag classifying skipped bytes."],
+      "expected": "The 54 skipped bytes become acquisition bytes and the error count stays zero.",
+      "actual": "The same one MP2 error remained, showing the failure occurs after the immediate register write rather than only in its existing synchronization flag.",
+      "outcome": "implementation-failed",
+      "regressions": [],
+      "improvements": [],
+      "reverted": true,
+      "evidence_quality": "medium: deterministic title run without byte-boundary capture",
+      "confidence": "high",
+      "applicability": {
+        "conditions": ["Only decoder state is reset at the FMA stream-register write"],
+        "invalidated_by": ["Changes to PES delivery timing or a later proven switch boundary"],
+        "repeat_when": ["The reset can be moved to a proven packet/frame boundary"]
+      }
+    }
+  ],
+  "manual_verification": []
+}

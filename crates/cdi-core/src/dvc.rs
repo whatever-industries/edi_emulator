@@ -168,6 +168,10 @@ pub struct DvcStats {
     pub pause_events: u64,
     pub play_events: u64,
     pub continue_events: u64,
+    /// In-place audio stream selections after the initial stream was set.
+    pub audio_stream_switch_events: u64,
+    /// Currently selected MPEG audio stream number, or zero before selection.
+    pub selected_audio_stream: u64,
     pub audio_start_events: u64,
     pub audio_stop_events: u64,
     pub audio_underflow_events: u64,
@@ -755,6 +759,7 @@ impl Vmpeg {
         self.video_demux.clear();
         self.audio_demux.clear();
         self.mp2.reset();
+        self.stats.selected_audio_stream = 0;
         self.audio_sample_accum = 0;
         self.video_decoder.reset();
         self.video_frames.clear();
@@ -1535,6 +1540,16 @@ impl Vmpeg {
                     self.audio_underflow_reported = false;
                 }
             }
+            FMA_STREAM => {
+                let selected = (value & 0x1F) as u8;
+                if let Some(previous) = self.audio_demux.selected_audio_stream {
+                    if previous != selected {
+                        self.stats.audio_stream_switch_events += 1;
+                    }
+                }
+                self.audio_demux.selected_audio_stream = Some(selected);
+                self.stats.selected_audio_stream = u64::from(selected);
+            }
             FMA_ISR => self.acknowledge_fma_isr(value),
             _ => {}
         }
@@ -2163,6 +2178,37 @@ mod tests {
         assert_eq!(decoder.errors, 1);
         assert_eq!(decoder.resync_bytes, 0);
         assert!(!decoder.synchronized);
+    }
+
+    #[test]
+    fn audio_stream_switch_is_recorded_without_changing_decoder_state() {
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+        dvc.audio_demux.selected_audio_stream = Some(0);
+        dvc.audio_demux.audio.extend([0x11, 0x22, 0x33]);
+        dvc.mp2.synchronized = true;
+        dvc.mp2.pcm.extend([1, 2, 3, 4]);
+
+        assert!(dvc.write8(0xE0_3008, 0x00));
+        assert!(dvc.write8(0xE0_3009, 0x02));
+
+        assert_eq!(dvc.audio_demux.selected_audio_stream, Some(2));
+        assert_eq!(dvc.audio_demux.audio, VecDeque::from([0x11, 0x22, 0x33]));
+        assert_eq!(dvc.mp2.pcm, VecDeque::from([1, 2, 3, 4]));
+        assert!(dvc.mp2.synchronized);
+        assert_eq!(dvc.stats.audio_stream_switch_events, 1);
+        assert_eq!(dvc.stats.selected_audio_stream, 2);
+
+        // Rewriting the active stream is not a switch and must not disturb
+        // newly accumulated compressed data.
+        dvc.audio_demux.audio.extend([0x44, 0x55]);
+        assert!(dvc.write8(0xE0_3008, 0x00));
+        assert!(dvc.write8(0xE0_3009, 0x02));
+        assert_eq!(
+            dvc.audio_demux.audio,
+            VecDeque::from([0x11, 0x22, 0x33, 0x44, 0x55])
+        );
+        assert_eq!(dvc.stats.audio_stream_switch_events, 1);
     }
 
     #[test]

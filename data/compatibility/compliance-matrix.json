@@ -183,6 +183,53 @@
         "The multilingual dirty-disc dialog is known native engine behavior but is not correlated with the first failing PCL or decoder event",
         "Synthetic CDI/CDI_VCD.APP and PVD entry-point coverage is pending"
       ]
+    },
+    {
+      "requirement": "VMPEG pause and continue preserve decoder state while CDFM resumes compressed-data delivery",
+      "subsystem": "dvc",
+      "status": "gap",
+      "specification": [
+        "Philips Technical Note 088",
+        "Philips Technical Note 098"
+      ],
+      "firmware_evidence": [
+        "Philips FMVDemo SUN/SRC/APPL/play_control.c calls mv_continue followed by ss_cont"
+      ],
+      "source_symbols": [
+        "cdi_core::dvc::Vmpeg",
+        "cdi_core::cdic::Cdic",
+        "scripts/test-vmpeg-pause-continue-local.sh"
+      ],
+      "tests": [
+        "dvc::tests::pause_continue_retains_current_and_queued_video_pictures"
+      ],
+      "known_gaps": [
+        "The native title gate currently returns VMPEG to playing while CDIC stays idle on command $24 and DMA does not resume",
+        "The exact CDIC/CDFM command-$24 resume contract remains to be recovered"
+      ]
+    },
+    {
+      "requirement": "An in-place FMA audio-stream selection continues MPEG Layer-II playback without malformed frames",
+      "subsystem": "dvc",
+      "status": "gap",
+      "specification": [
+        "Philips Technical Note 088"
+      ],
+      "firmware_evidence": [
+        "Philips FMVDemo SUN/SRC/APPL/multilingual.c changes ma_cntrl stream selection during uninterrupted playback"
+      ],
+      "source_symbols": [
+        "cdi_core::dvc::MpegSystemDemux",
+        "cdi_core::dvc::Mp2Decoder",
+        "scripts/test-vmpeg-stream-switch-local.sh"
+      ],
+      "tests": [
+        "dvc::tests::audio_stream_switch_is_recorded_without_changing_decoder_state"
+      ],
+      "known_gaps": [
+        "The native Dutch-to-Japanese title gate currently records one MP2 error and 54 sync-acquisition bytes",
+        "The hardware FIFO boundary for a changed FMA stream selector has not yet been established"
+      ]
     }
   ]
 }

@@ -7,6 +7,10 @@
 //! 75 Hz sector pump, XA-ADPCM audio decoding, and raises IN4 with its own
 //! programmable vector.
 //!
+//! CD-fed audio receipt/playback and AUDCTL status semantics are corrected
+//! from independent Mono-I hardware captures in `Slamy/CDIC_BlackBoxAnalyzer`
+//! revision `e861f76`; see `docs/specification-research.md`.
+//!
 //! Decoded audio is pushed into `audio_out` as 44.1 kHz interleaved stereo
 //! (naive rate conversion from 18.9/37.8 kHz XA rates); the frontend drains
 //! it.
@@ -128,6 +132,13 @@ pub struct Cdic {
     decoding_audio_map: bool,
     audio_map_stop_requested: bool,
     decode_addr: u16,
+    /// Next CD-fed XA buffer: 0 = $2800, 1 = $3200.
+    realtime_audio_next_write: u8,
+    realtime_audio_ready: [bool; 2],
+    realtime_audio_next_play: u8,
+    realtime_audio_counter: u8,
+    realtime_audio_playing: bool,
+    cdda_pending: Option<Vec<u8>>,
     atten: [u8; 4],
     xa_last: [i16; 4],
 
@@ -183,6 +194,12 @@ impl Cdic {
             decoding_audio_map: false,
             audio_map_stop_requested: false,
             decode_addr: 0,
+            realtime_audio_next_write: 0,
+            realtime_audio_ready: [false; 2],
+            realtime_audio_next_play: 0,
+            realtime_audio_counter: 0,
+            realtime_audio_playing: false,
+            cdda_pending: None,
             atten: [0; 4],
             xa_last: [0; 4],
             audio_out: Vec::new(),
@@ -257,6 +274,7 @@ impl Cdic {
     /// resetting the host or the CDIC register interface.
     pub fn media_changed(&mut self, disc: Option<&DiscImage>) {
         self.cancel_disc_read();
+        self.stop_realtime_audio();
         self.audio_out.clear();
         self.xa_last = [0; 4];
         self.set_disc_layout(disc);
@@ -291,10 +309,12 @@ impl Cdic {
                 v
             }
             0x3FFA => {
-                if !self.decoding_audio_map {
-                    self.z_buffer ^= 0x0001;
-                }
-                self.z_buffer
+                let value = self.z_buffer;
+                // CDIC_BlackBoxAnalyzer e861f76, test_audiomap_play_stop:
+                // bit 0 reports an $ff-coded stop once; reads never invent
+                // the alternating value used by the old MAME-derived HLE.
+                self.z_buffer &= !0x0001;
+                value
             }
             0x3FFE => self.data_buffer,
             _ => {
@@ -319,13 +339,15 @@ impl Cdic {
             0x3FF4 => self.audio_buffer = data,
             0x3FF6 => self.x_buffer = data,
             0x3FFA => {
-                self.z_buffer = data;
+                let stop_status = self.z_buffer & 0x0001;
+                self.z_buffer = (data & !0x0001) | stop_status;
                 log::debug!(
                     "cdic: Z-buffer write {data:#06x} (map={}, decode={:#06x})",
                     self.decoding_audio_map,
                     self.decode_addr
                 );
-                if self.z_buffer & 0x2000 == 0 {
+                if data & 0x0800 == 0 {
+                    self.stop_realtime_audio();
                     if self.decoding_audio_map {
                         // AUDCTL cannot stop the sector already being
                         // decoded. Latch the request and report completion
@@ -334,7 +356,7 @@ impl Cdic {
                     } else {
                         self.decode_addr = 0xFFFF;
                     }
-                } else if !self.decoding_audio_map {
+                } else if data & 0x2000 != 0 && !self.decoding_audio_map {
                     // CD-RTOS gives memory sound maps priority over disc
                     // audio. Starting one aborts CD-DA; real-time ADPCM keeps
                     // streaming but remains inaudible until the map ends.
@@ -347,6 +369,11 @@ impl Cdic {
                     self.decoding_audio_map = true;
                     self.audio_map_stop_requested = false;
                     self.xa_last = [0; 4];
+                } else if data & 0x2000 == 0 && !self.decoding_audio_map {
+                    // Hardware traces start CDDA and CD-fed XA only after
+                    // software writes AUDCTL $0800. Sector receipt merely
+                    // fills the CDIC's audio buffer.
+                    self.start_realtime_audio();
                 }
             }
             0x3FFC => self.interrupt_vector = data,
@@ -420,6 +447,16 @@ impl Cdic {
         self.curr_lba = self.lba_from_time();
         // Spinup delay; MAME uses >= 6 ticks to avoid softlocks.
         self.disc_spinup_counter = 6;
+        match mode {
+            DiscMode::Mode2 => {
+                self.realtime_audio_next_write = 0;
+                self.realtime_audio_ready = [false; 2];
+                self.realtime_audio_next_play = 0;
+                self.realtime_audio_counter = 0;
+            }
+            DiscMode::Cdda => self.cdda_pending = None,
+            _ => {}
+        }
     }
 
     fn cancel_disc_read(&mut self) {
@@ -577,13 +614,10 @@ impl Cdic {
             if !self.is_mode2_sector_selected(&buffer) {
                 return;
             }
-            if self.is_mode2_audio_selected(&buffer) {
-                self.play_realtime_audio_sector(buffer[SECTOR_CODING2], &buffer);
-            }
         } else if self.disc_mode == DiscMode::Cdda {
             self.audio_sector_counter = 2;
             self.decoding_audio_map = false;
-            self.play_cdda_sector(&buffer);
+            self.receive_cdda_sector(&buffer);
             if (self.curr_lba + 150) % 75 != 0 {
                 return;
             }
@@ -725,8 +759,17 @@ impl Cdic {
     /// Copy a processed sector + subcode into the ping-pong buffers and
     /// raise the data-ready interrupt.
     fn deliver_sector(&mut self, buffer: &[u8], q: &[u8; 12]) {
-        self.data_buffer ^= 0x0001;
-        self.data_buffer &= !0x0004;
+        let realtime_audio = self.command == 0x2A && self.is_mode2_audio_selected(buffer);
+        let audio_slot = if realtime_audio {
+            let slot = self.realtime_audio_next_write;
+            self.realtime_audio_next_write ^= 1;
+            self.data_buffer = (self.data_buffer & !0x0005) | 0x0004 | u16::from(slot);
+            Some(usize::from(slot))
+        } else {
+            self.data_buffer ^= 0x0001;
+            self.data_buffer &= !0x0004;
+            None
+        };
 
         let mut word_idx = usize::from(self.data_buffer & 0x0005) * 0xA00 / 2;
         let put = |ram: &mut [u8], idx: &mut usize, word: u16| {
@@ -740,10 +783,6 @@ impl Cdic {
             let w = (u16::from(buffer[i]) << 8) | u16::from(buffer[i + 1]);
             put(&mut self.ram, &mut word_idx, w);
         }
-        if self.command == 0x2A && self.is_mode2_audio_selected(buffer) {
-            self.data_buffer |= 0x0004;
-            word_idx += 0x1400;
-        }
         for i in (SECTOR_FILE2..SECTOR_SIZE).step_by(2) {
             let w = (u16::from(buffer[i]) << 8) | u16::from(buffer[i + 1]);
             put(&mut self.ram, &mut word_idx, w);
@@ -755,6 +794,10 @@ impl Cdic {
         self.x_buffer |= 0x8000;
         self.data_buffer |= 0x4000;
         self.update_interrupt_state();
+        if let Some(slot) = audio_slot {
+            self.realtime_audio_ready[slot] = true;
+            self.try_play_realtime_audio();
+        }
         log::debug!(
             "cdic: sector delivered (lba {}, buffer {:#06x}, vector {:#04x}, file/channel/submode {:02x}/{:02x}/{:02x}, filters {:#06x}/{:#010x}/{:#06x})",
             self.curr_lba,
@@ -776,6 +819,12 @@ impl Cdic {
     // --- Audio ------------------------------------------------------------
 
     fn audio_tick(&mut self) {
+        if self.realtime_audio_counter > 0 {
+            self.realtime_audio_counter -= 1;
+            if self.realtime_audio_counter == 0 {
+                self.try_play_realtime_audio();
+            }
+        }
         if self.audio_sector_counter > 0 {
             self.audio_sector_counter -= 1;
             if self.audio_sector_counter > 0 {
@@ -831,6 +880,7 @@ impl Cdic {
             log::debug!("cdic: sound map ended at buffer {base:#06x}");
             self.decode_addr = 0xFFFF;
             self.audio_sector_counter = 0;
+            self.z_buffer = (self.z_buffer & !0x0800) | 0x0001;
         }
         // The completion bit reports transfer of the preceding sound-map
         // buffer to the audio processor, not the end of the whole map.  The
@@ -853,17 +903,61 @@ impl Cdic {
         }
     }
 
-    fn play_audio_sector(&mut self, coding: u8, buffer: &[u8], data_offset: usize) {
-        let data = &buffer[data_offset..data_offset + SECTOR_AUDIO_SIZE];
-        self.play_audio_data(coding, data);
+    fn receive_cdda_sector(&mut self, data: &[u8]) {
+        if self.realtime_audio_playing && !self.decoding_audio_map {
+            self.play_cdda_sector(data);
+        } else if self.cdda_pending.is_none() {
+            self.cdda_pending = Some(data.to_vec());
+        }
     }
 
-    fn play_realtime_audio_sector(&mut self, coding: u8, buffer: &[u8]) {
-        if self.decoding_audio_map {
+    fn start_realtime_audio(&mut self) {
+        if self.realtime_audio_playing {
             return;
         }
-        self.audio_sector_counter = Self::sector_count_for_coding(coding);
-        self.play_audio_sector(coding, buffer, SECTOR_DATA);
+        self.realtime_audio_playing = true;
+        if self.disc_mode == DiscMode::Cdda {
+            if let Some(sector) = self.cdda_pending.take() {
+                self.play_cdda_sector(&sector);
+            }
+            return;
+        }
+        self.realtime_audio_next_play = 0;
+        self.try_play_realtime_audio();
+    }
+
+    fn stop_realtime_audio(&mut self) {
+        self.realtime_audio_playing = false;
+        self.realtime_audio_counter = 0;
+        self.cdda_pending = None;
+    }
+
+    fn try_play_realtime_audio(&mut self) {
+        if !self.realtime_audio_playing
+            || self.decoding_audio_map
+            || self.realtime_audio_counter != 0
+        {
+            return;
+        }
+        let slot = usize::from(self.realtime_audio_next_play);
+        if !self.realtime_audio_ready[slot] {
+            return;
+        }
+        self.realtime_audio_ready[slot] = false;
+        self.realtime_audio_next_play ^= 1;
+
+        let base = 0x2800 + slot * 0x0A00;
+        let coding = self.ram[base + (SECTOR_CODING2 - SECTOR_HEADER)];
+        if coding == 0xFF {
+            self.realtime_audio_playing = false;
+            self.z_buffer = (self.z_buffer & !0x0800) | 0x0001;
+            return;
+        }
+        let data_start = base + (SECTOR_DATA - SECTOR_HEADER);
+        let mut sector_data = vec![0; SECTOR_AUDIO_SIZE];
+        sector_data.copy_from_slice(&self.ram[data_start..data_start + SECTOR_AUDIO_SIZE]);
+        self.realtime_audio_counter = Self::sector_count_for_coding(coding);
+        self.play_audio_data(coding, &sector_data);
     }
 
     fn play_audio_data(&mut self, coding: u8, data: &[u8]) {
@@ -1039,14 +1133,81 @@ mod tests {
     }
 
     #[test]
-    fn cdda_pushes_samples() {
+    fn audctl_ff_status_is_returned_once_instead_of_toggled() {
         let mut c = Cdic::new();
+        c.z_buffer = 0x0801;
+
+        assert_eq!(c.read16(0x3FFA), 0x0801);
+        assert_eq!(c.read16(0x3FFA), 0x0800);
+        assert_eq!(c.read16(0x3FFA), 0x0800);
+    }
+
+    #[test]
+    fn first_realtime_audio_sector_uses_buffer_2800() {
+        let mut c = Cdic::new();
+        c.command = 0x2A;
+        c.audio_channel = 1;
+        let mut sector = mode2_sector(0, 0, SUBMODE_FORM | SUBMODE_AUDIO);
+        sector[SECTOR_CODING2] = CODING_STEREO;
+        sector[SECTOR_DATA] = 0x5A;
+
+        c.deliver_sector(&sector, &[0; 12]);
+
+        assert_eq!(c.data_buffer & 0x000F, 4);
+        assert_eq!(
+            c.ram[0x2800 + (SECTOR_CODING2 - SECTOR_HEADER)],
+            CODING_STEREO
+        );
+        assert_eq!(c.ram[0x2800 + (SECTOR_DATA - SECTOR_HEADER)], 0x5A);
+        assert!(
+            c.audio_out.is_empty(),
+            "sector receipt must not start playback"
+        );
+
+        sector[SECTOR_DATA] = 0xA5;
+        c.deliver_sector(&sector, &[0; 12]);
+        assert_eq!(c.data_buffer & 0x000F, 5);
+        assert_eq!(c.ram[0x3200 + (SECTOR_DATA - SECTOR_HEADER)], 0xA5);
+
+        c.write16(0x3FFA, 0x0800);
+        assert!(!c.audio_out.is_empty(), "AUDCTL $0800 starts buffered XA");
+        let first_buffer_samples = c.audio_out.len();
+        for _ in 0..Cdic::sector_count_for_coding(CODING_STEREO) {
+            c.audio_tick();
+        }
+        assert_eq!(c.audio_out.len(), first_buffer_samples * 2);
+    }
+
+    #[test]
+    fn sound_map_requires_play_bit_and_ff_sets_one_shot_status() {
+        let mut c = Cdic::new();
+        c.write16(0x3FFA, 0x2000);
+        assert!(
+            !c.decoding_audio_map,
+            "IRQ enable alone must not start playback"
+        );
+
+        c.ram[0x2800 + (SECTOR_CODING2 - SECTOR_HEADER)] = 0xFF;
+        c.write16(0x3FFA, 0x2800);
+        c.audio_tick();
+
+        assert_eq!(c.read16(0x3FFA), 0x2001);
+        assert_eq!(c.read16(0x3FFA), 0x2000);
+    }
+
+    #[test]
+    fn cdda_waits_for_audctl_before_pushing_samples() {
+        let mut c = Cdic::new();
+        c.disc_mode = DiscMode::Cdda;
         let mut sector = [0u8; 2352];
         sector[0] = 0x34;
         sector[1] = 0x12;
         sector[2] = 0x78;
         sector[3] = 0x56;
-        c.play_cdda_sector(&sector);
+        c.receive_cdda_sector(&sector);
+        assert!(c.audio_out.is_empty());
+
+        c.write16(0x3FFA, 0x0800);
         assert_eq!(c.audio_out[0], 0x1234);
         assert_eq!(c.audio_out[1], 0x5678);
         assert_eq!(c.audio_out.len(), 2 * (2352 / 4));
@@ -1055,11 +1216,14 @@ mod tests {
     #[test]
     fn sound_map_takes_priority_over_realtime_adpcm() {
         let mut c = Cdic::new();
-        let sector = [0u8; SECTOR_SIZE];
-        let coding = CODING_STEREO; // Level B, 37.8 kHz stereo
+        c.command = 0x2A;
+        c.audio_channel = 1;
+        let mut sector = mode2_sector(0, 0, SUBMODE_FORM | SUBMODE_AUDIO);
+        sector[SECTOR_CODING2] = CODING_STEREO;
 
         c.decoding_audio_map = true;
-        c.play_realtime_audio_sector(coding, &sector);
+        c.deliver_sector(&sector, &[0; 12]);
+        c.write16(0x3FFA, 0x0800);
         assert!(c.audio_out.is_empty());
         assert!(
             c.decoding_audio_map,
@@ -1067,7 +1231,7 @@ mod tests {
         );
 
         c.decoding_audio_map = false;
-        c.play_realtime_audio_sector(coding, &sector);
+        c.write16(0x3FFA, 0x0800);
         assert!(!c.audio_out.is_empty());
     }
 
@@ -1077,7 +1241,7 @@ mod tests {
         c.disc_command = 0x28;
         c.disc_mode = DiscMode::Cdda;
 
-        c.write16(0x3FFA, 0x2000);
+        c.write16(0x3FFA, 0x2800);
 
         assert!(c.decoding_audio_map);
         assert_eq!(c.disc_command, 0);

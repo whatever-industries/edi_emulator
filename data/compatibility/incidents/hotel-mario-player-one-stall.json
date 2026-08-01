@@ -4,12 +4,12 @@
   "title": "Hotel Mario Player 1 transition stall",
   "symptom": "Selecting Player 1 removes the menu text but never advances from the title background",
   "expected": "Selecting Player 1 opens the NEW / RESTORE submenu",
-  "status": "fixed-unverified",
+  "status": "resolved",
   "reported_revision": "36b46f758770de53c4846419beffb9bb022c4615",
   "last_reproduced_revision": "36b46f758770de53c4846419beffb9bb022c4615",
-  "last_verified_revision": null,
+  "last_verified_revision": "9b1eacb34cc1e361ad2a0f8c2083f5bfa52e3c37",
   "evidence_status": "current",
-  "revalidation_reason": "The deterministic correction is verified headlessly; GUI verification is still required.",
+  "revalidation_reason": null,
   "components": [
     "cdic",
     "diagnostic-input"
@@ -166,5 +166,11 @@
       }
     }
   ],
-  "manual_verification": []
+  "manual_verification": [
+    {
+      "revision": "9b1eacb34cc1e361ad2a0f8c2083f5bfa52e3c37",
+      "result": "accepted",
+      "notes": "Frontend test confirmed that selecting Hotel Mario Player 1 reaches the NEW / RESTORE submenu. Neighboring Earth Command and CD-BGM audio checks also passed; Alien Gate firing audio worked and its one transient freeze did not recur after a clean relaunch."
+    }
+  ]
 }

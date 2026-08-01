@@ -281,7 +281,11 @@ impl Cdic {
     }
 
     fn update_interrupt_state(&mut self) {
-        self.int_line = (self.x_buffer | self.audio_buffer) & 0x8000 != 0;
+        // AUDCTL bit 13 enables sound-map buffer interrupts.  Mono-I
+        // captures leave ABUF bit 15 set after an AUDCTL-reset abort, but do
+        // not raise an IRQ because that write also cleared the enable bit.
+        let audio_map_irq = self.audio_buffer & 0x8000 != 0 && self.z_buffer & 0x2000 != 0;
+        self.int_line = self.x_buffer & 0x8000 != 0 || audio_map_irq;
     }
 
     // --- Register access (16-bit registers at $303C00 / $303FF4+) --------
@@ -375,6 +379,7 @@ impl Cdic {
                     // fills the CDIC's audio buffer.
                     self.start_realtime_audio();
                 }
+                self.update_interrupt_state();
             }
             0x3FFC => self.interrupt_vector = data,
             0x3FFE => {
@@ -902,6 +907,8 @@ impl Cdic {
             log::debug!("cdic: sound map ended at buffer {base:#06x}");
             self.decode_addr = 0xFFFF;
             self.audio_sector_counter = 0;
+            self.audio_format_sectors = 0;
+            self.decoding_audio_map = false;
             self.z_buffer = (self.z_buffer & !0x0800) | 0x0001;
         }
         // The completion bit reports transfer of the preceding sound-map
@@ -1165,6 +1172,20 @@ mod tests {
     }
 
     #[test]
+    fn clearing_audctl_sound_map_enable_masks_a_pending_abuf_interrupt() {
+        let mut c = Cdic::new();
+        c.z_buffer = 0x2800;
+        c.audio_buffer = 0x8000;
+        c.update_interrupt_state();
+        assert!(c.int_line());
+
+        c.write16(0x3FFA, 0x0000);
+
+        assert_eq!(c.audio_buffer & 0x8000, 0x8000);
+        assert!(!c.int_line());
+    }
+
+    #[test]
     fn first_realtime_audio_sector_uses_buffer_2800() {
         let mut c = Cdic::new();
         c.command = 0x2A;
@@ -1217,6 +1238,9 @@ mod tests {
         c.write16(0x3FFA, 0x2800);
         c.audio_tick();
 
+        assert!(!c.decoding_audio_map);
+        assert_eq!(c.audio_buffer & 0x8000, 0);
+        assert!(!c.int_line());
         assert_eq!(c.read16(0x3FFA), 0x2001);
         assert_eq!(c.read16(0x3FFA), 0x2000);
     }
@@ -1275,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn stopping_sound_map_waits_for_sector_and_signals_completion() {
+    fn aborting_sound_map_waits_for_sector_without_raising_irq() {
         let mut c = Cdic::new();
         c.decoding_audio_map = true;
         c.audio_sector_counter = 2;
@@ -1290,7 +1314,7 @@ mod tests {
         c.audio_tick();
         assert!(!c.decoding_audio_map);
         assert_eq!(c.audio_buffer & 0x8000, 0x8000);
-        assert!(c.int_line());
+        assert!(!c.int_line());
     }
 
     #[test]
@@ -1312,6 +1336,129 @@ mod tests {
         assert_eq!(c.decode_addr, 0x2800);
         assert_eq!(c.audio_buffer & 0x8000, 0x8000);
         assert!(c.int_line(), "software must be told that a half is free");
+    }
+
+    fn set_sound_map_half(c: &mut Cdic, base: usize, coding: u8, sample: u8) {
+        c.ram[base + (SECTOR_CODING2 - SECTOR_HEADER)] = coding;
+        let data_start = base + (SECTOR_DATA - SECTOR_HEADER);
+        c.ram[data_start..data_start + SECTOR_AUDIO_SIZE].fill(sample);
+    }
+
+    fn finish_sound_map_sector(c: &mut Cdic, coding: u8) {
+        for _ in 0..Cdic::sector_count_for_coding(coding) {
+            c.audio_tick();
+        }
+    }
+
+    #[test]
+    fn one_sector_sound_map_reports_transfer_done_with_pcm_still_queued() {
+        let mut c = Cdic::new();
+        let coding = CODING_18KHZ | CODING_MONO;
+        set_sound_map_half(&mut c, 0x2800, coding, 0x11);
+        set_sound_map_half(&mut c, 0x3200, 0xFF, 0);
+
+        c.write16(0x3FFA, 0x2800);
+        c.audio_tick();
+        let queued_tail = c.audio_out.len();
+        assert!(queued_tail > 0);
+        assert!(c.decoding_audio_map);
+        assert_eq!(c.audio_buffer & 0x8000, 0);
+
+        finish_sound_map_sector(&mut c, coding);
+
+        // Philips TN079 distinguishes completion of the RAM-to-audio-
+        // processor transfer from the later audible end of its internal
+        // queue.  `audio_out` is that downstream queue in this HLE.
+        assert!(!c.decoding_audio_map);
+        assert_eq!(c.decode_addr, 0xFFFF);
+        assert_eq!(c.audio_out.len(), queued_tail);
+        assert_eq!(c.audio_buffer & 0x8000, 0x8000);
+        assert!(c.int_line());
+        assert_eq!(c.read16(0x3FFA), 0x2001);
+        assert_eq!(c.read16(0x3FFA), 0x2000);
+
+        // CDIC_BlackBoxAnalyzer `test_audiomap_play_stop` observes no
+        // second completion interrupt after the $ff-coded stop.
+        c.read16(0x3FF4);
+        c.audio_tick();
+        assert!(!c.int_line());
+    }
+
+    #[test]
+    fn two_sector_sound_map_interrupts_each_transfer_then_reports_done() {
+        let mut c = Cdic::new();
+        let coding = CODING_18KHZ | CODING_MONO;
+        set_sound_map_half(&mut c, 0x2800, coding, 0x11);
+        set_sound_map_half(&mut c, 0x3200, coding, 0x22);
+
+        c.write16(0x3FFA, 0x2800);
+        c.audio_tick();
+        let one_sector_samples = c.audio_out.len();
+        assert!(one_sector_samples > 0);
+
+        finish_sound_map_sector(&mut c, coding);
+        assert_eq!(c.audio_out.len(), one_sector_samples * 2);
+        assert_eq!(c.audio_buffer & 0x8000, 0x8000);
+        assert!(c.decoding_audio_map);
+
+        // Software owns the half whose transfer just completed and can put
+        // the terminator there while the other half remains queued.
+        c.read16(0x3FF4);
+        set_sound_map_half(&mut c, 0x2800, 0xFF, 0);
+        finish_sound_map_sector(&mut c, coding);
+
+        assert!(!c.decoding_audio_map);
+        assert_eq!(c.audio_out.len(), one_sector_samples * 2);
+        assert_eq!(c.audio_buffer & 0x8000, 0x8000);
+        assert_eq!(c.read16(0x3FFA), 0x2001);
+    }
+
+    #[test]
+    fn aborting_sound_map_preserves_queued_tail_and_skips_next_half() {
+        let mut c = Cdic::new();
+        let coding = CODING_18KHZ | CODING_MONO;
+        set_sound_map_half(&mut c, 0x2800, coding, 0x11);
+        set_sound_map_half(&mut c, 0x3200, coding, 0x22);
+
+        c.write16(0x3FFA, 0x2800);
+        c.audio_tick();
+        let queued_tail = c.audio_out.len();
+        c.write16(0x3FFA, 0x0000);
+        finish_sound_map_sector(&mut c, coding);
+
+        assert!(!c.decoding_audio_map);
+        assert_eq!(c.decode_addr, 0xFFFF);
+        assert_eq!(c.audio_out.len(), queued_tail);
+        assert_eq!(c.audio_buffer & 0x8000, 0x8000);
+        assert!(!c.int_line());
+        assert_eq!(c.read16(0x3FFA) & 0x0001, 0);
+    }
+
+    #[test]
+    fn completed_sound_map_can_be_replaced_while_pcm_tail_is_queued() {
+        let mut c = Cdic::new();
+        let coding = CODING_18KHZ | CODING_MONO;
+        set_sound_map_half(&mut c, 0x2800, coding, 0x11);
+        set_sound_map_half(&mut c, 0x3200, 0xFF, 0);
+
+        c.write16(0x3FFA, 0x2800);
+        c.audio_tick();
+        let first_map_samples = c.audio_out.len();
+        finish_sound_map_sector(&mut c, coding);
+        assert!(!c.decoding_audio_map);
+
+        // A driver can queue the next map as soon as the prior transfer is
+        // done; the previous map's downstream PCM must not be discarded.
+        c.read16(0x3FFA);
+        c.read16(0x3FF4);
+        set_sound_map_half(&mut c, 0x2800, coding, 0x33);
+        set_sound_map_half(&mut c, 0x3200, 0xFF, 0);
+        c.write16(0x3FFA, 0x2800);
+        assert!(c.decoding_audio_map);
+        c.audio_tick();
+
+        assert_eq!(c.audio_out.len(), first_map_samples * 2);
+        assert!(c.decoding_audio_map);
     }
 
     fn mode2_sector(file: u8, channel: u8, submode: u8) -> [u8; 2352] {

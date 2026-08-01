@@ -294,9 +294,9 @@ jobs:
           body: |
             ## E-Di v${{ needs.version.outputs.version }}
 
-            E-Di: Emulator Disc Interactive — a Philips CD-i player emulator.
-            System and VMPEG DVC firmware are bundled; open a `.cue` disc image
-            and play. Mouse, keyboard, and gamepad input supported.
+            - Corrected CDIC XA sector routing and AUDCTL playback sequencing.
+            - Fixed sound-map completion and interrupt behavior for short effects.
+            - Restored Hotel Mario progression while retaining verified title audio.
 
             ### Downloads
             | Platform | File |

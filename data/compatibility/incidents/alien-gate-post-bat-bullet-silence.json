@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "id": "alien-gate-post-bat-bullet-silence",
+  "title": "Alien Gate bullet audio stops after the bat-enemy sequence",
+  "symptom": "Bullet sound effects are audible earlier in gameplay and then stop after the bat enemies fly, while firing and gameplay continue.",
+  "expected": "Match the title's real-hardware behavior: bullet sound effects stop after the bat-enemy sequence and must not be forced to continue by an emulator-side audio workaround.",
+  "status": "resolved-as-authored",
+  "reported_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "last_reproduced_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "last_verified_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "cdic",
+    "audio",
+    "title-authoring"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "none",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "title-authored-sound-map-lifecycle",
+      "hardware_explanation": "Alien Gate stops issuing or retaining the bullet sound map after the bat-enemy sequence. The emulator should honor the guest's CDIC audio lifecycle rather than infer that every later projectile requires a sound.",
+      "supporting_evidence": [
+        "The same post-bat bullet silence is visible and audible in user-reviewed real-hardware footage.",
+        "Current E-Di behavior matches the sequence-specific transition instead of losing all title audio at startup.",
+        "Earth Command termination and other Alien Gate audio behavior remain correct under the current CDIC sound-map model."
+      ],
+      "contradicting_evidence": [
+        "No bounded guest/CDIC trace has yet marked the exact bat-to-silence command boundary.",
+        "The earlier emulator report did not record whether firing occurred before or after the bats appeared."
+      ],
+      "falsifying_test": "A synchronized real-player and emulator trace showing the real player continues bullet effects after the same bat boundary would reopen the issue.",
+      "citations": [
+        "https://www.youtube.com/watch?v=Vj0GFhxTsi0",
+        "docs/specification-research.md CDIC sound-map lifecycle"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "resolved-as-authored",
+      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "notes": "User compared E-Di with real-hardware footage at https://www.youtube.com/watch?v=Vj0GFhxTsi0 and confirmed that bullet effects also stop after the bat enemies on hardware. The earlier no-bullet-sound report lacked a pre/post-bat checkpoint and is therefore contextualized as potentially observing this expected transition."
+    }
+  ]
+}

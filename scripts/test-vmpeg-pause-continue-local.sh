@@ -20,18 +20,23 @@ diagnostics_path="$result_root/fmvdemo-pause-continue.json"
 log_path="$result_root/fmvdemo-pause-continue.log"
 
 cd "$repo_root"
+# Philips TN 088 documents mv_pause intermittently returning E$NotRdy
+# (#246). Bounded retries exercise the native recovery path without teaching
+# the emulator or application a title-specific workaround.
 EDI_DIAGNOSTIC_EVENT_CAPACITY=512 EDI_DIAGNOSTIC_MILESTONES_ONLY=1 \
     cargo run -q -p cdi-cli --release -- \
     boot "$CDI_SYSTEM_ROM" \
-    --instructions "${CDI_VMPEG_PAUSE_INSTRUCTIONS:-1085000000}" \
+    --instructions "${CDI_VMPEG_PAUSE_INSTRUCTIONS:-1030000000}" \
     --disc "$CDI_FMVDEMO_CUE" \
     --dvc-rom "$CDI_VMPEG_ROM" \
     --click-event '60000000:588,265,1,2000000' \
     --click-event '400000000:520,240,1,2000000' \
     --click-event '650000000:630,250,1,2000000' \
     --click-event '850000000:500,225,1,2000000' \
-    --click-event '1000000000:475,420,1,2000000' \
-    --click-event '1080000000:415,420,1,2000000' \
+    --click-event '920000000:475,420,1,2000000' \
+    --click-event '940000000:475,420,1,2000000' \
+    --click-event '960000000:475,420,1,2000000' \
+    --click-event '980000000:475,420,1,2000000' \
     --diagnostics "$diagnostics_path" \
     --hash | tee "$log_path"
 

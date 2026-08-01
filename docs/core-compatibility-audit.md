@@ -150,6 +150,14 @@ the historical looping fault. Alien Gate's separate missing-HUD edge report
 is display-only and is tracked in
 `data/compatibility/incidents/alien-gate-hud-lower-edge-missing.json`.
 
+Real-hardware footage reviewed on 2026-08-01 establishes a more precise Alien
+Gate audio oracle: bullet effects are present earlier, then stop after the bat
+enemies fly. E-Di matches that sequence. The earlier unbounded "no bullet
+sound" observation may have been made after this authored boundary and must
+not be treated as a regression without a pre-/post-bat checkpoint. See
+`data/compatibility/incidents/alien-gate-post-bat-bullet-silence.json` and the
+hardware reference at <https://www.youtube.com/watch?v=Vj0GFhxTsi0>.
+
 Later on 2026-07-26, the corrected shared-IN4 build passed the deterministic
 550-million-instruction The 7th Guest transition checkpoint twice under the
 section-6.2 timing model, including one run with the unrelated DMA0 experiment

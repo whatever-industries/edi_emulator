@@ -225,11 +225,27 @@ own Play Control and Multilingual interfaces. They use instruction-scheduled
 device-coordinate clicks, bounded milestone diagnostics, and no extracted
 media. `scripts/test-vmpeg-pause-continue-local.sh` proves the native driver
 issues Pause and Continue, then requires disc DMA and presentation to advance.
-It currently fails: Continue changes VMPEG back to playing, but CDIC remains
-idle with command `$24`, DMA and decoded-frame counters remain frozen, and the
-audio/video FIFOs underflow. Philips `play_control.c` confirms the application
-calls `mv_continue()` followed by CDFM `ss_cont()`, so the next investigation
-is the CDIC/CDFM resume contract rather than MPEG decoder recovery.
+Philips `play_control.c` confirms that the application calls `mv_continue()`
+followed by CDFM `ss_cont()`. CDIC BlackBoxAnalyzer trace `e861f76` and the
+CD-i 220 driver show that DBUF gates delivery while the optical position
+advances, `$23/$24` finish the sector under the head, and `ss_cont()` starts a
+fresh `$2a` read. Those transport semantics are now modeled and covered by
+unit tests.
+
+The remaining stall separated into a documented native erratum and an
+emulator defect. Philips TN 088 says `mv_pause()` may return error 246
+(`E$NotRdy`) and recommends a retry; the local gate therefore makes a bounded
+set of Pause attempts without adding a title-specific recovery path. Once a
+Pause succeeded, Continue entered vector `$0014`: VMPEG firmware at `$e536b0`
+divides by its `$e040aa` display-period register, which the emulator had left
+zero. The firmware treats decoded-picture period `$a8` and player-display
+period `$aa` as separate 16-bit values. VMPEG now programs `$aa` from the
+45 kHz DCLK as `$0708` for PAL/25 Hz and `$05dc` for NTSC/30 Hz, preserving it
+across reset and cartridge power cycles. The native gate passes: after the
+paused milestone it advances from 796,092 to 1,058,376 DMA words and from 227
+to 302 presented frames, with 304 decoded frames and zero demux, video, or
+audio errors. Manual GUI testing confirms that the title's own Pause and
+Continue controls resume both video and audio normally.
 
 `scripts/test-vmpeg-stream-switch-local.sh` selects Japanese audio during the
 running Multilingual sample and requires both video and audio decode to
@@ -242,9 +258,8 @@ audio underflows; merely resetting decoder synchronization retained the
 original error. Both behavior changes were reverted and recorded as failed
 implementations, leaving nominal playback unchanged.
 
-Next, resolve the CDIC/CDFM pause-resume stall from primary driver evidence,
-then isolate the Layer-II boundary at an in-place FMA stream change. The cake
-puzzle remains the final extended M3.14 title gate. A perceptual or
+Next, isolate the Layer-II boundary at an in-place FMA stream change, then run
+the cake-puzzle extended title gate. A perceptual or
 timestamp-based A/V drift oracle is still needed; deterministic throughput
 counters alone do not establish lip sync.
 

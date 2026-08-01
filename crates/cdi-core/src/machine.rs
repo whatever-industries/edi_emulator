@@ -457,7 +457,9 @@ impl MachineBus {
     }
 
     pub fn attach_dvc(&mut self, config: DvcConfig) -> Result<(), String> {
-        self.dvc = Some(Vmpeg::new(config)?);
+        let mut dvc = Vmpeg::new(config)?;
+        dvc.set_video_standard(self.mcd212.pal);
+        self.dvc = Some(dvc);
         self.shared_in4_owner = SharedIn4Owner::Idle;
         self.dvc_dma_cycles = 0;
         self.refresh_external_interrupts();
@@ -1025,6 +1027,9 @@ impl Machine {
         let pal = standard == VideoStandard::Pal;
         self.bus.slave.set_video_standard(pal);
         self.bus.mcd212.pal = pal;
+        if let Some(dvc) = &mut self.bus.dvc {
+            dvc.set_video_standard(pal);
+        }
         self.reset();
     }
 

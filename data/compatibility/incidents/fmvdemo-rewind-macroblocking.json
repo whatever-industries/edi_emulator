@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "id": "fmvdemo-rewind-macroblocking",
+  "title": "Philips FMVDemo reverse scan shows black macroblock regions",
+  "symptom": "Using the Play Control panel's backward-scan function produces transient black rectangular regions aligned to MPEG block boundaries while the surrounding video remains visible.",
+  "expected": "Determine whether real VMPEG reverse scan displays complete GOP entry pictures or exposes comparable transient decoder artifacts; do not conceal the blocks without hardware evidence.",
+  "status": "reported-unconfirmed",
+  "reported_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "last_reproduced_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "dvc",
+    "mpeg-video",
+    "cdic",
+    "timing"
+  ],
+  "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega.rom",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "reverse-scan-reference-state",
+      "hardware_explanation": "FMVDemo reverse scan jumps backward among authored SOS/GOP entry points. The emulator may present a picture before all required reference or slice state for that newly selected GOP is valid, leaving macroblock-aligned black regions.",
+      "supporting_evidence": [
+        "The artifacts are rectangular and aligned to MPEG macroblock-sized regions.",
+        "Philips play_control.c states that backward scan jumps among entry points where every twelfth encoded frame is preceded by SOS and GOP codes.",
+        "Normal forward playback does not retain the same black rectangles."
+      ],
+      "contradicting_evidence": [
+        "No decoder-error or selected-entry diagnostic was captured with the screenshot.",
+        "Real VMPEG hardware may expose transient coarse or incomplete pictures during reverse scan."
+      ],
+      "falsifying_test": "Trace each reverse entry point, sequence/GOP/picture headers, decoder reference reset, slice coverage, and presented raster. Complete slice coverage and valid reference state before presentation would falsify this explanation.",
+      "citations": [
+        "Philips FMVDemo SUN/SRC/APPL/play_control.c cm_bscan",
+        "Philips TN 088"
+      ]
+    },
+    {
+      "id": "native-reverse-scan-artifact",
+      "hardware_explanation": "The cartridge's scan mode may intentionally prioritize rapid GOP stepping over a clean continuous picture, making transient incomplete-looking frames authentic hardware behavior.",
+      "supporting_evidence": [
+        "The sample source describes scan as sparse GOP-entry playback rather than reverse decoding of every frame.",
+        "No real-hardware comparison is currently available."
+      ],
+      "contradicting_evidence": [
+        "Large black macroblock regions ordinarily indicate missing or invalid decoded content rather than merely low temporal resolution."
+      ],
+      "falsifying_test": "Capture the same FMVDemo backward-scan sequence from a real 22ER9141 VMPEG cartridge. Clean complete pictures on hardware would falsify the authored/native explanation.",
+      "citations": [
+        "Philips FMVDemo SUN/SRC/APPL/play_control.c cm_bscan"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported-current",
+      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "notes": "A 768x574 diagnostic screenshot with SHA-256 ee0bcd5cb40d4508670a96a20fd87fa61417ce4b09738650418513b43aabeb7d captures black block-aligned regions during FMVDemo backward scan. The image remains local and untracked. Hardware correctness is unknown."
+    }
+  ]
+}

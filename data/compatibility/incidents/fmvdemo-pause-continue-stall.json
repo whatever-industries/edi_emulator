@@ -2,12 +2,12 @@
   "schema_version": 1,
   "id": "fmvdemo-pause-continue-stall",
   "title": "Philips FMV Demonstration Disc native pause/continue",
-  "symptom": "The Play Control sample accepts Pause and Continue, but disc DMA, decoding, presentation, and audio do not resume",
+  "symptom": "The Play Control sample accepts Continue after a paused MPEG sequence, then enters the VMPEG firmware divide-by-zero vector before disc DMA and presentation can resume",
   "expected": "Continue resumes the paused MPEG sequence from retained state",
-  "status": "open",
+  "status": "resolved",
   "reported_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
-  "last_reproduced_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
-  "last_verified_revision": null,
+  "last_reproduced_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "last_verified_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": ["dvc", "cdic", "disc-cdfm", "audio"],
@@ -16,39 +16,60 @@
     "model": "cdi220b",
     "video_standard": "pal",
     "dvc": "vmpega.rom",
-    "instruction_limit": 1085000000,
+    "instruction_limit": 1030000000,
     "input_events": [
       "60000000:588,265,1,2000000",
       "400000000:520,240,1,2000000",
       "650000000:630,250,1,2000000",
       "850000000:500,225,1,2000000",
-      "1000000000:475,420,1,2000000",
-      "1080000000:415,420,1,2000000"
+      "920000000:475,420,1,2000000",
+      "940000000:475,420,1,2000000",
+      "960000000:475,420,1,2000000",
+      "980000000:475,420,1,2000000"
     ]
   },
   "hypotheses": [
     {
       "id": "cdfm-resume-contract",
-      "hardware_explanation": "CDFM ss_cont expects CDIC command $24 or retained PCL state to restart Mode-2 delivery, but the current CDIC model finishes idle without restoring the producer path.",
+      "hardware_explanation": "CDFM pause gates CDIC sector delivery with DBUF while the optical position advances; stop commands $23/$24 finish the sector under the head, and SS_Cont starts a new $2A read.",
       "supporting_evidence": [
         "Philips play_control.c calls mv_continue followed by ss_cont.",
-        "VMPEG records one Continue and returns to playing, while CDIC ends idle on command $24.",
-        "DMA words and presented frames remain exactly at their paused values."
+        "The CD-i 220 cdapdriv firmware at approximately $429e0a writes the stop operation during SS_Pause.",
+        "CDIC_BlackBoxAnalyzer e861f76 test_mode2_read_stop_read measures DBUF $0000 pausing delivery, DBUF $4000 resuming at the advanced optical position, and stop completing the in-flight sector."
       ],
       "contradicting_evidence": [
-        "The exact CDIC command-$24 resume semantics have not yet been recovered from a primary driver or firmware trace."
+        "Correcting this transport behavior exposed, but did not itself remove, the VMPEG firmware divide-by-zero on Continue."
       ],
-      "falsifying_test": "Trace the guest ss_cont path and CDIC/PCL state from the command write through the next sector. If the guest never requests a restarted producer or command $24 is documented as reset-only, this explanation is incomplete.",
+      "falsifying_test": "A hardware trace in which DBUF gating resets the configured mode or stop discards the sector already under the head would contradict this model.",
       "citations": [
         "Philips FMVDemo SUN/SRC/APPL/play_control.c",
-        "Philips TN 088",
-        "Philips TN 098"
+        "CD-i 220 cdapdriv firmware routine near $429e0a",
+        "Slamy/CDIC_BlackBoxAnalyzer e861f76"
+      ]
+    },
+    {
+      "id": "missing-vmpeg-display-period",
+      "hardware_explanation": "Native fmvdrv reads separate 16-bit decoded-picture and display-period registers at $E040A8 and $E040AA. The emulator left $AA zero, so Continue divided by zero at VMPEG firmware $E536B0 instead of comparing the decoded cadence with the player display cadence.",
+      "supporting_evidence": [
+        "The failing trace reaches vector $0014 at VMPEG firmware $E536B0, whose DIVU.W operand is $AA(a3) with a3=$E04000.",
+        "The VMPEG firmware reads $A8 and $AA independently.",
+        "A 45 kHz display clock gives $0708 for PAL/25 Hz and $05DC for NTSC/30 Hz; the pinned MiSTer study reference uses those same externally visible values.",
+        "Programming $AA from the configured player standard removes the exception and allows DMA and presentation to resume."
+      ],
+      "contradicting_evidence": [
+        "The available Motorola scan does not label these VMPEG-specific register offsets, so the register meaning is reconstructed from firmware behavior and corroborating implementation evidence rather than a primary register table."
+      ],
+      "falsifying_test": "A hardware register trace showing a different $AA cadence, or a native Continue trace that never reads $AA, would require revising the model.",
+      "citations": [
+        "VMPEG firmware instructions at $E536AC-$E536B4",
+        "Philips FMVDemo Technical Note 88",
+        "MiSTer CDi_MiSTer bbaf100 study reference"
       ]
     }
   ],
   "experiments": [
     {
-      "id": "native-play-control-script",
+      "id": "native-play-control-original-stall",
       "context": {
         "base_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
         "dirty_diff_hash": "89aa7263d56789fe6114a377f936b9127fa9cf2692c0cc623e72047f3101e332",
@@ -68,23 +89,97 @@
         "timing": "1085000000 instructions"
       },
       "hypothesis_id": "cdfm-resume-contract",
-      "strategy": "Drive the title's own controls, retain the pause and continue milestones, and require DMA and presentation counters to advance after Continue.",
+      "strategy": "Drive the title's own controls, retain pause and continue milestones, and require DMA and presentation counters to advance after Continue.",
       "symbols": ["Cdic::execute_command", "Vmpeg::handle_fmv_write", "Machine::sample_diagnostics"],
       "assumptions": ["The on-disc Play Control path is representative of native CD-RTOS pause/continue."],
       "expected": "DMA and presented-frame counters advance after Continue with no decoder errors.",
       "actual": "Continue count reached one and VMPEG playing returned true, but DMA remained at 1,860,244 words and presentation at 535 frames; CDIC was idle on $24 and both FIFOs underflowed.",
-      "outcome": "confirmed",
+      "outcome": "superseded",
       "regressions": [],
-      "improvements": ["The unresolved pause path is now deterministic and executable without commercial media."],
+      "improvements": ["The unresolved pause path became deterministic and executable without commercial media."],
       "reverted": false,
       "evidence_quality": "high: direct Philips sample source plus bounded native-title diagnostics",
       "confidence": "high",
       "applicability": {
         "conditions": ["CD-i 220/Mono-I VMPEG using native CDFM pause/continue"],
-        "invalidated_by": ["Changes to CDIC command $24, CDFM/PCL resume, DMA2, or VMPEG continue semantics"],
+        "invalidated_by": ["Changes to CDIC command $24, DBUF gating, CDFM/PCL resume, DMA2, or VMPEG continue semantics"],
         "repeat_when": ["Any invalidating dependency changes or primary command documentation is found"]
+      }
+    },
+    {
+      "id": "pause-retry-exposes-display-period-divide",
+      "context": {
+        "base_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+        "dirty_diff_hash": "f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+        "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "Bounded retries of Philips FMVDemo Play Control Pause followed by Continue",
+        "timing": "1030000000 instructions"
+      },
+      "hypothesis_id": "missing-vmpeg-display-period",
+      "strategy": "Apply the bounded retry allowed by TN 88, trace the first post-Continue exception, and inspect the VMPEG firmware operand and cartridge registers.",
+      "symbols": ["Vmpeg::reset", "Vmpeg::set_video_standard", "Vmpeg::power_cycle"],
+      "assumptions": ["TN 88 error 246 is a native pause race and does not by itself prove an emulator defect."],
+      "expected": "A successful pause exposes the first emulator-specific divergence after Continue.",
+      "actual": "Continue entered exception vector $0014 at firmware $E536B0 because the DIVU.W divisor in FMV register $AA was zero.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": ["Separated a documented native E$NotRdy pause erratum from the emulator's missing timing register."],
+      "reverted": false,
+      "evidence_quality": "high: native Philips title, Philips technical note, firmware instruction trace, and register state",
+      "confidence": "high",
+      "applicability": {
+        "conditions": ["VMPEG native fmvdrv pause/continue and other cadence comparisons"],
+        "invalidated_by": ["A primary VMPEG register table or hardware trace contradicting the reconstructed $AA meaning"],
+        "repeat_when": ["The DCLK basis, player cadence, or VMPEG register map changes"]
+      }
+    },
+    {
+      "id": "display-period-native-gate",
+      "context": {
+        "base_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+        "dirty_diff_hash": "f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+        "component_fingerprints": {
+          "cdic": "677626799a7ffa659634580e7ab1dccf97cc17034122fe1f03870804db814075",
+          "dvc": "ef5ac57d140aafbe862579a0bded3dd94a796babbd80de6916982941465c852b",
+          "machine": "e193190f2036d7cb58ed58dc0cc74f8d100fd220c6a7a8b9bc3cfa96009610c9"
+        },
+        "dependencies": {
+          "Cargo.lock": "da94ce470c588c776fa91786d0bde983413f1c4326ee68511062718483067305"
+        },
+        "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "FMVDemo Play Control native pause/continue with PAL display period $0708",
+        "timing": "1030000000 instructions"
+      },
+      "hypothesis_id": "missing-vmpeg-display-period",
+      "strategy": "Program $AA as 45 kHz divided by the player frame cadence, preserve it across cartridge reset/power cycle, and require post-Continue DMA and presented frames to increase.",
+      "symbols": ["Vmpeg::set_video_standard", "Vmpeg::refresh_display_period", "Machine::set_video_standard", "MachineBus::attach_dvc"],
+      "assumptions": ["PAL output is 25 frames/s and NTSC output is 30 frames/s for the firmware's display-period calculation."],
+      "expected": "No divide-by-zero; DMA and presented video resume after Continue with no decoder errors.",
+      "actual": "The gate passed. A paused milestone had 796,092 DMA words and 227 presented frames; after Continue the run reached 1,058,376 DMA words and 302 presented frames, with 304 decoded frames and zero demux/video/audio decoder errors.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": ["Native VMPEG Continue completes and resumes the disc-to-DMA-to-decoder path."],
+      "reverted": false,
+      "evidence_quality": "high: deterministic native-title gate plus firmware-level exception removal",
+      "confidence": "high",
+      "applicability": {
+        "conditions": ["VMPEG on PAL or NTSC Mono-I players"],
+        "invalidated_by": ["Changes to DCLK timing, video-standard propagation, reset semantics, or the FMV register model"],
+        "repeat_when": ["Any invalidating dependency changes"]
       }
     }
   ],
-  "manual_verification": []
+  "manual_verification": [
+    {
+      "result": "accepted",
+      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "notes": "User tested the PAL Philips FMVDemo Play Control panel in the release GUI. The title's on-screen Pause stops presentation and clears the transient horizontal slice; Continue resumes both video and audio normally. The slicing itself remains open as a separate presentation-timing incident."
+    }
+  ]
 }

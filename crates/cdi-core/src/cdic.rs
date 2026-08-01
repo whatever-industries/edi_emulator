@@ -77,6 +77,7 @@ pub struct CdicDiagnosticSnapshot {
     pub command: u16,
     /// 0 idle, 1 Mode 1, 2 Mode 2, 3 CDDA, 4 TOC.
     pub disc_mode: u8,
+    pub disc_read_enabled: bool,
     pub current_lba: u32,
     pub selected_file: u16,
     pub selected_channels: u32,
@@ -120,6 +121,14 @@ pub struct Cdic {
     // Disc state
     disc_command: u8,
     disc_mode: DiscMode,
+    /// DBUF bit 14 gates sector delivery without discarding the configured
+    /// read mode. The optical position continues advancing while gated.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    disc_read_enabled: bool,
+    /// Commands $23/$24 stop the active transport after the sector already
+    /// under the optical head has completed.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    stop_after_next_sector: bool,
     disc_spinup_counter: u8,
     curr_lba: u32,
     /// Physical frame of LBA 0 (150 normally; 0 when track 1 stores its
@@ -186,6 +195,8 @@ impl Cdic {
             data_buffer: 0,
             disc_command: 0,
             disc_mode: DiscMode::Idle,
+            disc_read_enabled: false,
+            stop_after_next_sector: false,
             disc_spinup_counter: 0,
             curr_lba: 0,
             lba_base: 150,
@@ -236,6 +247,7 @@ impl Cdic {
         CdicDiagnosticSnapshot {
             command: self.command,
             disc_mode,
+            disc_read_enabled: self.disc_read_enabled,
             current_lba: self.curr_lba,
             selected_file: self.file,
             selected_channels: self.channel,
@@ -383,12 +395,25 @@ impl Cdic {
             }
             0x3FFC => self.interrupt_vector = data,
             0x3FFE => {
+                log::debug!(
+                    "cdic: DBUF write {data:#06x} (configured command {:#04x}, mode {:?}, enabled={}, lba={})",
+                    self.disc_command,
+                    self.disc_mode,
+                    self.disc_read_enabled,
+                    self.curr_lba
+                );
                 self.data_buffer = data;
                 if self.data_buffer & 0x8000 != 0 {
                     self.handle_command();
-                }
-                if self.data_buffer & 0x4000 == 0 {
-                    self.cancel_disc_read();
+                } else {
+                    // CDIC_BlackBoxAnalyzer e861f76,
+                    // test_mode2_read_stop_read: DBUF $0000 pauses an active
+                    // read and $4000 resumes later in the same continuous
+                    // read. It does not reset the command, mode, or filters;
+                    // the physical trace shows the optical position advancing
+                    // while delivery is disabled.
+                    self.disc_read_enabled =
+                        self.data_buffer & 0x4000 != 0 && self.disc_command != 0;
                 }
             }
             _ => log::trace!("cdic: write16 +{offset:#06x} = {data:#06x} (unknown)"),
@@ -449,6 +474,8 @@ impl Cdic {
     fn init_disc_read(&mut self, mode: DiscMode) {
         self.disc_command = self.command as u8;
         self.disc_mode = mode;
+        self.disc_read_enabled = self.data_buffer & 0x4000 != 0;
+        self.stop_after_next_sector = false;
         self.curr_lba = self.lba_from_time();
         // Spinup delay; MAME uses >= 6 ticks to avoid softlocks.
         self.disc_spinup_counter = 6;
@@ -467,6 +494,8 @@ impl Cdic {
     fn cancel_disc_read(&mut self) {
         self.disc_command = 0;
         self.disc_mode = DiscMode::Idle;
+        self.disc_read_enabled = false;
+        self.stop_after_next_sector = false;
         self.curr_lba = 0;
         self.disc_spinup_counter = 0;
     }
@@ -478,10 +507,14 @@ impl Cdic {
             self.time
         );
         match self.command {
+            // CDIC_BlackBoxAnalyzer e861f76 and the CD-i 220 cdapdriv at ROM
+            // $429e12 agree that $23/$24 are stop operations. The captured
+            // transport completes the sector already under the head before
+            // stopping; SS_Cont subsequently starts a fresh $2a read.
             0x23 | 0x24 => {
-                // Reset Mode 1 / Mode 2
-                if self.disc_command == 0 {
-                    self.init_disc_read(DiscMode::Mode1);
+                if self.disc_command != 0 {
+                    self.disc_read_enabled = self.data_buffer & 0x4000 != 0;
+                    self.stop_after_next_sector = true;
                 }
             }
             0x2B => self.cancel_disc_read(), // Stop CDDA
@@ -520,6 +553,10 @@ impl Cdic {
         }
         if self.disc_spinup_counter != 0 {
             self.disc_spinup_counter -= 1;
+            return;
+        }
+        if !self.disc_read_enabled {
+            self.curr_lba += 1;
             return;
         }
         let Some(disc) = disc else {
@@ -764,7 +801,8 @@ impl Cdic {
     /// Copy a processed sector + subcode into the ping-pong buffers and
     /// raise the data-ready interrupt.
     fn deliver_sector(&mut self, buffer: &[u8], q: &[u8; 12]) {
-        let realtime_audio = self.command == 0x2A && self.is_mode2_audio_selected(buffer);
+        let realtime_audio =
+            self.disc_mode == DiscMode::Mode2 && self.is_mode2_audio_selected(buffer);
         let audio_slot = if realtime_audio {
             let slot = self.realtime_audio_next_write;
             self.realtime_audio_next_write ^= 1;
@@ -837,8 +875,7 @@ impl Cdic {
             self.channel,
             self.audio_channel,
         );
-
-        if self.command == 0x23 || self.command == 0x24 {
+        if self.stop_after_next_sector {
             self.cancel_disc_read();
         }
     }
@@ -1125,6 +1162,39 @@ fn crc_ccitt(data: &[u8]) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TRANSPORT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn mode2_disc_for_transport_test() -> DiscImage {
+        let dir = std::env::temp_dir().join(format!(
+            "cdi-core-cdic-transport-test-{}-{}",
+            std::process::id(),
+            TRANSPORT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let bcd = |v: u8| ((v / 10) << 4) | (v % 10);
+        let mut image = Vec::with_capacity(3 * SECTOR_SIZE);
+        for frame in 0..3u8 {
+            let mut sector = [0u8; SECTOR_SIZE];
+            sector[SECTOR_MINUTES] = 0;
+            sector[SECTOR_SECONDS] = bcd(2);
+            sector[SECTOR_FRACS] = bcd(frame);
+            sector[SECTOR_MODE] = 2;
+            sector[SECTOR_SUBMODE1] = SUBMODE_DATA;
+            sector[SECTOR_SUBMODE2] = SUBMODE_DATA;
+            image.extend_from_slice(&sector);
+        }
+        std::fs::write(dir.join("transport.bin"), image).unwrap();
+        std::fs::write(
+            dir.join("transport.cue"),
+            "FILE \"transport.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        DiscImage::load(&dir.join("transport.cue")).unwrap()
+    }
 
     #[test]
     fn command_starts_disc_read() {
@@ -1137,6 +1207,22 @@ mod tests {
         assert_eq!(c.disc_command, 0x29);
         assert_eq!(c.curr_lba, 16);
         assert_eq!(c.disc_mode, DiscMode::Mode1);
+    }
+
+    #[test]
+    fn stop_commands_do_not_start_reset_mode_reads() {
+        let mut c = Cdic::new();
+        c.write16(0x3C00, 0x0023);
+        c.write16(0x3FFE, 0xC000);
+        assert_eq!(c.disc_command, 0);
+        assert_eq!(c.disc_mode, DiscMode::Idle);
+        assert!(!c.disc_read_enabled);
+
+        c.write16(0x3C00, 0x0024);
+        c.write16(0x3FFE, 0xC000);
+        assert_eq!(c.disc_command, 0);
+        assert_eq!(c.disc_mode, DiscMode::Idle);
+        assert!(!c.disc_read_enabled);
     }
 
     #[test]
@@ -1189,6 +1275,7 @@ mod tests {
     fn first_realtime_audio_sector_uses_buffer_2800() {
         let mut c = Cdic::new();
         c.command = 0x2A;
+        c.disc_mode = DiscMode::Mode2;
         c.audio_channel = 1;
         let mut sector = mode2_sector(0, 0, SUBMODE_FORM | SUBMODE_AUDIO);
         sector[SECTOR_CODING2] = CODING_STEREO;
@@ -1267,6 +1354,7 @@ mod tests {
     fn sound_map_takes_priority_over_realtime_adpcm() {
         let mut c = Cdic::new();
         c.command = 0x2A;
+        c.disc_mode = DiscMode::Mode2;
         c.audio_channel = 1;
         let mut sector = mode2_sector(0, 0, SUBMODE_FORM | SUBMODE_AUDIO);
         sector[SECTOR_CODING2] = CODING_STEREO;
@@ -1510,16 +1598,73 @@ mod tests {
     }
 
     #[test]
-    fn clearing_dbuf_enable_stops_mode2_delivery() {
+    fn dbuf_enable_pauses_delivery_while_the_head_advances_then_resumes() {
+        let disc = mode2_disc_for_transport_test();
         let mut c = Cdic::new();
-        c.disc_mode = DiscMode::Mode2;
-        c.disc_command = 0x2A;
-        c.curr_lba = 123;
+        c.command = 0x2A;
+        c.data_buffer = 0xC000;
+        c.init_disc_read(DiscMode::Mode2);
+        c.disc_spinup_counter = 0;
+        c.sector_tick(Some(&disc));
+        assert_eq!(c.curr_lba, 1);
 
         c.write16(0x3FFE, 0);
-        assert_eq!(c.disc_command, 0);
-        assert_eq!(c.disc_mode, DiscMode::Idle);
-        assert_eq!(c.curr_lba, 0);
+        assert_eq!(c.disc_command, 0x2A);
+        assert_eq!(c.disc_mode, DiscMode::Mode2);
+        assert!(!c.disc_read_enabled);
+        assert_eq!(c.curr_lba, 1);
+        let x_buffer_before_pause = c.x_buffer;
+        c.sector_tick(Some(&disc));
+        assert_eq!(
+            c.curr_lba, 2,
+            "the spinning disc keeps moving under the head"
+        );
+        assert_eq!(
+            c.x_buffer, x_buffer_before_pause,
+            "paused delivery must not fill another guest buffer"
+        );
+
+        c.write16(0x3FFE, 0x4000);
+        assert_eq!(c.disc_command, 0x2A);
+        assert_eq!(c.disc_mode, DiscMode::Mode2);
+        assert!(c.disc_read_enabled);
+        assert_eq!(c.curr_lba, 2);
+        c.sector_tick(Some(&disc));
+        assert_eq!(
+            c.curr_lba, 3,
+            "resume must deliver at the live head position"
+        );
+    }
+
+    #[test]
+    fn stop_commands_finish_the_sector_under_the_head_then_stop() {
+        let disc = mode2_disc_for_transport_test();
+        for command in [0x0023, 0x0024] {
+            let mut c = Cdic::new();
+            c.command = 0x2A;
+            c.data_buffer = 0xC000;
+            c.channel = 1;
+            c.init_disc_read(DiscMode::Mode2);
+            c.disc_spinup_counter = 0;
+
+            c.write16(0x3C00, command);
+            c.write16(0x3FFE, 0xC000);
+            assert_eq!(c.disc_command, 0x2A);
+            assert_eq!(c.disc_mode, DiscMode::Mode2);
+            assert!(c.disc_read_enabled);
+            assert!(c.stop_after_next_sector);
+
+            c.sector_tick(Some(&disc));
+            assert_ne!(
+                c.x_buffer & 0x8000,
+                0,
+                "the in-flight sector must complete before command {command:#04x} stops"
+            );
+            assert_eq!(c.disc_command, 0);
+            assert_eq!(c.disc_mode, DiscMode::Idle);
+            assert!(!c.disc_read_enabled);
+            assert!(!c.stop_after_next_sector);
+        }
     }
 
     #[test]

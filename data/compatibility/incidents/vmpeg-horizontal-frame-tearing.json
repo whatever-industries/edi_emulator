@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "id": "vmpeg-horizontal-frame-tearing",
+  "title": "VMPEG horizontal frame tearing during live presentation",
+  "symptom": "A horizontal discontinuity can divide a moving MPEG picture into vertically displaced regions. It has been observed across multiple FMV titles and is captured in Philips FMVDemo across the actor's upper arm. Freezing presentation to take a screenshot usually makes the discontinuity disappear immediately.",
+  "expected": "Each displayed VMPEG picture is published atomically at the programmed display event, without mixing lines or fields from different picture positions.",
+  "status": "reproduced",
+  "reported_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "last_reproduced_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "dvc",
+    "mcd212",
+    "timing",
+    "frontend"
+  ],
+  "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega.rom",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "mid-raster-external-picture-publication",
+      "hardware_explanation": "The emulator may replace the MCD251 external-video picture after its presentation deadline but before the MCD212 has finished composing the current raster. Upper and lower scanlines would then come from different picture epochs even though each decoded frame is individually valid.",
+      "supporting_evidence": [
+        "The discontinuity is a single horizontal boundary inside an otherwise coherent MPEG picture.",
+        "The artifact usually disappears as soon as screenshot capture freezes live presentation.",
+        "FMVDemo's own on-screen VMPEG Pause control also removes the slice, independently of host screenshot UI timing.",
+        "The user has observed the same class of slicing in several VMPEG titles."
+      ],
+      "contradicting_evidence": [
+        "No diagnostic trace yet proves that a presentation event occurs between the two affected raster regions.",
+        "The captured still could also contain mismatched interlaced fields from adjacent decoded pictures."
+      ],
+      "falsifying_test": "Record the external-picture generation used for every composed scanline. If all output lines use one immutable generation while the tear remains, mid-raster publication is false.",
+      "citations": [
+        "docs/debugging-workflow.md display-provenance stages",
+        "docs/mpeg-dvc-plan.md VMPEG display-timed picture events"
+      ]
+    },
+    {
+      "id": "external-video-field-pair-mismatch",
+      "hardware_explanation": "The MCD212 weave may retain one field from the previous external-video picture while presenting the other from the next picture or from a different vertical origin, creating a stable horizontal displacement until another field completes.",
+      "supporting_evidence": [
+        "The artifact is transient during motion and becomes difficult to capture once display progression is frozen.",
+        "The guest's VMPEG Pause command settles the picture into a coherent frame.",
+        "Other VMPEG observations include short-lived vertical picture movement and field-related cursor artifacts."
+      ],
+      "contradicting_evidence": [
+        "The captured boundary resembles a regional offset more than normal alternating-line combing.",
+        "No odd/even-field provenance has yet been captured for the affected frame."
+      ],
+      "falsifying_test": "Capture odd/even external-video source IDs, origins, and composed output for the affected raster. Matching field provenance with a remaining boundary falsifies a field-pair explanation.",
+      "citations": [
+        "docs/display-geometry.md",
+        "data/compatibility/incidents/playboys-complete-massage-usa-video-position-jitter.json"
+      ]
+    },
+    {
+      "id": "frontend-non-atomic-frame-copy",
+      "hardware_explanation": "The frontend may read the core framebuffer while the emulation thread is replacing or composing it, exposing two generations in one host frame.",
+      "supporting_evidence": [
+        "Pausing host presentation generally removes the visible discontinuity.",
+        "A host-side race can produce a single horizontal tear without corrupting retained emulator state."
+      ],
+      "contradicting_evidence": [
+        "The frontend is expected to receive completed owned frame buffers; this has not yet been audited against the live path.",
+        "The screenshot successfully retained the artifact, so capture and display may be reading the same already-torn core raster.",
+        "The title's own VMPEG Pause removes the slice without invoking the host screenshot path, weakening a frontend-only explanation."
+      ],
+      "falsifying_test": "Hash a core-owned completed raster before frontend handoff and compare it with the saved screenshot. If the core raster already contains the boundary, frontend copying is not the first divergence.",
+      "citations": [
+        "docs/debugging-workflow.md display-provenance stages"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reproduced-current",
+      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "notes": "A 768x574 screenshot with SHA-256 2abb299775fa774e4154a08065c0f7521742abc58bd7c8b530df05692abc1ac9 captures a horizontal displacement across the actor's upper arm in Philips FMVDemo. The local image remains diagnostic-only and is not tracked. User reports that the same slicing has long appeared in multiple FMV titles and usually vanishes when screenshot capture freezes presentation."
+    },
+    {
+      "result": "pause-clears-artifact",
+      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "notes": "User confirmed that selecting Pause in FMVDemo's own Play Control panel removes the horizontal slice. This is stronger than the earlier screenshot-freeze observation: it prioritizes external-picture publication or field-pair timing and weakens a host-only copy race."
+    }
+  ]
+}

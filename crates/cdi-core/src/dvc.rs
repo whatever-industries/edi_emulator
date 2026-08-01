@@ -24,6 +24,8 @@ const MPEG_TIMESTAMP_MODULUS: i64 = 1 << 33;
 const FMV_IER: usize = 0x60;
 const FMV_ISR: usize = 0x62;
 const FMV_TIMER: usize = 0x64;
+const FMV_PICTURE_PERIOD: usize = 0xA8;
+const FMV_DISPLAY_PERIOD: usize = 0xAA;
 const FMV_SYSCMD: usize = 0xC0;
 const FMV_VIDCMD: usize = 0xC2;
 const FMV_STREAM: usize = 0xC4;
@@ -572,6 +574,7 @@ pub struct Vmpeg {
     decode_ram: Vec<u8>,
     decode_ram_visible: bool,
     register_writes: u8,
+    pal: bool,
     vcd_pixel_clock_13_5: bool,
     fma_regs: Vec<u8>,
     fmv_regs: Vec<u8>,
@@ -649,6 +652,7 @@ impl Vmpeg {
             decode_ram: vec![0; DECODE_RAM_SIZE],
             decode_ram_visible: false,
             register_writes: 0,
+            pal: true,
             vcd_pixel_clock_13_5: false,
             fma_regs: vec![0; 0x100],
             fmv_regs: vec![0; 0x100],
@@ -731,6 +735,7 @@ impl Vmpeg {
         Self::set_word(&mut self.fmv_regs, FMV_TIMER, 55);
         Self::set_word(&mut self.fmv_regs, 0x5E, 0x2000);
         Self::set_word(&mut self.fmv_regs, 0x9E, 0xFE96);
+        self.refresh_display_period();
         self.decode_ram_visible = false;
         self.register_writes = 0;
         self.dclk = 0;
@@ -781,14 +786,37 @@ impl Vmpeg {
         self.audio_out.clear();
     }
 
+    /// Select the cartridge display cadence used by native `fmvdrv` timing.
+    ///
+    /// VMPEG firmware treats the decoded picture period at `$E040A8` and the
+    /// player display period at `$E040AA` as separate 16-bit quantities. The
+    /// latter is one 45 kHz DCLK frame period: 1800 ticks for PAL/25 Hz and
+    /// 1500 ticks for NTSC/30 Hz. Leaving `$AA` at zero makes the native
+    /// continue path divide by zero at firmware `$E536B0`.
+    pub fn set_video_standard(&mut self, pal: bool) {
+        self.pal = pal;
+        self.refresh_display_period();
+    }
+
+    fn refresh_display_period(&mut self) {
+        let display_hz = if self.pal { 25 } else { 30 };
+        Self::set_word(
+            &mut self.fmv_regs,
+            FMV_DISPLAY_PERIOD,
+            (DCLK_HZ / display_hz) as u16,
+        );
+    }
+
     /// Remove power from the cartridge while retaining its firmware ROM.
     pub fn power_cycle(&mut self) {
         let firmware = self.firmware.clone();
+        let pal = self.pal;
         *self = Self::new(DvcConfig {
             kind: DvcKind::Vmpeg,
             rom: firmware,
         })
         .expect("an attached VMPEG firmware image remains valid");
+        self.set_video_standard(pal);
     }
 
     pub fn stats(&self) -> DvcStats {
@@ -993,7 +1021,11 @@ impl Vmpeg {
                         u16::from(self.video_decoder.sequence_prpa()),
                     );
                     if rate > 0.0 {
-                        Self::set_word(&mut self.fmv_regs, 0xA8, (90_000.0 / rate).round() as u16);
+                        Self::set_word(
+                            &mut self.fmv_regs,
+                            FMV_PICTURE_PERIOD,
+                            (90_000.0 / rate).round() as u16,
+                        );
                     }
                     self.stats.decoded_video_frames += frames.len() as u64;
                     self.video_frames.extend(frames);
@@ -1875,6 +1907,22 @@ mod tests {
             dvc.firmware[VMPEG_SPLIT_ROM_SIZE - 1],
             dvc.firmware[VMPEG_FULL_ROM_SIZE - 1]
         );
+    }
+
+    #[test]
+    fn display_period_tracks_player_standard_across_reset_and_power_cycle() {
+        let mut dvc =
+            Vmpeg::new(DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap())
+                .unwrap();
+
+        assert_eq!(Vmpeg::word(&dvc.fmv_regs, FMV_DISPLAY_PERIOD), 1_800);
+        dvc.set_video_standard(false);
+        assert_eq!(Vmpeg::word(&dvc.fmv_regs, FMV_DISPLAY_PERIOD), 1_500);
+
+        dvc.reset();
+        assert_eq!(Vmpeg::word(&dvc.fmv_regs, FMV_DISPLAY_PERIOD), 1_500);
+        dvc.power_cycle();
+        assert_eq!(Vmpeg::word(&dvc.fmv_regs, FMV_DISPLAY_PERIOD), 1_500);
     }
 
     #[test]

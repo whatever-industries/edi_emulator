@@ -37,6 +37,8 @@ use storage::{backup_nvram, configured_nvram_path, load_nvram, write_nvram};
 const AUDIO_RATE: u32 = 44_100;
 const AUDIO_RING_SAMPLES: usize = AUDIO_RATE as usize * 2;
 const APP_NAME: &str = "E-Di: Emulator Disc Interactive";
+const DEFAULT_DISPLAY_DIAGNOSTIC_FIELDS: u16 = 4;
+const MAX_DISPLAY_DIAGNOSTIC_FIELDS: u16 = 120;
 const UI_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(15, 17, 20);
 const UI_SURFACE: egui::Color32 = egui::Color32::from_rgb(23, 26, 30);
 const UI_SURFACE_HOVER: egui::Color32 = egui::Color32::from_rgb(34, 39, 45);
@@ -48,6 +50,14 @@ const PARENTAL_PASSCODE_COLOR: egui::Color32 = egui::Color32::from_rgb(184, 126,
 const PARENTAL_PASSCODE_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(50, 39, 29);
 const BUNDLED_CDI220B: &[u8] = include_bytes!("../../../firmware/cdi220b.rom");
 const BUNDLED_VMPEGA: &[u8] = include_bytes!("../../../firmware/vmpega.rom");
+
+fn display_diagnostic_field_count(value: Option<&std::ffi::OsStr>) -> u16 {
+    value
+        .and_then(std::ffi::OsStr::to_str)
+        .and_then(|value| value.parse::<u16>().ok())
+        .map(|value| value.clamp(1, MAX_DISPLAY_DIAGNOSTIC_FIELDS))
+        .unwrap_or(DEFAULT_DISPLAY_DIAGNOSTIC_FIELDS)
+}
 
 fn configure_ui(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
@@ -820,15 +830,18 @@ enum MachineCommand {
     ResetNvram,
     /// Capture consecutive decoded-plane and composed-raster fields for a
     /// local compatibility investigation.
-    CaptureDisplayDiagnostics(PathBuf),
+    CaptureDisplayDiagnostics {
+        directory: PathBuf,
+        fields: u16,
+    },
     Reset,
 }
 
 struct PendingDisplayCapture {
     directory: PathBuf,
     warmup_fields: u8,
-    remaining_fields: u8,
-    next_index: u8,
+    remaining_fields: u16,
+    next_index: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1366,7 +1379,7 @@ fn write_diagnostic_rgb_png(
 fn write_display_diagnostic_field(
     machine: &cdi_core::Machine,
     directory: &std::path::Path,
-    index: u8,
+    index: u16,
 ) -> Result<(), String> {
     let snapshot = machine.diagnostic_snapshot();
     let field_directory = directory.join(format!(
@@ -1745,14 +1758,14 @@ fn emu_loop(
                         }
                     }
                 }
-                MachineCommand::CaptureDisplayDiagnostics(directory) => {
+                MachineCommand::CaptureDisplayDiagnostics { directory, fields } => {
                     machine.bus.mcd212.set_diagnostic_plane_capture(true);
                     pending_display_capture = Some(PendingDisplayCapture {
                         directory,
                         // Populate both halves of the woven diagnostic rasters
                         // before recording four consecutive PAL/NTSC fields.
                         warmup_fields: 2,
-                        remaining_fields: 4,
+                        remaining_fields: fields,
                         next_index: 0,
                     });
                     *shared.status.lock().unwrap() = "Capturing display diagnostics…".to_owned();
@@ -2712,8 +2725,10 @@ impl App {
             })
             .collect();
         let directory = root.join(format!("{timestamp}-{safe_disc}"));
+        let fields =
+            display_diagnostic_field_count(std::env::var_os("EDI_DIAGNOSTIC_FIELDS").as_deref());
         *self.shared.command.lock().unwrap() =
-            Some(MachineCommand::CaptureDisplayDiagnostics(directory));
+            Some(MachineCommand::CaptureDisplayDiagnostics { directory, fields });
     }
 
     fn reset_machine(&self) {
@@ -4368,12 +4383,13 @@ mod tests {
     use super::{
         audio_sample_format_preference, backup_nvram, configure_ui, configured_nvram_path,
         controller_deflection, controller_dpad_deflection, controller_stick_deflection,
-        disc_load_action, display_aperture, display_name, fill_audio, fit_aspect,
-        is_quick_menu_button, library_dpad_direction, library_pad_action, load_nvram,
-        parental_passcode, pointer_mapping, presentation_aspect, quick_menu_chord_pressed,
-        quick_menu_consumes_controller_poll, region_is_pal, screenshot_image, signed_pcm_to_u8,
-        suppress_guest_buttons_until_release, write_nvram, DiscLoadAction, DiscOverride,
-        DisplayArea, HostMenuBinding, LibraryPadAction, SharedFrame, UI_SELECTED_TEXT,
+        disc_load_action, display_aperture, display_diagnostic_field_count, display_name,
+        fill_audio, fit_aspect, is_quick_menu_button, library_dpad_direction, library_pad_action,
+        load_nvram, parental_passcode, pointer_mapping, presentation_aspect,
+        quick_menu_chord_pressed, quick_menu_consumes_controller_poll, region_is_pal,
+        screenshot_image, signed_pcm_to_u8, suppress_guest_buttons_until_release, write_nvram,
+        DiscLoadAction, DiscOverride, DisplayArea, HostMenuBinding, LibraryPadAction, SharedFrame,
+        MAX_DISPLAY_DIAGNOSTIC_FIELDS, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
 
@@ -4692,6 +4708,20 @@ mod tests {
             Some(true)
         );
         assert_eq!(region_is_pal("Nobelia (USA, Europe)"), None);
+    }
+
+    #[test]
+    fn display_diagnostic_field_count_is_bounded_and_defaults_safely() {
+        use std::ffi::OsStr;
+
+        assert_eq!(display_diagnostic_field_count(None), 4);
+        assert_eq!(display_diagnostic_field_count(Some(OsStr::new("bad"))), 4);
+        assert_eq!(display_diagnostic_field_count(Some(OsStr::new("0"))), 1);
+        assert_eq!(display_diagnostic_field_count(Some(OsStr::new("60"))), 60);
+        assert_eq!(
+            display_diagnostic_field_count(Some(OsStr::new("999"))),
+            MAX_DISPLAY_DIAGNOSTIC_FIELDS
+        );
     }
 
     #[test]

@@ -198,6 +198,9 @@ pub struct DvcStats {
     /// Beginning playback in the middle of an audio frame is legal and is
     /// therefore not counted as a malformed-stream error.
     pub audio_resync_bytes: u64,
+    /// Muted Layer-II frames inserted to preserve the presentation clock
+    /// while acquiring a newly selected stream at a mid-frame PES boundary.
+    pub audio_concealed_frames: u64,
     pub queued_video_frames: u64,
     pub queued_audio_samples: u64,
     pub playing: u64,
@@ -519,6 +522,8 @@ struct Mp2Decoder {
     errors: u64,
     resync_bytes: u64,
     synchronized: bool,
+    conceal_discontinuity_frame: bool,
+    concealed_frames: u64,
 }
 
 impl Mp2Decoder {
@@ -528,10 +533,62 @@ impl Mp2Decoder {
         self.errors = 0;
         self.resync_bytes = 0;
         self.synchronized = false;
+        self.conceal_discontinuity_frame = false;
+        self.concealed_frames = 0;
+    }
+
+    fn expect_stream_discontinuity(&mut self) {
+        // An FMA stream selection changes the elementary stream without
+        // stopping the Layer-II transport (Philips FMVDemo multilingual.c,
+        // `ma_cntrl`). Preserve PCM and synthesis history, but require the
+        // frame parser to acquire the newly selected stream's sync word.
+        self.synchronized = false;
+    }
+
+    fn finish_stream_segment(&mut self, input: &mut VecDeque<u8>) -> u64 {
+        let mut decoded = 0;
+        loop {
+            if input.len() < 4 {
+                break;
+            }
+            let head = [input[0], input[1], input[2], input[3]];
+            let Ok(header) = oxideav_mp2::header::FrameHeader::parse(&head) else {
+                break;
+            };
+            let frame_size = header.frame_size_bytes();
+            if input.len() < frame_size {
+                break;
+            }
+            let contiguous = input.make_contiguous();
+            match oxideav_mp2::frame::decode_frame_with(&contiguous[..frame_size], &mut self.state)
+            {
+                Ok(frame) => {
+                    Self::append_resampled(&mut self.pcm, &frame.pcm, frame.header.sample_rate);
+                    input.drain(..frame_size);
+                    decoded += 1;
+                    self.synchronized = true;
+                }
+                Err(error) => {
+                    log::debug!("vmpeg: malformed final MP2 frame before stream switch: {error}");
+                    self.errors += 1;
+                    break;
+                }
+            }
+        }
+
+        // The selector takes effect at a PES boundary, not necessarily at a
+        // Layer-II frame boundary. Complete old-stream frames above remain
+        // audible; only its incomplete elementary-stream tail is discarded.
+        self.resync_bytes = self.resync_bytes.saturating_add(input.len() as u64);
+        input.clear();
+        self.expect_stream_discontinuity();
+        self.conceal_discontinuity_frame = true;
+        decoded
     }
 
     fn decode_available(&mut self, input: &mut VecDeque<u8>) -> u64 {
         let mut decoded = 0;
+        let mut scanned = 0u64;
         loop {
             if input.len() < 4 {
                 break;
@@ -540,12 +597,17 @@ impl Mp2Decoder {
             let header = match oxideav_mp2::header::FrameHeader::parse(&head) {
                 Ok(header) => header,
                 Err(_) => {
+                    let lost_sync = self.synchronized;
                     input.pop_front();
-                    if self.synchronized {
+                    if lost_sync {
                         self.errors += 1;
                         self.synchronized = false;
+                        log::debug!(
+                            "vmpeg: lost MP2 frame sync before {head:02x?} after {decoded} frame(s) and {scanned} scanned byte(s) in this batch"
+                        );
                     } else {
                         self.resync_bytes += 1;
+                        scanned += 1;
                     }
                     continue;
                 }
@@ -558,6 +620,22 @@ impl Mp2Decoder {
             match oxideav_mp2::frame::decode_frame_with(&contiguous[..frame_size], &mut self.state)
             {
                 Ok(frame) => {
+                    if !self.synchronized {
+                        log::debug!(
+                            "vmpeg: acquired MP2 frame sync after {scanned} byte(s), frame size {frame_size}"
+                        );
+                    }
+                    if self.conceal_discontinuity_frame {
+                        if scanned != 0 {
+                            Self::append_silence(
+                                &mut self.pcm,
+                                frame.pcm.first().map_or(0, Vec::len),
+                                frame.header.sample_rate,
+                            );
+                            self.concealed_frames += 1;
+                        }
+                        self.conceal_discontinuity_frame = false;
+                    }
                     Self::append_resampled(&mut self.pcm, &frame.pcm, frame.header.sample_rate);
                     input.drain(..frame_size);
                     decoded += 1;
@@ -593,6 +671,12 @@ impl Mp2Decoder {
             }
         }
     }
+
+    fn append_silence(output: &mut VecDeque<i16>, samples: usize, sample_rate: u32) {
+        let out_len = ((samples as u64 * 44_100 + u64::from(sample_rate) / 2)
+            / u64::from(sample_rate)) as usize;
+        output.extend(std::iter::repeat(0).take(out_len.saturating_mul(2)));
+    }
 }
 
 /// VMPEG cartridge state attached to the host bus.
@@ -621,6 +705,7 @@ pub struct Vmpeg {
     system_clock_anchor: Option<(u64, u32)>,
     audio_underflow_reported: bool,
     audio_underflow_after_eoi_ack: bool,
+    audio_stream_reacquire_pending: bool,
     video_armed: bool,
     playing: bool,
     video_visible: bool,
@@ -653,6 +738,7 @@ pub struct Vmpeg {
     video_errors_before_reset: u64,
     audio_errors_before_reset: u64,
     audio_resync_bytes_before_reset: u64,
+    audio_concealed_frames_before_reset: u64,
     captured_video_es: Option<Vec<u8>>,
     stats: DvcStats,
     audio_out: Vec<i16>,
@@ -700,6 +786,7 @@ impl Vmpeg {
             system_clock_anchor: None,
             audio_underflow_reported: false,
             audio_underflow_after_eoi_ack: false,
+            audio_stream_reacquire_pending: false,
             video_armed: false,
             playing: false,
             video_visible: false,
@@ -732,6 +819,7 @@ impl Vmpeg {
             video_errors_before_reset: 0,
             audio_errors_before_reset: 0,
             audio_resync_bytes_before_reset: 0,
+            audio_concealed_frames_before_reset: 0,
             captured_video_es: None,
             stats: DvcStats::default(),
             audio_out: Vec::new(),
@@ -754,6 +842,9 @@ impl Vmpeg {
         self.audio_resync_bytes_before_reset = self
             .audio_resync_bytes_before_reset
             .saturating_add(self.mp2.resync_bytes);
+        self.audio_concealed_frames_before_reset = self
+            .audio_concealed_frames_before_reset
+            .saturating_add(self.mp2.concealed_frames);
         self.fma_regs.fill(0);
         self.fmv_regs.fill(0);
         self.fma_read_counts.fill(0);
@@ -781,6 +872,7 @@ impl Vmpeg {
         self.system_clock_anchor = None;
         self.audio_underflow_reported = false;
         self.audio_underflow_after_eoi_ack = false;
+        self.audio_stream_reacquire_pending = false;
         self.video_armed = false;
         self.playing = false;
         self.video_visible = false;
@@ -1065,6 +1157,8 @@ impl Vmpeg {
             }
             Some(DmaTarget::Audio) => {
                 let program_ends = self.audio_demux.stats.program_ends;
+                let audio_packets = self.audio_demux.stats.audio_packets;
+                let old_audio_bytes = self.audio_demux.audio.len();
                 let input_len = self.audio_input.len();
                 let pending_tail = self
                     .audio_demux
@@ -1083,6 +1177,28 @@ impl Vmpeg {
                     Some((Self::word(&self.fma_regs, FMA_STREAM) & 0x1F) as u8);
                 self.audio_demux.feed(&self.audio_input);
                 self.audio_input.clear();
+                let mut decoded = 0;
+                if self.audio_stream_reacquire_pending
+                    && self.audio_demux.stats.audio_packets != audio_packets
+                {
+                    // The selector register can change while previously
+                    // selected audio remains buffered. Reacquire frame sync
+                    // only when the first PES packet for the new selection
+                    // actually arrives; doing this at the register write is
+                    // too early because an old frame can relock the parser.
+                    let mut selected_stream = self.audio_demux.audio.split_off(old_audio_bytes);
+                    let resync_bytes = self.mp2.resync_bytes;
+                    decoded += self.mp2.finish_stream_segment(&mut self.audio_demux.audio);
+                    let discarded = self.mp2.resync_bytes.saturating_sub(resync_bytes);
+                    self.audio_demux.audio.append(&mut selected_stream);
+                    self.audio_stream_reacquire_pending = false;
+                    log::debug!(
+                        "vmpeg: selected audio PES boundary at DCLK {}, retained={} compressed bytes, discarded={} old-tail bytes",
+                        self.dclk,
+                        self.audio_demux.audio.len(),
+                        discarded
+                    );
+                }
                 if self.audio_armed {
                     if let Some(scr) = self.audio_demux.last_scr {
                         self.ensure_system_clock_anchor(scr, "audio");
@@ -1094,7 +1210,18 @@ impl Vmpeg {
                     );
                     self.signal_audio_program_end();
                 }
-                let decoded = self.mp2.decode_available(&mut self.audio_demux.audio);
+                let audio_errors = self.mp2.errors;
+                let audio_resync_bytes = self.mp2.resync_bytes;
+                decoded += self.mp2.decode_available(&mut self.audio_demux.audio);
+                if self.mp2.errors != audio_errors {
+                    log::debug!(
+                        "vmpeg: MP2 error at DCLK {}, PES packets={}, resync bytes {} -> {}",
+                        self.dclk,
+                        self.audio_demux.stats.audio_packets,
+                        audio_resync_bytes,
+                        self.mp2.resync_bytes
+                    );
+                }
                 self.stats.decoded_audio_frames += decoded;
                 if decoded != 0 {
                     self.stats.audio_first_decoded_dclk.get_or_insert(self.dclk);
@@ -1669,9 +1796,13 @@ impl Vmpeg {
                     self.audio_resync_bytes_before_reset = self
                         .audio_resync_bytes_before_reset
                         .saturating_add(self.mp2.resync_bytes);
+                    self.audio_concealed_frames_before_reset = self
+                        .audio_concealed_frames_before_reset
+                        .saturating_add(self.mp2.concealed_frames);
                     self.mp2.reset();
                     self.audio_underflow_reported = false;
                     self.audio_underflow_after_eoi_ack = false;
+                    self.audio_stream_reacquire_pending = false;
                     self.audio_iso_end_reported = false;
                     self.release_system_clock_if_idle();
                 }
@@ -1694,6 +1825,7 @@ impl Vmpeg {
                 if let Some(previous) = self.audio_demux.selected_audio_stream {
                     if previous != selected {
                         self.stats.audio_stream_switch_events += 1;
+                        self.audio_stream_reacquire_pending = true;
                     }
                 }
                 self.audio_demux.selected_audio_stream = Some(selected);
@@ -1944,6 +2076,8 @@ impl Vmpeg {
         self.stats.audio_errors = self.audio_errors_before_reset + self.mp2.errors;
         self.stats.audio_resync_bytes =
             self.audio_resync_bytes_before_reset + self.mp2.resync_bytes;
+        self.stats.audio_concealed_frames =
+            self.audio_concealed_frames_before_reset + self.mp2.concealed_frames;
         self.stats.stream_errors =
             self.stats.demux_errors + self.stats.video_errors + self.stats.audio_errors;
     }
@@ -2478,7 +2612,26 @@ mod tests {
     }
 
     #[test]
-    fn audio_stream_switch_is_recorded_without_changing_decoder_state() {
+    fn mp2_stream_boundary_discards_only_incomplete_segment_tail() {
+        let mut decoder = Mp2Decoder {
+            synchronized: true,
+            ..Mp2Decoder::default()
+        };
+        decoder.pcm.extend([1, 2, 3, 4]);
+        let mut incomplete_old_tail = VecDeque::from([0x0F, 0xA0, 0xB0, 0xC4]);
+
+        assert_eq!(decoder.finish_stream_segment(&mut incomplete_old_tail), 0);
+
+        assert!(incomplete_old_tail.is_empty());
+        assert_eq!(decoder.pcm, VecDeque::from([1, 2, 3, 4]));
+        assert_eq!(decoder.errors, 0);
+        assert_eq!(decoder.resync_bytes, 4);
+        assert!(!decoder.synchronized);
+        assert!(decoder.conceal_discontinuity_frame);
+    }
+
+    #[test]
+    fn audio_stream_switch_waits_for_selected_pes_before_reacquiring_sync() {
         let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
         let mut dvc = Vmpeg::new(config).unwrap();
         dvc.audio_demux.selected_audio_stream = Some(0);
@@ -2493,7 +2646,22 @@ mod tests {
         assert_eq!(dvc.audio_demux.audio, VecDeque::from([0x11, 0x22, 0x33]));
         assert_eq!(dvc.mp2.pcm, VecDeque::from([1, 2, 3, 4]));
         assert!(dvc.mp2.synchronized);
+        assert!(dvc.audio_stream_reacquire_pending);
         assert_eq!(dvc.stats.audio_stream_switch_events, 1);
+
+        // Bytes from the old stream may still decode after the register
+        // write. Only arrival of a selected PES packet marks the new stream
+        // boundary and changes malformed-byte accounting to sync acquisition.
+        dvc.mp2.synchronized = true;
+        let old_packets = dvc.audio_demux.stats.audio_packets;
+        dvc.audio_demux.stats.audio_packets += 1;
+        if dvc.audio_stream_reacquire_pending && dvc.audio_demux.stats.audio_packets != old_packets
+        {
+            dvc.mp2.expect_stream_discontinuity();
+            dvc.audio_stream_reacquire_pending = false;
+        }
+        assert!(!dvc.mp2.synchronized);
+        assert!(!dvc.audio_stream_reacquire_pending);
         assert_eq!(dvc.stats.selected_audio_stream, 2);
 
         // Rewriting the active stream is not a switch and must not disturb
@@ -2506,6 +2674,7 @@ mod tests {
             VecDeque::from([0x11, 0x22, 0x33, 0x44, 0x55])
         );
         assert_eq!(dvc.stats.audio_stream_switch_events, 1);
+        assert!(!dvc.audio_stream_reacquire_pending);
     }
 
     #[test]

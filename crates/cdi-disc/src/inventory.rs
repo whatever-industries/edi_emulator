@@ -44,12 +44,38 @@ pub struct DiscInventory {
     pub leadout_frame: u32,
     pub lba_base: u32,
     pub tracks: Vec<TrackInventory>,
+    /// Strongest content classification supported by on-disc evidence.
+    #[serde(default)]
+    pub content_kind: DiscContentKind,
+    /// Whether the primary descriptor carries the CD-ROM XA Bridge markers.
+    #[serde(default)]
+    pub cd_rom_xa_bridge: bool,
+    /// Whether the ISO filesystem contains a root `CDI` application tree.
+    #[serde(default)]
+    pub has_cdi_application: bool,
     pub cdi_volume: Option<CdiVolumeInventory>,
     pub iso_volume: Option<IsoVolumeInventory>,
+    /// White Book entry points and PSD list topology, without media payload.
+    #[serde(default)]
+    pub vcd_navigation: Option<VcdNavigationInventory>,
     pub os9_modules: Vec<Os9ModuleInventory>,
     pub realtime_files: Vec<RealtimeFileInventory>,
     pub requires_dvc: bool,
     pub warnings: Vec<String>,
+}
+
+/// Payload-free media classification derived from volume and filesystem
+/// metadata. More specific Bridge profiles take precedence over the generic
+/// CD-ROM XA Bridge classification.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiscContentKind {
+    NativeCdi,
+    PhotoCd,
+    VideoCd,
+    CdRomXaBridge,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,8 +100,52 @@ pub struct CdiVolumeInventory {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IsoVolumeInventory {
     pub descriptor_abs_frame: u32,
+    #[serde(default)]
+    pub system_id: String,
     pub volume_id: String,
+    #[serde(default)]
+    pub application_id: String,
     pub files: Vec<CdiFileEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VcdNavigationInventory {
+    pub specification_version: u16,
+    pub album_id: String,
+    pub volume_count: u16,
+    pub volume_number: u16,
+    pub psd_bytes: u32,
+    pub offset_multiplier: u8,
+    pub maximum_list_id: u16,
+    pub entries: Vec<VcdEntryInventory>,
+    pub lists: Vec<VcdListInventory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VcdEntryInventory {
+    pub number: u16,
+    pub track: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub frame: u8,
+    pub absolute_frame: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VcdListInventory {
+    pub list_id: u16,
+    pub rejected: bool,
+    pub offset_units: u16,
+    pub offset_bytes: u32,
+    pub kind: String,
+    pub previous_offset: Option<u16>,
+    pub next_offset: Option<u16>,
+    pub return_offset: Option<u16>,
+    pub default_offset: Option<u16>,
+    pub timeout_offset: Option<u16>,
+    pub play_items: Vec<u16>,
+    pub selection_base: Option<u8>,
+    pub selection_offsets: Vec<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,14 +335,24 @@ impl DiscImage {
                     .iter()
                     .any(|class| class.submode & submode::VIDEO != 0 && class.coding & 0x0F == 0x0F)
         });
+        let cd_rom_xa_bridge = self.is_cd_rom_xa_bridge();
+        let (content_kind, has_cdi_application) =
+            classify_disc_content(cdi_volume.is_some(), cd_rom_xa_bridge, filesystem_files);
+        let vcd_navigation = (content_kind == DiscContentKind::VideoCd)
+            .then(|| self.inspect_vcd_navigation(lba_base, filesystem_files, &mut warnings))
+            .flatten();
         Ok(DiscInventory {
-            schema_version: 1,
+            schema_version: 3,
             fingerprint,
             leadout_frame: self.leadout(),
             lba_base,
             tracks,
+            content_kind,
+            cd_rom_xa_bridge,
+            has_cdi_application,
             cdi_volume,
             iso_volume,
+            vcd_navigation,
             os9_modules,
             realtime_files,
             requires_dvc,
@@ -338,7 +418,12 @@ impl DiscImage {
         if user.get(0..7) != Some(&[1, b'C', b'D', b'0', b'0', b'1', 1]) {
             return Ok(None);
         }
+        let system_id = text_field(user.get(8..40).unwrap_or_default());
         let volume_id = text_field(user.get(40..72).unwrap_or_default());
+        // ISO 9660 PVD application identifier. Philips Bridge applications
+        // use this metadata as an entry-point hint; preserve it verbatim for
+        // diagnostics instead of interpreting it as a host launch command.
+        let application_id = text_field(user.get(574..702).unwrap_or_default());
         let root = user
             .get(156..)
             .and_then(parse_iso_directory_record)
@@ -347,7 +432,9 @@ impl DiscImage {
         self.walk_iso_directories(lba_base, root.lba, root.bytes, &mut files, warnings)?;
         Ok(Some(IsoVolumeInventory {
             descriptor_abs_frame: abs,
+            system_id,
             volume_id,
+            application_id,
             files,
         }))
     }
@@ -583,6 +670,66 @@ impl DiscImage {
         modules
     }
 
+    fn inspect_vcd_navigation(
+        &self,
+        lba_base: u32,
+        files: &[CdiFileEntry],
+        warnings: &mut Vec<String>,
+    ) -> Option<VcdNavigationInventory> {
+        let find = |wanted: &str| {
+            files.iter().find(|file| {
+                !file.directory && file.path.replace('\\', "/").eq_ignore_ascii_case(wanted)
+            })
+        };
+        let info_file = find("VCD/INFO.VCD")?;
+        let entries_file = find("VCD/ENTRIES.VCD")?;
+        let info_bytes = self.read_regular_file(lba_base, info_file)?;
+        let Some(info) = parse_vcd_info(&info_bytes) else {
+            warnings.push("VCD/INFO.VCD has an invalid White Book header".to_owned());
+            return None;
+        };
+        let entries_bytes = self.read_regular_file(lba_base, entries_file)?;
+        let entries = parse_vcd_entries(&entries_bytes, warnings);
+        let mut navigation = VcdNavigationInventory {
+            specification_version: info.specification_version,
+            album_id: info.album_id,
+            volume_count: info.volume_count,
+            volume_number: info.volume_number,
+            psd_bytes: info.psd_bytes,
+            offset_multiplier: info.offset_multiplier,
+            maximum_list_id: info.maximum_list_id,
+            entries,
+            lists: Vec::new(),
+        };
+
+        if info.psd_bytes == 0 {
+            return Some(navigation);
+        }
+        let (Some(lot_file), Some(psd_file)) = (find("VCD/LOT.VCD"), find("VCD/PSD.VCD")) else {
+            warnings.push("VCD declares a PSD but LOT.VCD or PSD.VCD is missing".to_owned());
+            return Some(navigation);
+        };
+        if lot_file.bytes > 64 * 1024 || psd_file.bytes > 256 * 2048 {
+            warnings.push("VCD navigation file exceeds its White Book maximum size".to_owned());
+            return Some(navigation);
+        }
+        let Some(lot) = self.read_regular_file(lba_base, lot_file) else {
+            return Some(navigation);
+        };
+        let Some(mut psd) = self.read_regular_file(lba_base, psd_file) else {
+            return Some(navigation);
+        };
+        psd.truncate(info.psd_bytes as usize);
+        navigation.lists = parse_vcd_lists(
+            &lot,
+            &psd,
+            info.offset_multiplier,
+            info.maximum_list_id,
+            warnings,
+        );
+        Some(navigation)
+    }
+
     fn read_regular_file(&self, lba_base: u32, file: &CdiFileEntry) -> Option<Vec<u8>> {
         let mut bytes = Vec::with_capacity(file.bytes as usize);
         for offset in 0..file.bytes.div_ceil(2048) {
@@ -591,6 +738,238 @@ impl DiscImage {
         bytes.truncate(file.bytes as usize);
         Some(bytes)
     }
+}
+
+struct VcdInfoHeader {
+    specification_version: u16,
+    album_id: String,
+    volume_count: u16,
+    volume_number: u16,
+    psd_bytes: u32,
+    offset_multiplier: u8,
+    maximum_list_id: u16,
+}
+
+// Video CD 2.0 (July 1994), III.2.5.1-III.2.5.4 and VI.1-VI.6.
+// Keep this metadata-only: native CD-i software remains responsible for
+// interpreting and presenting the authored navigation sequence.
+fn parse_vcd_info(bytes: &[u8]) -> Option<VcdInfoHeader> {
+    if bytes.get(..8)? != b"VIDEO_CD" || bytes.len() < 56 {
+        return None;
+    }
+    Some(VcdInfoHeader {
+        specification_version: be_u16(bytes, 8)?,
+        album_id: text_field(bytes.get(10..26)?),
+        volume_count: be_u16(bytes, 26)?,
+        volume_number: be_u16(bytes, 28)?,
+        psd_bytes: be_u32(bytes, 44)?,
+        offset_multiplier: *bytes.get(51)?,
+        maximum_list_id: be_u16(bytes, 52)?,
+    })
+}
+
+fn parse_vcd_entries(bytes: &[u8], warnings: &mut Vec<String>) -> Vec<VcdEntryInventory> {
+    if bytes.get(..8) != Some(b"ENTRYVCD".as_slice()) || bytes.len() < 12 {
+        warnings.push("VCD/ENTRIES.VCD has an invalid White Book header".to_owned());
+        return Vec::new();
+    }
+    let used = usize::from(be_u16(bytes, 10).unwrap_or(0)).min(500);
+    if 12 + used * 4 > bytes.len() {
+        warnings.push("VCD/ENTRIES.VCD ends before its declared entries".to_owned());
+    }
+    bytes[12..]
+        .chunks_exact(4)
+        .take(used)
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let decoded = [entry[0], entry[1], entry[2], entry[3]].map(decode_bcd);
+            let [Some(track), Some(minute), Some(second), Some(frame)] = decoded else {
+                warnings.push(format!("VCD entry {} contains invalid BCD", index + 1));
+                return None;
+            };
+            Some(VcdEntryInventory {
+                number: u16::try_from(index + 1).ok()?,
+                track,
+                minute,
+                second,
+                frame,
+                absolute_frame: u32::from(minute) * 60 * 75
+                    + u32::from(second) * 75
+                    + u32::from(frame),
+            })
+        })
+        .collect()
+}
+
+fn parse_vcd_lists(
+    lot: &[u8],
+    psd: &[u8],
+    offset_multiplier: u8,
+    maximum_list_id: u16,
+    warnings: &mut Vec<String>,
+) -> Vec<VcdListInventory> {
+    if offset_multiplier == 0 {
+        warnings.push("VCD PSD has a zero offset multiplier".to_owned());
+        return Vec::new();
+    }
+    let mut lists = Vec::new();
+    for list_id in 1..=maximum_list_id.min(0x7fff) {
+        let lot_offset = usize::from(list_id) * 2;
+        let Some(offset_units) = be_u16(lot, lot_offset) else {
+            warnings.push("VCD/LOT.VCD ends before Maximum List ID".to_owned());
+            break;
+        };
+        if offset_units == 0xffff {
+            continue;
+        }
+        let offset_bytes = u32::from(offset_units) * u32::from(offset_multiplier);
+        let Some(data) = psd.get(offset_bytes as usize..) else {
+            warnings.push(format!(
+                "VCD list {list_id} points beyond PSD.VCD ({offset_bytes} bytes)"
+            ));
+            continue;
+        };
+        let Some((list, encoded_id)) = parse_vcd_list(list_id, offset_units, offset_bytes, data)
+        else {
+            warnings.push(format!(
+                "VCD list {list_id} has an invalid or truncated descriptor"
+            ));
+            continue;
+        };
+        if encoded_id.is_some_and(|encoded| encoded != list_id) {
+            warnings.push(format!(
+                "VCD LOT list {list_id} points to descriptor list {}",
+                encoded_id.unwrap()
+            ));
+        }
+        lists.push(list);
+    }
+    lists
+}
+
+fn parse_vcd_list(
+    lot_list_id: u16,
+    offset_units: u16,
+    offset_bytes: u32,
+    bytes: &[u8],
+) -> Option<(VcdListInventory, Option<u16>)> {
+    let header = *bytes.first()?;
+    let mut list = VcdListInventory {
+        list_id: lot_list_id,
+        rejected: false,
+        offset_units,
+        offset_bytes,
+        kind: "unknown".to_owned(),
+        previous_offset: None,
+        next_offset: None,
+        return_offset: None,
+        default_offset: None,
+        timeout_offset: None,
+        play_items: Vec::new(),
+        selection_base: None,
+        selection_offsets: Vec::new(),
+    };
+    let encoded_id = match header {
+        0x10 => {
+            let item_count = usize::from(*bytes.get(1)?);
+            bytes.get(..14 + item_count * 2)?;
+            let raw_id = be_u16(bytes, 2)?;
+            list.list_id = raw_id & 0x7fff;
+            list.rejected = raw_id & 0x8000 != 0;
+            list.kind = "play".to_owned();
+            list.previous_offset = enabled_list_offset(be_u16(bytes, 4)?);
+            list.next_offset = enabled_list_offset(be_u16(bytes, 6)?);
+            list.return_offset = enabled_list_offset(be_u16(bytes, 8)?);
+            for offset in (14..14 + item_count * 2).step_by(2) {
+                list.play_items.push(be_u16(bytes, offset)?);
+            }
+            Some(list.list_id)
+        }
+        0x18 | 0x1a => {
+            let selection_count = usize::from(*bytes.get(2)?);
+            let base_bytes = 20 + selection_count * 2;
+            let total_bytes = if header == 0x1a {
+                base_bytes + (4 + selection_count) * 4
+            } else {
+                base_bytes
+            };
+            bytes.get(..total_bytes)?;
+            let raw_id = be_u16(bytes, 4)?;
+            list.list_id = raw_id & 0x7fff;
+            list.rejected = raw_id & 0x8000 != 0;
+            list.kind = if header == 0x1a {
+                "extended-selection"
+            } else {
+                "selection"
+            }
+            .to_owned();
+            list.previous_offset = enabled_list_offset(be_u16(bytes, 6)?);
+            list.next_offset = enabled_list_offset(be_u16(bytes, 8)?);
+            list.return_offset = enabled_list_offset(be_u16(bytes, 10)?);
+            list.default_offset = enabled_list_offset(be_u16(bytes, 12)?);
+            list.timeout_offset = enabled_list_offset(be_u16(bytes, 14)?);
+            list.play_items.push(be_u16(bytes, 18)?);
+            list.selection_base = bytes.get(3).copied();
+            for offset in (20..20 + selection_count * 2).step_by(2) {
+                list.selection_offsets.push(be_u16(bytes, offset)?);
+            }
+            Some(list.list_id)
+        }
+        0x1f => {
+            bytes.get(..8)?;
+            list.kind = "end".to_owned();
+            None
+        }
+        _ => None,
+    };
+    Some((list, encoded_id))
+}
+
+fn enabled_list_offset(offset: u16) -> Option<u16> {
+    (offset != 0xffff).then_some(offset)
+}
+
+fn decode_bcd(byte: u8) -> Option<u8> {
+    let high = byte >> 4;
+    let low = byte & 0x0f;
+    (high < 10 && low < 10).then_some(high * 10 + low)
+}
+
+fn classify_disc_content(
+    has_cdi_volume: bool,
+    cd_rom_xa_bridge: bool,
+    files: &[CdiFileEntry],
+) -> (DiscContentKind, bool) {
+    let paths = files
+        .iter()
+        .map(|file| file.path.replace('\\', "/").to_ascii_uppercase())
+        .collect::<BTreeSet<_>>();
+    let has_cdi_application = paths
+        .iter()
+        .any(|path| path == "CDI" || path.starts_with("CDI/"));
+    let is_photo_cd = paths.contains("PHOTO_CD/INFO.PCD")
+        && paths
+            .iter()
+            .any(|path| path == "PHOTO_CD/IMAGES" || path.starts_with("PHOTO_CD/IMAGES/"));
+    let has_mpegav_sequence = paths
+        .iter()
+        .any(|path| path.starts_with("MPEGAV/AVSEQ") && path.ends_with(".DAT"));
+    let has_vcd_control_files = paths.contains("VCD/INFO.VCD") && paths.contains("VCD/ENTRIES.VCD");
+    let has_philips_vcd_engine = paths.contains("CDI/CDI_VCD.APP");
+    let is_video_cd = has_mpegav_sequence && (has_vcd_control_files || has_philips_vcd_engine);
+
+    let kind = if cd_rom_xa_bridge && is_photo_cd {
+        DiscContentKind::PhotoCd
+    } else if cd_rom_xa_bridge && is_video_cd {
+        DiscContentKind::VideoCd
+    } else if has_cdi_volume {
+        DiscContentKind::NativeCdi
+    } else if cd_rom_xa_bridge {
+        DiscContentKind::CdRomXaBridge
+    } else {
+        DiscContentKind::Unknown
+    };
+    (kind, has_cdi_application)
 }
 
 fn track_mode_name(mode: TrackMode) -> &'static str {
@@ -631,6 +1010,12 @@ fn text_field(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes)
         .trim_matches(|character: char| character == '\0' || character == ' ')
         .to_owned()
+}
+
+fn be_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(
+        bytes.get(offset..offset + 2)?.try_into().ok()?,
+    ))
 }
 
 fn be_u32(bytes: &[u8], offset: usize) -> Option<u32> {
@@ -769,6 +1154,9 @@ fn coding_name(mode: u8, coding: u8) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sector::SYNC;
+    use crate::Msf;
+    use std::io::Write;
 
     fn directory_record(name: &[u8], lba: u32, bytes: u32, attributes: u16) -> Vec<u8> {
         let attribute_offset = 33 + name.len() + usize::from(name.len() % 2 == 0) + 4;
@@ -780,6 +1168,373 @@ mod tests {
         record[33..33 + name.len()].copy_from_slice(name);
         record[attribute_offset..attribute_offset + 2].copy_from_slice(&attributes.to_be_bytes());
         record
+    }
+
+    fn file(path: &str, directory: bool) -> CdiFileEntry {
+        CdiFileEntry {
+            path: path.to_owned(),
+            lba: 0,
+            bytes: 0,
+            directory,
+            attributes: 0,
+        }
+    }
+
+    fn iso_record(name: &[u8], lba: u32, bytes: u32, directory: bool) -> Vec<u8> {
+        let padding = usize::from(name.len() % 2 == 0);
+        let mut record = vec![0u8; 33 + name.len() + padding];
+        record[0] = record.len() as u8;
+        record[2..6].copy_from_slice(&lba.to_le_bytes());
+        record[6..10].copy_from_slice(&lba.to_be_bytes());
+        record[10..14].copy_from_slice(&bytes.to_le_bytes());
+        record[14..18].copy_from_slice(&bytes.to_be_bytes());
+        record[25] = if directory { 0x02 } else { 0 };
+        record[28..30].copy_from_slice(&1u16.to_le_bytes());
+        record[30..32].copy_from_slice(&1u16.to_be_bytes());
+        record[32] = name.len() as u8;
+        record[33..33 + name.len()].copy_from_slice(name);
+        record
+    }
+
+    fn append_records(target: &mut [u8], records: &[Vec<u8>]) {
+        let mut offset = 0;
+        for record in records {
+            target[offset..offset + record.len()].copy_from_slice(record);
+            offset += record.len();
+        }
+    }
+
+    fn form1_sector(abs_frame: u32) -> [u8; RAW_SECTOR_SIZE] {
+        let mut sector = [0u8; RAW_SECTOR_SIZE];
+        sector[..12].copy_from_slice(&SYNC);
+        sector[12..15].copy_from_slice(&Msf::from_frames(abs_frame).to_bcd());
+        sector[15] = 2;
+        let subheader = [0, 0, submode::DATA, 0];
+        sector[16..20].copy_from_slice(&subheader);
+        sector[20..24].copy_from_slice(&subheader);
+        sector
+    }
+
+    #[test]
+    fn classifies_bridge_profiles_from_standardized_filesystem_evidence() {
+        let cases = [
+            (
+                false,
+                false,
+                vec![file("TITLE.RTF", false)],
+                DiscContentKind::Unknown,
+                false,
+            ),
+            (
+                true,
+                false,
+                vec![file("TITLE.RTF", false)],
+                DiscContentKind::NativeCdi,
+                false,
+            ),
+            (
+                false,
+                true,
+                vec![file("CDI", true), file("CDI/PLAYER.APP", false)],
+                DiscContentKind::CdRomXaBridge,
+                true,
+            ),
+            (
+                false,
+                true,
+                vec![
+                    file("photo_cd/info.pcd", false),
+                    file("PHOTO_CD/IMAGES", true),
+                    file("CDI/PHOTO_CD.APP", false),
+                ],
+                DiscContentKind::PhotoCd,
+                true,
+            ),
+            (
+                false,
+                true,
+                vec![
+                    file("CDI/CDI_VCD.APP", false),
+                    file("MPEGAV/AVSEQ01.DAT", false),
+                ],
+                DiscContentKind::VideoCd,
+                true,
+            ),
+            (
+                false,
+                true,
+                vec![
+                    file("VCD/INFO.VCD", false),
+                    file("VCD/ENTRIES.VCD", false),
+                    file("MPEGAV/AVSEQ01.DAT", false),
+                    file("CDI/VIDEO.EXE", false),
+                ],
+                DiscContentKind::VideoCd,
+                true,
+            ),
+        ];
+
+        for (has_cdi, bridge, files, expected_kind, expected_application) in cases {
+            assert_eq!(
+                classify_disc_content(has_cdi, bridge, &files),
+                (expected_kind, expected_application)
+            );
+        }
+    }
+
+    #[test]
+    fn bridge_profile_requires_both_signature_and_complete_profile_evidence() {
+        let photo_files = [file("PHOTO_CD/INFO.PCD", false)];
+        assert_eq!(
+            classify_disc_content(false, true, &photo_files).0,
+            DiscContentKind::CdRomXaBridge
+        );
+        assert_eq!(
+            classify_disc_content(false, false, &photo_files).0,
+            DiscContentKind::Unknown
+        );
+
+        let vcd_files = [file("CDI/CDI_VCD.APP", false)];
+        assert_eq!(
+            classify_disc_content(false, true, &vcd_files).0,
+            DiscContentKind::CdRomXaBridge
+        );
+    }
+
+    #[test]
+    fn synthetic_bridge_pvd_and_cdi_application_classify_photo_cd() {
+        const ROOT_LBA: u32 = 20;
+        const PHOTO_CD_LBA: u32 = 21;
+        const IMAGES_LBA: u32 = 22;
+
+        let directory =
+            std::env::temp_dir().join(format!("cdi-inventory-photo-bridge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+
+        let mut sectors = (0..24)
+            .map(|lba| form1_sector(NORMAL_LBA_BASE + lba))
+            .collect::<Vec<_>>();
+        let pvd = &mut sectors[DESCRIPTOR_LBA as usize][24..24 + 2048];
+        pvd[..8].copy_from_slice(b"\x01CD001\x01\x00");
+        pvd[8..8 + 17].copy_from_slice(b"CD-RTOS CD-BRIDGE");
+        pvd[40..48].copy_from_slice(b"SYNTHETC");
+        pvd[574..592].copy_from_slice(b"CDI/PHOTO_CD.APP;1");
+        let root_record = iso_record(&[0], ROOT_LBA, 2048, true);
+        pvd[156..156 + root_record.len()].copy_from_slice(&root_record);
+        pvd[1024..1032].copy_from_slice(b"CD-XA001");
+
+        let root = &mut sectors[ROOT_LBA as usize][24..24 + 2048];
+        append_records(
+            root,
+            &[
+                iso_record(&[0], ROOT_LBA, 2048, true),
+                iso_record(&[1], ROOT_LBA, 2048, true),
+                iso_record(b"PHOTO_CD", PHOTO_CD_LBA, 2048, true),
+                iso_record(b"CDI", 23, 2048, true),
+            ],
+        );
+        let photo_cd = &mut sectors[PHOTO_CD_LBA as usize][24..24 + 2048];
+        append_records(
+            photo_cd,
+            &[
+                iso_record(&[0], PHOTO_CD_LBA, 2048, true),
+                iso_record(&[1], ROOT_LBA, 2048, true),
+                iso_record(b"INFO.PCD;1", 0, 0, false),
+                iso_record(b"IMAGES", IMAGES_LBA, 2048, true),
+            ],
+        );
+        let images = &mut sectors[IMAGES_LBA as usize][24..24 + 2048];
+        append_records(
+            images,
+            &[
+                iso_record(&[0], IMAGES_LBA, 2048, true),
+                iso_record(&[1], PHOTO_CD_LBA, 2048, true),
+            ],
+        );
+        let cdi = &mut sectors[23][24..24 + 2048];
+        append_records(
+            cdi,
+            &[
+                iso_record(&[0], 23, 2048, true),
+                iso_record(&[1], ROOT_LBA, 2048, true),
+            ],
+        );
+
+        let mut bin = std::fs::File::create(directory.join("photo.bin")).unwrap();
+        for sector in sectors {
+            bin.write_all(&sector).unwrap();
+        }
+        std::fs::write(
+            directory.join("photo.cue"),
+            "FILE \"photo.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        let inventory = inspect_cue(&directory.join("photo.cue")).unwrap();
+        assert_eq!(inventory.schema_version, 3);
+        assert!(inventory.cd_rom_xa_bridge);
+        assert!(inventory.has_cdi_application);
+        assert_eq!(inventory.content_kind, DiscContentKind::PhotoCd);
+        assert!(inventory.iso_volume.as_ref().is_some_and(|volume| {
+            volume.application_id == "CDI/PHOTO_CD.APP;1"
+                && volume
+                    .files
+                    .iter()
+                    .any(|file| file.path == "PHOTO_CD/INFO.PCD")
+        }));
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn synthetic_bridge_pvd_and_cdi_entry_point_classify_video_cd() {
+        const ROOT_LBA: u32 = 20;
+        const CDI_LBA: u32 = 21;
+        const MPEGAV_LBA: u32 = 22;
+        const VCD_LBA: u32 = 23;
+        const INFO_LBA: u32 = 24;
+        const ENTRIES_LBA: u32 = 25;
+        const LOT_LBA: u32 = 26;
+        const PSD_LBA: u32 = 58;
+
+        let directory =
+            std::env::temp_dir().join(format!("cdi-inventory-video-bridge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+
+        let mut sectors = (0..59)
+            .map(|lba| form1_sector(NORMAL_LBA_BASE + lba))
+            .collect::<Vec<_>>();
+        let pvd = &mut sectors[DESCRIPTOR_LBA as usize][24..24 + 2048];
+        pvd[..8].copy_from_slice(b"\x01CD001\x01\x00");
+        pvd[8..8 + 17].copy_from_slice(b"CD-RTOS CD-BRIDGE");
+        pvd[40..48].copy_from_slice(b"SYNTHVCD");
+        pvd[574..591].copy_from_slice(b"CDI/CDI_VCD.APP;1");
+        let root_record = iso_record(&[0], ROOT_LBA, 2048, true);
+        pvd[156..156 + root_record.len()].copy_from_slice(&root_record);
+        pvd[1024..1032].copy_from_slice(b"CD-XA001");
+
+        let root = &mut sectors[ROOT_LBA as usize][24..24 + 2048];
+        append_records(
+            root,
+            &[
+                iso_record(&[0], ROOT_LBA, 2048, true),
+                iso_record(&[1], ROOT_LBA, 2048, true),
+                iso_record(b"CDI", CDI_LBA, 2048, true),
+                iso_record(b"MPEGAV", MPEGAV_LBA, 2048, true),
+                iso_record(b"VCD", VCD_LBA, 2048, true),
+            ],
+        );
+        let cdi = &mut sectors[CDI_LBA as usize][24..24 + 2048];
+        append_records(
+            cdi,
+            &[
+                iso_record(&[0], CDI_LBA, 2048, true),
+                iso_record(&[1], ROOT_LBA, 2048, true),
+                iso_record(b"CDI_VCD.APP;1", 0, 0, false),
+                iso_record(b"CDI_IMAG.RTF;1", 0, 0, false),
+                iso_record(b"CDI_TEXT.FNT;1", 0, 0, false),
+            ],
+        );
+        let mpegav = &mut sectors[MPEGAV_LBA as usize][24..24 + 2048];
+        append_records(
+            mpegav,
+            &[
+                iso_record(&[0], MPEGAV_LBA, 2048, true),
+                iso_record(&[1], ROOT_LBA, 2048, true),
+                iso_record(b"AVSEQ01.DAT;1", 0, 0, false),
+            ],
+        );
+        let vcd = &mut sectors[VCD_LBA as usize][24..24 + 2048];
+        append_records(
+            vcd,
+            &[
+                iso_record(&[0], VCD_LBA, 2048, true),
+                iso_record(&[1], ROOT_LBA, 2048, true),
+                iso_record(b"INFO.VCD;1", INFO_LBA, 2048, false),
+                iso_record(b"ENTRIES.VCD;1", ENTRIES_LBA, 2048, false),
+                iso_record(b"LOT.VCD;1", LOT_LBA, 64 * 1024, false),
+                iso_record(b"PSD.VCD;1", PSD_LBA, 56, false),
+            ],
+        );
+        let info = &mut sectors[INFO_LBA as usize][24..24 + 2048];
+        info[..8].copy_from_slice(b"VIDEO_CD");
+        info[8..10].copy_from_slice(&0x0200u16.to_be_bytes());
+        info[10..18].copy_from_slice(b"SYNTHPSD");
+        info[26..28].copy_from_slice(&1u16.to_be_bytes());
+        info[28..30].copy_from_slice(&1u16.to_be_bytes());
+        info[44..48].copy_from_slice(&56u32.to_be_bytes());
+        info[51] = 8;
+        info[52..54].copy_from_slice(&3u16.to_be_bytes());
+
+        let entries = &mut sectors[ENTRIES_LBA as usize][24..24 + 2048];
+        entries[..8].copy_from_slice(b"ENTRYVCD");
+        entries[8..10].copy_from_slice(&0x0200u16.to_be_bytes());
+        entries[10..12].copy_from_slice(&2u16.to_be_bytes());
+        entries[12..16].copy_from_slice(&[0x02, 0x00, 0x02, 0x00]);
+        entries[16..20].copy_from_slice(&[0x02, 0x00, 0x03, 0x00]);
+
+        let lot = &mut sectors[LOT_LBA as usize][24..24 + 2048];
+        lot[2..4].copy_from_slice(&0u16.to_be_bytes());
+        lot[4..6].copy_from_slice(&3u16.to_be_bytes());
+        lot[6..8].copy_from_slice(&6u16.to_be_bytes());
+
+        let psd = &mut sectors[PSD_LBA as usize][24..24 + 2048];
+        psd[0] = 0x18;
+        psd[2] = 2;
+        psd[3] = 1;
+        psd[4..6].copy_from_slice(&1u16.to_be_bytes());
+        psd[6..8].copy_from_slice(&0xffffu16.to_be_bytes());
+        psd[8..10].copy_from_slice(&3u16.to_be_bytes());
+        psd[10..12].copy_from_slice(&0xffffu16.to_be_bytes());
+        psd[12..14].copy_from_slice(&3u16.to_be_bytes());
+        psd[14..16].copy_from_slice(&0xffffu16.to_be_bytes());
+        psd[18..20].copy_from_slice(&100u16.to_be_bytes());
+        psd[20..22].copy_from_slice(&3u16.to_be_bytes());
+        psd[22..24].copy_from_slice(&6u16.to_be_bytes());
+        psd[24] = 0x10;
+        psd[25] = 1;
+        psd[26..28].copy_from_slice(&2u16.to_be_bytes());
+        psd[28..30].copy_from_slice(&0u16.to_be_bytes());
+        psd[30..32].copy_from_slice(&6u16.to_be_bytes());
+        psd[32..34].copy_from_slice(&0u16.to_be_bytes());
+        psd[38..40].copy_from_slice(&101u16.to_be_bytes());
+        psd[48] = 0x1f;
+
+        let mut bin = std::fs::File::create(directory.join("video.bin")).unwrap();
+        for sector in sectors {
+            bin.write_all(&sector).unwrap();
+        }
+        std::fs::write(
+            directory.join("video.cue"),
+            "FILE \"video.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+
+        let inventory = inspect_cue(&directory.join("video.cue")).unwrap();
+        assert!(inventory.cd_rom_xa_bridge);
+        assert!(inventory.has_cdi_application);
+        assert_eq!(inventory.content_kind, DiscContentKind::VideoCd);
+        let navigation = inventory.vcd_navigation.as_ref().unwrap();
+        assert_eq!(navigation.specification_version, 0x0200);
+        assert_eq!(navigation.album_id, "SYNTHPSD");
+        assert_eq!(navigation.entries.len(), 2);
+        assert_eq!(navigation.entries[1].absolute_frame, 225);
+        assert_eq!(navigation.lists.len(), 3);
+        assert_eq!(navigation.lists[0].kind, "selection");
+        assert_eq!(navigation.lists[0].selection_offsets, [3, 6]);
+        assert_eq!(navigation.lists[1].play_items, [101]);
+        assert_eq!(navigation.lists[2].kind, "end");
+        assert!(inventory.iso_volume.as_ref().is_some_and(|volume| {
+            volume.application_id == "CDI/CDI_VCD.APP;1"
+                && volume
+                    .files
+                    .iter()
+                    .any(|file| file.path == "CDI/CDI_VCD.APP")
+        }));
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

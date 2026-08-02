@@ -87,10 +87,12 @@ The automated native pause/continue gate passes after implementing measured
 CDIC DBUF/stop transport behavior and programming VMPEG's separate display
 period at `$e040aa` for PAL/NTSC; Philips TN 088's intermittent pause
 `E$NotRdy` remains documented native behavior, not an emulator workaround.
-Manual GUI confirmation passed with video and audio both resuming. The
-in-place stream change continues but records one MP2 boundary error. The next
-unchecked actions are to isolate that boundary, followed by the cake puzzle. A timestamp- or
-presentation-overlap-based oracle is still required for perceptual A/V drift.
+Manual GUI confirmation passed with video and audio both resuming. The native
+in-place stream gate now reacquires the selected PES boundary, preserves
+complete old-stream MP2 frames, and conceals only the one incomplete boundary
+frame; it finishes without decoder errors or underflow. The next unchecked
+title action is the cake puzzle. A timestamp- or presentation-overlap-based
+oracle is still required for perceptual A/V drift.
 M3.13 remains closed: the historical five rejected pictures predated the
 shared-IN4 correction and are retained as superseded transport evidence; do
 not add picture smoothing or concealment for them.

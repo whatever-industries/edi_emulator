@@ -16,9 +16,10 @@ pub mod sector;
 pub use cuesheet::{parse_cue, CueFile, CueTrack, TrackMode};
 pub use image::{DiscImage, TrackInfo};
 pub use inventory::{
-    inspect_cue, CdiFileEntry, CdiVolumeInventory, DiscFingerprint, DiscInventory,
+    inspect_cue, CdiFileEntry, CdiVolumeInventory, DiscContentKind, DiscFingerprint, DiscInventory,
     IsoVolumeInventory, MpegSequenceInventory, Os9ModuleInventory, RealtimeFileInventory,
-    SectorClassInventory, TrackInventory,
+    SectorClassInventory, TrackInventory, VcdEntryInventory, VcdListInventory,
+    VcdNavigationInventory,
 };
 pub use sector::{Mode2Subheader, SectorHeader};
 

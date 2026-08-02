@@ -45,8 +45,11 @@ it still needs a falsifying test against the affected device boundary.
    ```
 
    A successful run captures evidence but does not by itself prove that the
-   symptom occurred. Pass `--symptom-reproduced` only after inspecting the run;
-   that records `last_reproduced_revision` and marks the evidence current.
+   symptom occurred. Pass `--symptom-reproduced` only after inspecting the run.
+   Doing so records `last_reproduced_revision` and marks the evidence current.
+   The inventory's `content_kind`, XA Bridge flag, native `CDI` application
+   flag, and PVD identifiers are metadata evidence only and never select a
+   host-side playback shortcut.
    Manual acceptance is recorded explicitly:
 
    ```sh
@@ -68,8 +71,10 @@ cargo run -p cdi-cli -- disc "/local/path/disc.cue" \
 ```
 
 The inventory records OS-9 modules, root-level VCD `CDI` content, RTF/VCD
-sector classifications, and validated MPEG sequence metadata without
-extracting media.
+sector classifications, White Book entry/PSD topology, and validated MPEG
+sequence metadata without extracting media. Compatibility reports pair the
+final CDIC LBA with the nearest authored VCD entry, so a native-engine stall
+can be compared with the same entry and list topology in later runs.
 
 ## Automated compatibility suites
 
@@ -132,6 +137,15 @@ the stream. DYUV requires the traced absolute start value. RL3/RL7/CLUT needs
 the live palette, line pointers, and geometry. A partial update is meaningful
 only against the destination drawmap and previous contents. Static previews
 are evidence, never automatic crop or presentation input.
+
+For a moving display transition, launch the frontend with
+`EDI_DIAGNOSTICS_DIR` and optionally `EDI_DIAGNOSTIC_FIELDS` (1-120; default
+4), then press Command-Shift-D at the transition start. The capture contains
+consecutive plane RAM, decoded planes, base rasters, composed rasters, and
+machine snapshots. Run
+`scripts/summarize-display-fields.py <capture-directory>` to produce a
+payload-free per-field hash/change summary before interpreting the images.
+Longer bursts are diagnostic-only and must not become presentation buffering.
 
 Before changing code, add a failing device-level test. Record the experiment
 outcome before changing another subsystem.

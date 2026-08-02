@@ -177,15 +177,22 @@ map, and correct faults shorten the firmware's early memory checks. The source
 has not checked every hole, access width, or direction, so this is not evidence
 for making every open-bus access fault unconditionally.
 
-A read-only E-Di trace at revision `36b46f7` confirms the cost that needs to be
-explained. During the first 20,000,000 instructions of a PAL cdi220b
-firmware-only boot, the current open-bus path handled 9,605,190 byte reads at
-9,075,906 distinct addresses from `$00500000` through `$00FF8003`. This proves
-that absent-memory discovery dominates that interval; it does not yet prove
-the hardware response for each address. Before enabling vector 2, diagnostics
-must retain the faulting PC, address, function code, access width/direction,
-and wait-state context, and focused tests must protect the SCC68070 bus-error
-stack frame.
+A read-only E-Di trace at revision `36b46f7` confirmed the cost. During the
+first 20,000,000 instructions of a PAL cdi220b firmware-only boot, the old
+open-bus path handled 9,605,190 byte reads at 9,075,906 distinct addresses
+from `$00500000` through `$00FF8003`.
+
+The SCC68070 April 1993 product specification sections 5.9-5.10 and Figures
+14-16 now constrain the implementation: vector 2 stacks the 17-word format-F
+frame, including SSW access metadata and TPF fault address, and SSW.RR controls
+whether long-frame `RTE` retries the failed cycle. Focused tests cover frame
+layout, RR suppression, access metadata, and the boundary between known BERR
+ranges and an unverified open-bus hole. Only the externally verified Mono-I
+absent-memory ranges `$080000-$1fffff` and `$500000-$cfffff` fault. At an exact
+30,000,000-instruction comparison, revision `3bfb46d` remained cyan after
+330,734,670 cycles; the corrected worktree reached the player shell after
+159,555,961 cycles. The full address/access matrix remains open, so other
+holes must not be promoted to bus errors without hardware evidence.
 
 CPU-rate calibration is a separate question. Green Book does not prescribe a
 CPU clock, while contemporary software often assumes the de facto Mono-I

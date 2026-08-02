@@ -10,7 +10,7 @@
 //! Decode is currently a hierarchical match in [`crate::exec`]; a 64K
 //! dispatch table is a planned optimization that must not change semantics.
 
-use crate::bus::{Bus68k, FnCode};
+use crate::bus::{Bus68k, BusAccessSize, BusError, FnCode};
 
 /// An SCC68070 external word/byte transfer occupies four CPU clock periods
 /// before any device-specific wait states. Philips SCC68070 (April 1993),
@@ -260,6 +260,73 @@ impl Cpu {
         };
     }
 
+    /// Take a recoverable SCC68070 bus error using the documented 17-word
+    /// long stack frame (product specification sections 5.9 and 5.10,
+    /// figures 14-16).
+    fn bus_error_exception<B: Bus68k>(
+        &mut self,
+        bus: &mut B,
+        fault: BusError,
+        instruction_pc: u32,
+        resume_pc: u32,
+        instruction: u16,
+    ) {
+        self.exceptions_taken += 1;
+        let old_sr = self.sr;
+        self.set_sr((self.sr | sr_bits::S) & !sr_bits::T);
+
+        let function_code = match fault.function_code {
+            FnCode::UserData => 1,
+            FnCode::UserProgram => 2,
+            FnCode::SupervisorData => 5,
+            FnCode::SupervisorProgram => 6,
+            FnCode::Cpu => 7,
+        };
+        let program = matches!(
+            fault.function_code,
+            FnCode::UserProgram | FnCode::SupervisorProgram
+        );
+        let mut ssw = function_code;
+        ssw |= if program { 1 << 13 } else { 1 << 12 };
+        if fault.size == BusAccessSize::Byte {
+            ssw |= 1 << 9;
+            if fault.address & 1 == 0 {
+                ssw |= 1 << 10;
+            }
+        }
+        if fault.read {
+            ssw |= 1 << 8;
+        }
+
+        // Push in reverse so memory at the final SP follows Figure 14:
+        // SR, PC, format, SSW, MM, internal, internal, TPD, TPF, DBIN,
+        // IR, IRC, internal. TPF retains the failed bus address. One of the
+        // otherwise internal pairs retains our whole-instruction resume PC;
+        // RTE consults it only when the guest sets SSW.RR to suppress rerun.
+        self.push16(bus, 0); // internal
+        self.push16(bus, 0); // IRC (prefetch queue is not modeled)
+        self.push16(bus, instruction); // IR
+        self.push32(bus, 0); // DBIN
+        self.push32(bus, fault.address); // TPF: failed cycle address
+        self.push32(bus, u32::from(fault.write_data)); // TPD: failed write data
+        self.push32(bus, resume_pc); // internal restart information
+        self.push16(bus, 0); // MM
+        self.push16(bus, ssw);
+        self.push16(bus, 0xF000 | (u16::from(Vector::BusError as u8) << 2));
+        self.push32(bus, instruction_pc);
+        self.push16(bus, old_sr);
+        self.pc = self.read32(
+            bus,
+            u32::from(Vector::BusError as u8) * 4,
+            FnCode::SupervisorProgram,
+        );
+
+        // Table 23 specifies 158 clocks (3 reads/17 writes). The failed bus
+        // cycle is represented by the internal remainder because the
+        // abandoned instruction's provisional cycle count was rolled back.
+        self.cycles += 82;
+    }
+
     /// Take an interrupt at `level` with `vector`, raising the mask.
     pub fn interrupt<B: Bus68k>(&mut self, bus: &mut B, level: u8, vector: u8) {
         self.exceptions_taken += 1;
@@ -295,6 +362,10 @@ impl Cpu {
     /// consumed.
     pub fn step<B: Bus68k>(&mut self, bus: &mut B) -> u64 {
         let start = self.cycles;
+        // A bus owns at most one outstanding CPU fault. Discarding anything
+        // stale here also prevents exception-entry accesses from leaking into
+        // the following instruction.
+        let _ = bus.take_bus_error();
         if self.check_interrupts(bus) {
             return self.cycles - start;
         }
@@ -306,8 +377,17 @@ impl Cpu {
         // completes unless it faulted (which already cleared T).
         let trace_pending = self.flag(sr_bits::T);
         let exceptions_before = self.exceptions_taken;
+        let before = self.clone();
+        let instruction_pc = self.pc;
         let op = self.fetch16(bus);
         crate::exec::execute(self, bus, op);
+        if let Some(fault) = bus.take_bus_error() {
+            let resume_pc = self.pc;
+            *self = before;
+            self.cycles = start;
+            self.bus_error_exception(bus, fault, instruction_pc, resume_pc, op);
+            return self.cycles - start;
+        }
         if trace_pending && self.exceptions_taken == exceptions_before && !self.stopped {
             self.exception(bus, Vector::Trace as u8);
         }

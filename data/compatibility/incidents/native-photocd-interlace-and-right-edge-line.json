@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "native-photocd-interlace-and-right-edge-line",
+  "title": "Native Photo CD field artifacts and magenta right-edge line",
+  "symptom": "Photo CDs played through their native CD-i application show stationary field-like horizontal artifacts, and Dark Chaser Japan shows a one-pixel magenta vertical line at the far right of the active raster. Similar interlace-like detail is visible on other Photo CDs. The source PCD images do not contain these artifacts.",
+  "expected": "The native CD-i Photo CD path displays the guest-produced still without an emulator-generated final-column line. A stationary still should weave into a stable picture unless the guest drawmaps themselves contain different odd/even field samples.",
+  "status": "reproduced",
+  "reported_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+  "last_reproduced_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": "The screenshots are from the native CD-i application, not the frontend's View Raw Images mode, so the affected path includes disc delivery, guest drawmaps, MCD212 field composition, aperture, and frontend presentation.",
+  "components": ["photocd", "mcd212", "ucm", "display-provenance", "frontend"],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "ntsc",
+    "dvc": "not required",
+    "instruction_limit": null,
+    "input_events": [
+      "launch Dark Chaser Japan through CD-i mode",
+      "display stationary Photo CD scenes",
+      "capture the presented CD-i raster"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "field-construction-or-weave-divergence",
+      "hardware_explanation": "The native application may generate separate odd/even drawmaps, but a field origin, line-address, parity, or weave error could combine vertically mismatched samples into stable comb-like edges.",
+      "supporting_evidence": [
+        "The artifacts are visible in stationary native Photo CD scenes and recur across multiple discs.",
+        "The source PCD images are clean, placing the first possible divergence after source decoding or guest transfer.",
+        "MCD212 interlaced output retains distinct odd/even field rows and is a shared dependency of the affected presentation."
+      ],
+      "contradicting_evidence": [
+        "A still screenshot cannot show whether live fields shimmer or merely contain stable one-line detail.",
+        "The native guest application could intentionally prefilter or construct field-separated images whose pixel-perfect output looks combed without CRT filtering."
+      ],
+      "falsifying_test": "Capture four consecutive fields plus PCL destination, raw plane RAM, decoded planes, composed raster, and frontend output. If identical line detail is already present in both guest drawmaps at the correct parity, the emulator weave is not the source.",
+      "citations": [
+        "MCD212 Technical Specification section 5.2.2 and field display tables",
+        "Philips TN 042, Reduction of Flicker in Interlaced Pictures",
+        "docs/debugging-workflow.md display provenance stages"
+      ]
+    },
+    {
+      "id": "last-column-fetch-or-presentation-boundary",
+      "hardware_explanation": "The magenta edge may be a final-pixel fetch, line-width, DCA/run-length termination, plane-composition, aperture, or frontend copy error that exposes a stale or out-of-range color at the rightmost column.",
+      "supporting_evidence": [
+        "The line is exactly aligned to the far-right output boundary and is not present in the source PCD image.",
+        "Its saturated magenta color is characteristic of decoded pixel or palette data rather than an intentional black border."
+      ],
+      "contradicting_evidence": [
+        "Only Dark Chaser Japan has currently supplied a clearly captured magenta line.",
+        "No per-stage capture yet identifies whether the line first exists in guest plane memory, core composition, or frontend output."
+      ],
+      "falsifying_test": "At the same frame, hash and inspect the rightmost pixels of the PCL destination, raw plane rows, decoded planes, composed core raster, hardware aperture, and saved frontend image. The first stage containing the magenta column identifies the faulty boundary.",
+      "citations": [
+        "Green Book UCM drawmap and display operations",
+        "MCD212 Technical Specification display-file and region behavior",
+        "docs/debugging-workflow.md display provenance stages"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reproduced",
+      "revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+      "notes": "Two Dark Chaser Japan native-CD-i screenshots show the magenta far-right column and stationary field-like edge artifacts. The user reports comparable interlace-like artifacts on other Photo CDs and confirms View Raw Images was not used."
+    }
+  ]
+}

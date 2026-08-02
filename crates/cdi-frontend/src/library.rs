@@ -402,10 +402,17 @@ impl LibraryModel {
             for path in paths {
                 let cue = disc_path_in(&path);
                 if let Some(cue) = cue {
-                    let title = if path.is_dir() { &path } else { &cue }
-                        .file_stem()
-                        .map(|stem| stem.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| cue.display().to_string());
+                    // A directory name is already the complete title. Using
+                    // `file_stem` here treated legitimate final periods (for
+                    // example "Body Art Portfolio Vol. 1") as extensions.
+                    let title_path = if path.is_dir() { &path } else { &cue };
+                    let title = if path.is_dir() {
+                        title_path.file_name()
+                    } else {
+                        title_path.file_stem()
+                    }
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| cue.display().to_string());
                     self.entries.push(Entry {
                         title,
                         category,
@@ -553,6 +560,20 @@ mod tests {
         let titles: Vec<_> = model.entries(0).map(Entry::title).collect();
         assert_eq!(titles, ["Alpha", "Beta"]);
         assert_eq!(model.counts(), [2, 0, 0, 0]);
+    }
+
+    #[test]
+    fn nested_disc_title_preserves_periods_in_directory_name() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("Body Art Portfolio Vol. 1 (Germany)");
+        std::fs::create_dir(&nested).unwrap();
+        std::fs::write(nested.join("disc.cue"), b"").unwrap();
+
+        let mut model = LibraryModel::new(&[Some(root.path().display().to_string())]);
+        model.scan();
+
+        let titles: Vec<_> = model.entries(0).map(Entry::title).collect();
+        assert_eq!(titles, ["Body Art Portfolio Vol. 1 (Germany)"]);
     }
 
     #[test]

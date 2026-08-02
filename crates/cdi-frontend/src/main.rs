@@ -72,7 +72,7 @@ fn chrome_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(UI_SURFACE)
         .stroke(egui::Stroke::new(1.0_f32, UI_BORDER))
-        .inner_margin(egui::Margin::symmetric(10, 5))
+        .inner_margin(egui::Margin::symmetric(10, 3))
 }
 
 /// A selectable bundled system ROM.
@@ -2600,11 +2600,10 @@ impl App {
     /// to both the emulation core and the Photo CD detector, and leave the
     /// library view.
     fn load_disc_path(&mut self, path: PathBuf) {
-        let source_name = display_name(&path);
         *self.shared.status.lock().unwrap() = if is_zip_path(&path) {
-            format!("Opening Store ZIP {source_name}…")
+            "Opening disc archive…".to_owned()
         } else {
-            format!("Loading {source_name}…")
+            String::new()
         };
         let (cue_path, archive_guard) = match resolve_disc_source(&path) {
             Ok(resolved) => resolved,
@@ -3911,12 +3910,17 @@ impl eframe::App for App {
 
         let mut toggle_library = false;
         let mut save_player_screenshot = false;
+        let mut photo_decode = false;
+        let mut photo_save: Option<(String, cdi_photocd::decode::DecodedImage)> = None;
+        let mut photo_entered_view = false;
         if !fullscreen {
             egui::TopBottomPanel::bottom("status")
                 .resizable(false)
                 .frame(chrome_frame())
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.spacing_mut().button_padding.y = 2.0;
+                    ui.spacing_mut().interact_size.y = 24.0;
+                    ui.horizontal_centered(|ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
                         // Always offer a way between the library and the player.
                         let label = if self.show_library {
@@ -3934,6 +3938,97 @@ impl eframe::App for App {
                             toggle_library = true;
                         }
                         ui.separator();
+                        let mut viewing_photos =
+                            self.photocd.as_ref().map(|p| p.view_photo).unwrap_or(false);
+                        if !self.show_library {
+                            if let Some(p) = &mut self.photocd {
+                                ui.label(egui::RichText::new("Photo CD").size(12.0).strong());
+                                if p.has_cdi_app {
+                                    let view_label = if p.view_photo {
+                                        "Back to CD-i"
+                                    } else {
+                                        "View Raw Images"
+                                    };
+                                    if ui.button(view_label).clicked() {
+                                        p.view_photo = !p.view_photo;
+                                        viewing_photos = p.view_photo;
+                                        if p.view_photo {
+                                            photo_entered_view = true;
+                                            if p.decoded.is_none() && !p.decoding {
+                                                photo_decode = true;
+                                            }
+                                        } else {
+                                            p.slideshow = false;
+                                        }
+                                    }
+                                } else {
+                                    p.view_photo = true;
+                                    viewing_photos = true;
+                                    ui.weak("No CD-i support");
+                                }
+                                if p.view_photo && !p.names.is_empty() {
+                                    if ui.button("◀").clicked() {
+                                        p.current = (p.current + p.names.len() - 1) % p.names.len();
+                                        photo_decode = true;
+                                    }
+                                    if ui.button("▶").clicked() {
+                                        p.current = (p.current + 1) % p.names.len();
+                                        photo_decode = true;
+                                    }
+                                    ui.label(format!("{} / {}", p.current + 1, p.names.len()));
+                                    let prev_tier = p.tier;
+                                    egui::ComboBox::from_id_salt("pcd_tier")
+                                        .selected_text(cdi_photocd::decode::TIER_LABELS[p.tier])
+                                        .show_ui(ui, |ui| {
+                                            for tier in 0..=p.max_tier.min(2) {
+                                                ui.selectable_value(
+                                                    &mut p.tier,
+                                                    tier,
+                                                    cdi_photocd::decode::TIER_LABELS[tier],
+                                                );
+                                            }
+                                        });
+                                    if p.tier != prev_tier {
+                                        photo_decode = true;
+                                    }
+                                    if p.names.len() > 1 {
+                                        let label = if p.slideshow { "■" } else { "▶" };
+                                        if ui
+                                            .add_sized(
+                                                egui::vec2(24.0, 24.0),
+                                                egui::Button::new(label),
+                                            )
+                                            .clicked()
+                                        {
+                                            p.slideshow = !p.slideshow;
+                                            p.last_advance = Instant::now();
+                                        }
+                                    }
+                                    if p.decoded.is_some()
+                                        && ui
+                                            .button(egui::RichText::new("⬇").size(16.0))
+                                            .on_hover_text("Save photo as PNG")
+                                            .clicked()
+                                    {
+                                        let stem = p.names[p.current]
+                                            .rsplit_once('.')
+                                            .map(|(s, _)| s.to_owned())
+                                            .unwrap_or_else(|| p.names[p.current].clone());
+                                        let name = format!(
+                                            "{stem}_{}.png",
+                                            cdi_photocd::decode::TIER_LABELS[p.tier]
+                                        );
+                                        photo_save = Some((name, p.decoded.clone().unwrap()));
+                                    }
+                                    if p.decoding {
+                                        ui.spinner();
+                                    } else if let Some(error) = &p.error {
+                                        ui.colored_label(egui::Color32::RED, error);
+                                    }
+                                }
+                                ui.separator();
+                            }
+                        }
                         let status = self.shared.status.lock().unwrap().clone();
                         if !status.is_empty() {
                             ui.label(egui::RichText::new(status).color(UI_MUTED_TEXT).size(12.0));
@@ -3956,8 +4051,6 @@ impl eframe::App for App {
                                     });
                             }
                         }
-                        let viewing_photos =
-                            self.photocd.as_ref().map(|p| p.view_photo).unwrap_or(false);
                         if self.mouse_captured {
                             ui.label(
                                 egui::RichText::new("Esc releases the mouse")
@@ -4036,98 +4129,6 @@ impl eframe::App for App {
             }
         }
 
-        // Photo CD control panel (stacks above the status bar).
-        let mut photo_decode = false;
-        let mut photo_save: Option<(String, cdi_photocd::decode::DecodedImage)> = None;
-        let mut photo_entered_view = false;
-        if let (false, false, Some(p)) = (fullscreen, self.show_library, &mut self.photocd) {
-            egui::TopBottomPanel::bottom("photocd_panel")
-                .resizable(false)
-                .frame(chrome_frame())
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Photo CD").size(12.0).strong());
-                        if p.has_cdi_app {
-                            let view_label = if p.view_photo {
-                                "Back to CD-i"
-                            } else {
-                                "View Raw Images"
-                            };
-                            if ui.button(view_label).clicked() {
-                                p.view_photo = !p.view_photo;
-                                if p.view_photo {
-                                    photo_entered_view = true;
-                                    if p.decoded.is_none() && !p.decoding {
-                                        photo_decode = true;
-                                    }
-                                } else {
-                                    p.slideshow = false;
-                                }
-                            }
-                        } else {
-                            p.view_photo = true;
-                            ui.weak("No CD-i support on this disc");
-                        }
-                        if p.view_photo && !p.names.is_empty() {
-                            ui.separator();
-                            if ui.button("◀").clicked() {
-                                p.current = (p.current + p.names.len() - 1) % p.names.len();
-                                photo_decode = true;
-                            }
-                            if ui.button("▶").clicked() {
-                                p.current = (p.current + 1) % p.names.len();
-                                photo_decode = true;
-                            }
-                            ui.label(format!("{} / {}", p.current + 1, p.names.len()));
-                            ui.separator();
-                            let prev_tier = p.tier;
-                            egui::ComboBox::from_id_salt("pcd_tier")
-                                .selected_text(cdi_photocd::decode::TIER_LABELS[p.tier])
-                                .show_ui(ui, |ui| {
-                                    for tier in 0..=p.max_tier.min(2) {
-                                        ui.selectable_value(
-                                            &mut p.tier,
-                                            tier,
-                                            cdi_photocd::decode::TIER_LABELS[tier],
-                                        );
-                                    }
-                                });
-                            if p.tier != prev_tier {
-                                photo_decode = true;
-                            }
-                            if p.names.len() > 1 {
-                                let label = if p.slideshow { "■" } else { "▶" };
-                                if ui.button(label).clicked() {
-                                    p.slideshow = !p.slideshow;
-                                    p.last_advance = Instant::now();
-                                }
-                            }
-                            if p.decoded.is_some()
-                                && ui
-                                    .button(egui::RichText::new("⬇").size(16.0))
-                                    .on_hover_text("Save photo as PNG")
-                                    .clicked()
-                            {
-                                let stem = p.names[p.current]
-                                    .rsplit_once('.')
-                                    .map(|(s, _)| s.to_owned())
-                                    .unwrap_or_else(|| p.names[p.current].clone());
-                                let name = format!(
-                                    "{stem}_{}.png",
-                                    cdi_photocd::decode::TIER_LABELS[p.tier]
-                                );
-                                photo_save = Some((name, p.decoded.clone().unwrap()));
-                            }
-                            if p.decoding {
-                                ui.spinner();
-                                ui.weak("Decoding…");
-                            } else if let Some(error) = &p.error {
-                                ui.colored_label(egui::Color32::RED, error);
-                            }
-                        }
-                    });
-                });
-        }
         if photo_entered_view && self.mouse_captured {
             self.set_mouse_capture(ctx, false);
         }

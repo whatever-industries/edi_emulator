@@ -19,6 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.next.outputs.version }}
+      release_notes: ${{ steps.notes.outputs.release_notes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,6 +39,50 @@ jobs:
           fi
           echo "version=${major}.${minor}.${patch}" >> "$GITHUB_OUTPUT"
           echo "previous tag: v${latest} -> new version: ${major}.${minor}.${patch}"
+
+      - id: notes
+        name: Summarize meaningful changes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          latest=$(git tag -l 'v*' | sed 's/^v//' \
+                   | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [ -n "$latest" ]; then
+            range="v${latest}..HEAD"
+          else
+            range="HEAD"
+          fi
+
+          # Release-Note trailers are the authoritative, user-facing summary.
+          # Keep them terse and omit internal bookkeeping. Older commits without
+          # trailers fall back to concise, non-maintenance commit subjects.
+          git log --format=%B "$range" \
+            | sed -n 's/^Release-Note:[[:space:]]*/- /p' \
+            | awk '!seen[$0]++' \
+            | sed -n '1,3p' > release-notes.txt
+
+          if [ ! -s release-notes.txt ]; then
+            git log --no-merges --format=%s "$range" \
+              | awk 'BEGIN { IGNORECASE=1 }
+                     !/^(docs?|tests?|chore|ci|build|release)(:|\(|[[:space:]])/ &&
+                     !/(record|track|log) (an |the )?(incident|diagnostic|finding)/ {
+                       line="- "$0
+                       if (!seen[line]++) print line
+                     }' \
+              | sed -n '1,3p' > release-notes.txt
+          fi
+
+          if [ ! -s release-notes.txt ]; then
+            echo "- Internal compatibility and maintenance improvements." \
+              > release-notes.txt
+          fi
+
+          {
+            echo 'release_notes<<EOF'
+            cat release-notes.txt
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
   build-macos-arm:
     name: macOS App (ARM)
@@ -294,9 +339,8 @@ jobs:
           body: |
             ## E-Di v${{ needs.version.outputs.version }}
 
-            - Corrected CDIC XA sector routing and AUDCTL playback sequencing.
-            - Fixed sound-map completion and interrupt behavior for short effects.
-            - Restored Hotel Mario progression while retaining verified title audio.
+            ### Recent Changes
+            ${{ needs.version.outputs.release_notes }}
 
             ### Downloads
             | Platform | File |

@@ -104,6 +104,15 @@ Update that document's status and next action whenever a checkpoint is reached.
   it is pushed, so manual testing can validate that exact revision.
 - Push `main` only at a manually accepted stable checkpoint or when the user
   explicitly requests a push. Do not push every iterative commit.
+- Treat an explicit request to "push to GitHub" as a release instruction:
+  push `main`, let the tag-driven workflow increment the version, monitor all
+  platform builds, and confirm that the published release and assets succeed.
+- For commits that will become a release, add one to three terse
+  `Release-Note: ...` trailers covering only meaningful user-facing changes.
+  Do not include internal documentation, test-only work, diagnostic incident
+  bookkeeping, or generic project descriptions. The build workflow uses these
+  trailers for the release's Recent Changes bullets and falls back to filtered
+  commit subjects only when no trailers exist.
 - If a temporary branch is necessary, merge it into `main`, push `main`, and
   delete the temporary local and remote branch before handoff.
 - Build published or distributable release artifacts only after the

@@ -1033,9 +1033,11 @@ impl Mcd212 {
     fn output_rows(&self, active_line: usize) -> (usize, Option<usize>) {
         let first = active_line * 2;
         if self.dcr[0] & DCR_SM != 0 {
-            // PA=1 is the odd field (lines 1,3,5...), which maps to zero-based
-            // even rows. PA=0 is the even field (lines 2,4,6...).
-            (first + usize::from(self.csrr[0] & CSR1R_PA == 0), None)
+            // Table 5-8 uses PA to select the field's ICA entry point. In the
+            // retained progressive pair, PA=0 precedes PA=1. Keeping the ICA
+            // selection but reversing this row phase displaced neighboring
+            // source lines by one row in interlaced dual-plane pictures.
+            (first + usize::from(self.csrr[0] & CSR1R_PA != 0), None)
         } else {
             (first, Some(first + 1))
         }
@@ -1519,12 +1521,16 @@ mod tests {
 
         m.dcr[0] |= DCR_SM;
         m.csrr[0] |= CSR1R_PA;
-        assert_eq!(m.output_rows(7), (14, None), "odd field supplies odd lines");
-        m.csrr[0] &= !CSR1R_PA;
         assert_eq!(
             m.output_rows(7),
             (15, None),
-            "even field supplies even lines"
+            "PA=1 field occupies the second row of each retained field pair"
+        );
+        m.csrr[0] &= !CSR1R_PA;
+        assert_eq!(
+            m.output_rows(7),
+            (14, None),
+            "PA=0 field occupies the first row of each retained field pair"
         );
     }
 

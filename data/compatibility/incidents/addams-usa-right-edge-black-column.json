@@ -2,21 +2,21 @@
   "schema_version": 1,
   "id": "addams-usa-right-edge-black-column",
   "title": "Video CD right-edge black column",
-  "symptom": "Addams Family Values USA, Forrest Gump USA, Pete Townshend Live USA, and Accused Netherlands show a persistent vertical black line at the right edge of the picture. Forrest Gump's native bottom control panel remains correctly positioned while its MPEG picture appears shifted left. Pete Townshend's pre-concert screens appear left-biased and its concert footage clearly retains the right-side column. Accused proves the symptom is not specific to NTSC or USA-authored media.",
+  "symptom": "Addams Family Values USA, Forrest Gump USA, Pete Townshend Live USA, Accused Netherlands, and Women of the World - Brazilian Girls Europe show a persistent vertical black line at the right edge of the picture. Forrest Gump's native bottom control panel remains correctly positioned while its MPEG picture appears shifted left. Pete Townshend's pre-concert screens appear left-biased and its concert footage clearly retains the right-side column. The two European titles prove the symptom is not specific to NTSC or USA-authored media.",
   "expected": "Base graphics, native Video CD controls, and MPEG video use their programmed hardware windows without a persistent one-sided black column.",
   "status": "reproduced",
   "reported_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
-  "last_reproduced_revision": "322e18083c8ffeaffc99c99690a3d79d04557c66+dirty:6e5fd0a546b78d2656469a7989cce5069a5c390f6fe3a78845cf3ef03dc7545e",
+  "last_reproduced_revision": "c5ac422185774c8e2e16f207812ccf2588259550",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "A bounded comparison locates the column in the disabled White Book path, but manual guards confirm that exposing type 4 before implementing MCD251 sample-origin semantics is regression-causing: it removes the tested USA edge and centers the Accused warning while shifting Addams UK right. The USA screenshot's additional 720-pixel crop is separately identified as the existing frontend Typical CRT aperture. Pete Townshend Live USA and Accused Netherlands independently reproduce the MPEG right-edge column on the current build, so the incident remains current and is neither authoring-layout- nor video-standard-specific.",
+  "revalidation_reason": "A bounded comparison locates the column in the disabled White Book path, but manual guards confirm that exposing type 4 before implementing MCD251 sample-origin semantics is regression-causing: it removes the tested USA edge and centers the Accused warning while shifting Addams UK right. The USA screenshot's additional 720-pixel crop is separately identified as the existing frontend Typical CRT aperture. Pete Townshend Live USA, Accused Netherlands, and Women of the World - Brazilian Girls Europe independently reproduce the MPEG right-edge column on current builds, so the incident remains current and is neither authoring-layout- nor video-standard-specific.",
   "components": [
     "mcd212",
     "dvc",
     "frontend",
     "vcd"
   ],
-  "disc_fingerprint": "Addams Family Values USA: dd9adb80a89378d97acfecaf50ce20d0f769c442; Forrest Gump USA: inventory pending; Pete Townshend Live USA Disc 1: b640c77e36148e07b141b24e627aeced84c598e4; Accused Netherlands Disc 1: inventory pending",
+  "disc_fingerprint": "Addams Family Values USA: dd9adb80a89378d97acfecaf50ce20d0f769c442; Forrest Gump USA: inventory pending; Pete Townshend Live USA Disc 1: b640c77e36148e07b141b24e627aeced84c598e4; Accused Netherlands Disc 1: inventory pending; Women of the World - Brazilian Girls Europe: inventory pending",
   "scenario": {
     "model": "cdi220b",
     "video_standard": "pal-and-ntsc",
@@ -33,6 +33,7 @@
         "Forrest Gump's native bottom control panel is correctly positioned while the MPEG picture retains the column.",
         "Pete Townshend Live USA clearly reproduces the right-edge column during concert MPEG footage; its preceding black-background screens also appear left-biased, although their authored bounds are less visually conclusive.",
         "Accused Netherlands reproduces the same right-edge column during otherwise correctly synchronized PAL VCD playback.",
+        "Women of the World - Brazilian Girls Europe reproduces the column together with a separate bottom-row artifact.",
         "The earlier Addams report described the column on both base screens and MPEG, so a DVC-only conclusion would be premature."
       ],
       "contradicting_evidence": [
@@ -202,6 +203,62 @@
           "MCD251 clock phase or active-area timing is implemented from primary evidence"
         ]
       }
+    },
+    {
+      "id": "compare-vcd-cdi-player-packages",
+      "context": {
+        "base_revision": "c5ac422185774c8e2e16f207812ccf2588259550",
+        "dirty_diff_hash": "b8a870a44950e0ab39d7ad1eb293cb46f8e28cffb19209cab047614e04924539",
+        "component_fingerprints": {
+          "addams_uk": "219078bc4aa745dea73c8d86427c891a0e128f75",
+          "accused_netherlands": "3eca58bc966a0bd170e0b7594a1087b7280159b7",
+          "women_of_the_world_brazilian_girls": "69a1e6c3b43eda6cf3d561e8310bbd8e5ddc4945",
+          "pete_townshend_live": "b640c77e36148e07b141b24e627aeced84c598e4"
+        },
+        "dependencies": {
+          "disc_inventory": "cdi-cli schema 1 ISO/CDI and OS-9 inventory",
+          "runtime_register_comparator": "compare-pal-type4-origin-registers"
+        },
+        "disc_fingerprint": "Four local diagnostic VCD fingerprints listed above",
+        "model": "cdi220b",
+        "video_standard": "pal-and-ntsc",
+        "dvc": "vmpega",
+        "scenario": "Payload-free CDI-directory architecture comparison plus prior bounded runtime register captures",
+        "timing": "No emulation behavior changed"
+      },
+      "hypothesis_id": "mcd251-sample-origin",
+      "strategy": "Compare ISO CDI file trees, OS-9 application identities/editions, configuration text, MPEG sequence dimensions, and previously captured MCD251 display/window registers between a symmetric-margin counterexample and one-sided-column titles.",
+      "symbols": [],
+      "assumptions": [
+        "Different native player packages may expose which positioning inputs the emulator mishandles.",
+        "Disc architecture is evidence only and must not select title-specific presentation behavior."
+      ],
+      "expected": "A single player edition or configuration option distinguishes the symmetric Addams UK result from every one-sided-column result.",
+      "actual": "Addams UK uses Philips cdi_videocd edition 2 with a 53-byte configuration and programs Xd=16, Xw=0, Ww=352. Accused uses edition 3 with a 65-byte configuration and programs Xd=0, Xw=7, Ww=345. Both decode 352x288 PAL MPEG and program the same Xo=65, Yo=26, Xa=384, Ya=280. The extra Accused configuration field is INITLAN=DAT and does not specify geometry. Pete Townshend and Women of the World reproduce the one-sided column through unrelated custom edition-7 applications, so neither Philips player edition nor CDI file layout alone explains the fault. The useful discriminator is the guest-programmed display/source-window combination entering the incomplete MCD251 sample-origin model.",
+      "outcome": "partial",
+      "regressions": [],
+      "improvements": [
+        "Rules out a single cdi_videocd edition or CDI configuration switch as the general cause.",
+        "Narrows the next comparison to MCD251 display position, source window, clock phase, and active-area semantics.",
+        "Establishes Addams UK symmetric margins as a separate potentially incorrect presentation, not a known-good no-margin reference."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "The current ISO/CDI inventory parser and prior native type-4 register captures",
+          "The four exact local disc fingerprints listed in this experiment"
+        ],
+        "invalidated_by": [
+          "A correction to MCD251 register latching, units, clock phase, or external-video sampling",
+          "Evidence that the compared screenshots came from different player modes or presentation apertures"
+        ],
+        "repeat_when": [
+          "Full MCD251 timing equations or a real-hardware register/output trace become available",
+          "A synchronized provenance capture can compare Addams UK and Accused at the external-video and composed-raster stages"
+        ]
+      }
     }
   ],
   "manual_verification": [
@@ -229,6 +286,16 @@
       "result": "reproduced",
       "revision": "322e18083c8ffeaffc99c99690a3d79d04557c66+dirty:6e5fd0a546b78d2656469a7989cce5069a5c390f6fe3a78845cf3ef03dc7545e",
       "notes": "Accused Netherlands Disc 1 shows a persistent black column at the right edge during otherwise correctly synchronized PAL Video CD playback. This extends the incident beyond the previously reported USA/NTSC titles and weakens any region-specific explanation."
+    },
+    {
+      "result": "cross-title-corroboration",
+      "revision": "c5ac422185774c8e2e16f207812ccf2588259550",
+      "notes": "Women of the World - Brazilian Girls Europe reproduces the persistent MPEG right-edge column. Together with Accused, this provides a second PAL/European counterexample to the original USA/NTSC grouping."
+    },
+    {
+      "result": "counterexample-with-separate-framing-concern",
+      "revision": "c5ac422185774c8e2e16f207812ccf2588259550",
+      "notes": "Addams Family Values UK does not show the large one-sided right-edge column during MPEG playback. It instead has substantial approximately symmetric left/right margins, which may itself be inaccurate. Treat it as a distinct framing symptom and a useful MCD251 window-position counterexample, not as proof that the current presentation is correct."
     }
   ]
 }

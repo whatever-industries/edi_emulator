@@ -183,7 +183,13 @@ pictures across pause/continue, clear all stale picture state at decoder
 reset, and delay the final picture/EOD/underflow signals until presentation.
 A selected-stream test prevents an ignored PES stream from changing the
 accepted payload or PTS, and an exact six-hour shared SCR/PTS mapping guards
-the integer A/V timebase. The tests passed without an implementation change;
+the integer A/V timebase. The original implementation nevertheless
+established separate audio and video anchors at their respective DMA arrival
+times. Green Book IX.4.6.2.2 instead says the play which first receives disc
+data supplies synchronization information to the other. A device regression
+now delays the second DMA by one second and proves it still uses the first
+stream's clock. The subsequent first-PES timestamp correction has now passed
+manual synchronization checks in Philips FMVDemo and three Video CD titles;
 driver-level PCL release and title-level long-run timing remain the next
 evidence boundary.
 
@@ -198,6 +204,18 @@ as evidence but are deliberately not subtracted into a purported sync result:
 some epochs continue after one stream has ended or external video is hidden.
 A timestamp- or presentation-overlap-based oracle is still required for
 long-run perceptual A/V drift.
+
+That oracle now also records the first SCR anchor, selected audio/video PTS,
+scheduled DCLK deadlines, decoder-output clocks, and the first core audio
+release/video latch. A deterministic Addams Family Values USA comparison
+proved that the former demux used the final PTS in each completed DMA batch as
+the timestamp of the first queued output. It thereby introduced a 304 ms
+audio-leading-picture startup phase. The on-disc MPEG track starts audio and
+video at equal PTS 68,999; preserving the first selected PES timestamp removes
+408 ms of artificial phase without changing the 45 kHz clock or frontend
+buffering. This corrects startup provenance only. Continued drift or a
+remaining fixed offset must be tested by associating later PTS marks with
+their decoded access units.
 
 ### Display and region observations
 

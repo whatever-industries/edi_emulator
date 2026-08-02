@@ -1430,6 +1430,10 @@ fn emu_loop(
     let mut nvram_mirror = machine.bus.nvram.clone();
     let mut last_nvram_flush = Instant::now();
     let trace_dvc_composition = std::env::var_os("EDI_DVC_COMPOSITION_TRACE").is_some();
+    let trace_audio_sync = std::env::var_os("EDI_AUDIO_SYNC_TRACE").is_some();
+    let mut audio_ring_high_water = 0usize;
+    let mut audio_ring_dropped = 0u64;
+    let mut last_audio_sync_trace = Instant::now();
     let mut traced_dvc_play_events = 0;
     let mut traced_dvc_visible = 0;
     let mut next_dvc_frame_trace = 30;
@@ -1902,10 +1906,24 @@ fn emu_loop(
         // 44.1 kHz device drains them; dropping them here keeps the output
         // silent instead of a stutter, and costs nothing when idle.
         if let (Some(producer), false) = (&mut audio, fast_forward) {
-            for sample in samples {
+            let sample_count = samples.len();
+            for (index, sample) in samples.into_iter().enumerate() {
                 if producer.push(sample).is_err() {
+                    audio_ring_dropped = audio_ring_dropped
+                        .saturating_add((sample_count.saturating_sub(index)) as u64);
                     break;
                 }
+            }
+            let occupied = AUDIO_RING_SAMPLES.saturating_sub(producer.slots());
+            audio_ring_high_water = audio_ring_high_water.max(occupied);
+            if trace_audio_sync && last_audio_sync_trace.elapsed() >= Duration::from_secs(1) {
+                log::info!(
+                    "audio sync: ring={occupied}/{AUDIO_RING_SAMPLES} samples ({:.1} ms stereo), high-water={} samples, dropped={audio_ring_dropped}",
+                    occupied as f64 * 500.0 / f64::from(AUDIO_RATE),
+                    audio_ring_high_water,
+                );
+                audio_ring_high_water = occupied;
+                last_audio_sync_trace = Instant::now();
             }
         }
 

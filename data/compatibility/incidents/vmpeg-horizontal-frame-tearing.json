@@ -4,10 +4,10 @@
   "title": "VMPEG horizontal frame tearing during live presentation",
   "symptom": "A horizontal discontinuity can divide a moving MPEG picture into vertically displaced regions. It has been observed across multiple FMV titles and is captured in Philips FMVDemo across the actor's upper arm. Freezing presentation to take a screenshot usually makes the discontinuity disappear immediately.",
   "expected": "Each displayed VMPEG picture is published atomically at the programmed display event, without mixing lines or fields from different picture positions.",
-  "status": "reproduced",
+  "status": "fixed",
   "reported_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
-  "last_reproduced_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
-  "last_verified_revision": null,
+  "last_reproduced_revision": "1c16bb72a64f9d94986486ab34b97237b61d2bce",
+  "last_verified_revision": "1c16bb72a64f9d94986486ab34b97237b61d2bce+dirty:5183024a9588f1f50f77681270dae4ce1a7ea1b9bafe450dba018b425f2ac3aa",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": [
@@ -80,7 +80,46 @@
       ]
     }
   ],
-  "experiments": [],
+  "experiments": [
+    {
+      "id": "latch-mcd251-picture-at-vsync",
+      "base_revision": "1c16bb72a64f9d94986486ab34b97237b61d2bce",
+      "dirty_diff_hash": "5183024a9588f1f50f77681270dae4ce1a7ea1b9bafe450dba018b425f2ac3aa",
+      "component_state": {
+        "dvc": "current_video_frame was replaced at CPU-instruction deadlines during active display",
+        "mcd212": "external video was sampled independently for each rendered scanline",
+        "frontend": "unchanged"
+      },
+      "hypothesis": "mid-raster-external-picture-publication",
+      "strategy": "Stage each due decoded picture separately and latch it into the MCD251 video-generator view only at the next externally supplied VSYNC. Tag the latched picture with a monotonic generation and count any MCD212 field that samples more than one generation.",
+      "symbols": [
+        "Vmpeg::present_next_video_frame",
+        "Vmpeg::latch_pending_video_frame",
+        "Vmpeg::notify_vsync",
+        "Mcd212::observe_external_generation"
+      ],
+      "assumptions": [
+        "The MCD251 Technical Summary's separate frame reconstructor and video generator describe distinct DRAM consumers.",
+        "The externally supplied VSYNC is the picture-source publication boundary for the video generator.",
+        "MCD212 frame_count transitions represent those incoming field VSYNC boundaries."
+      ],
+      "expected": "No active MCD212 field samples more than one VMPEG picture; native FMVDemo pause/continue and decoding remain functional.",
+      "actual": "The 1.03-billion-instruction native FMVDemo pause/continue scenario presented 302 pictures, resumed disc DMA and presentation after Continue, reported zero demux/video/audio errors, and recorded zero mixed-generation fields. Core tests prove due pictures remain pending until VSYNC and the provenance detector catches a synthetic generation change within one field.",
+      "outcome": "partial",
+      "outcome_reason": "The device-level defect and automated native-title path are corrected, but the exact moving scene where the user observed the slice still requires manual visual revalidation.",
+      "implementation_reverted": false,
+      "evidence_quality": "high-device-medium-visual",
+      "applicability": {
+        "conditions": "Mono-I MCD212 external-video composition with VMPEG pictures displayed through the MCD251 video-generator path.",
+        "invalidated_by": [
+          "Changing the MCD212 field/VSYNC boundary model",
+          "Replacing the VMPEG presentation scheduler",
+          "Evidence that real MCD251 hardware switches display buffers at a different synchronized boundary"
+        ],
+        "repeat_when": "A later timing change reintroduces nonzero mixed_external_generation_fields, or manual testing still shows slicing while that counter remains zero."
+      }
+    }
+  ],
   "manual_verification": [
     {
       "result": "reproduced-current",
@@ -91,6 +130,11 @@
       "result": "pause-clears-artifact",
       "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
       "notes": "User confirmed that selecting Pause in FMVDemo's own Play Control panel removes the horizontal slice. This is stronger than the earlier screenshot-freeze observation: it prioritizes external-picture publication or field-pair timing and weakens a host-only copy race."
+    },
+    {
+      "result": "accepted-current-dirty",
+      "revision": "1c16bb72a64f9d94986486ab34b97237b61d2bce+dirty:5183024a9588f1f50f77681270dae4ce1a7ea1b9bafe450dba018b425f2ac3aa",
+      "notes": "User confirmed the moving FMVDemo scene no longer shows the horizontal slice with VSYNC-latched picture publication. An exact A/B run of base revision 1c16bb72 restored the slice while retaining the same A/V offset, separating the tearing fix from the pre-existing synchronization issue."
     }
   ]
 }

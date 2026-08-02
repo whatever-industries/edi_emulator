@@ -1178,6 +1178,10 @@ impl Machine {
                     &self.bus.mcd212.framebuffer()
                         [..pixel_count.min(self.bus.mcd212.framebuffer().len())],
                 ),
+                mixed_external_generation_fields: self
+                    .bus
+                    .mcd212
+                    .mixed_external_generation_fields(),
             },
             dvc: self.dvc_stats(),
             dvc_registers: self.bus.dvc.as_ref().map(Vmpeg::register_snapshot),
@@ -1240,6 +1244,8 @@ impl Machine {
                 dvc.sequence_end_events,
                 dvc.end_of_data_events,
                 dvc.audio_stream_switch_events,
+                dvc.audio_first_output_events,
+                dvc.video_first_latch_events,
             ],
             dvc_state,
         }

@@ -26,6 +26,7 @@ pub const CSR2R_BE: u8 = 0x01;
 const CSR1W_DI1: u16 = 1 << 15;
 const CSR1W_ST: u16 = 1 << 1;
 const CSR2W_DI2: u16 = 1 << 15;
+const ICM_EV: u32 = 0x04_0000;
 
 /// DCR bits.
 pub const DCR_DE: u16 = 1 << 15; // Display Enable
@@ -86,6 +87,15 @@ pub struct Mcd212 {
     int_asserted: bool,
     /// Frames completed (diagnostics).
     pub frame_count: u64,
+    /// External-video picture generation first sampled in this field.
+    #[cfg_attr(feature = "savestate", serde(skip))]
+    external_generation_this_field: Option<u64>,
+    /// Prevent duplicate reports when more than one later line differs.
+    #[cfg_attr(feature = "savestate", serde(skip))]
+    external_generation_mixed_this_field: bool,
+    /// Fields whose active lines sampled more than one MCD251 picture.
+    #[cfg_attr(feature = "savestate", serde(skip))]
+    mixed_external_generation_fields: u64,
 
     /// Output framebuffer, `FB_WIDTH` × `FB_HEIGHT` 0RGB pixels. The hardware
     /// cursor is composited here after both display fields have been woven so
@@ -320,6 +330,9 @@ impl Mcd212 {
             line_accum: 0,
             int_asserted: false,
             frame_count: 0,
+            external_generation_this_field: None,
+            external_generation_mixed_this_field: false,
+            mixed_external_generation_fields: 0,
             framebuffer: vec![0; FB_WIDTH * FB_HEIGHT],
             field_framebuffer: vec![0; FB_WIDTH * FB_HEIGHT],
             diagnostic_plane_framebuffer: [None, None],
@@ -335,6 +348,11 @@ impl Mcd212 {
     /// cursor is overlaid.
     pub fn diagnostic_base_framebuffer(&self) -> &[u32] {
         &self.field_framebuffer
+    }
+
+    /// Number of fields which sampled multiple external-video pictures.
+    pub fn mixed_external_generation_fields(&self) -> u64 {
+        self.mixed_external_generation_fields
     }
 
     /// Enable or disable decoded-plane capture. Enabling allocates two full
@@ -598,7 +616,6 @@ impl Mcd212 {
     }
 
     fn backdrop(&self, external: Option<u32>) -> u32 {
-        const ICM_EV: u32 = 0x04_0000;
         if self.image_coding_method & ICM_EV != 0 {
             external.unwrap_or(0)
         } else {
@@ -856,7 +873,6 @@ impl Mcd212 {
         active_line: usize,
         external: Option<ExternalVideo<'_>>,
     ) {
-        const ICM_EV: u32 = 0x04_0000;
         let width = self.screen_width();
         let border = self.border_width();
         let external_selected = self.image_coding_method & ICM_EV != 0;
@@ -1066,8 +1082,27 @@ impl Mcd212 {
             && (scanline - ica_height < 20 || scanline >= total_height - 20))
     }
 
+    fn observe_external_generation(&mut self, external: Option<ExternalVideo<'_>>) {
+        if self.image_coding_method & ICM_EV == 0 {
+            return;
+        }
+        let Some(generation) = external.map(|video| video.generation) else {
+            return;
+        };
+        match self.external_generation_this_field {
+            None => self.external_generation_this_field = Some(generation),
+            Some(first) if first != generation && !self.external_generation_mixed_this_field => {
+                self.external_generation_mixed_this_field = true;
+                self.mixed_external_generation_fields =
+                    self.mixed_external_generation_fields.saturating_add(1);
+            }
+            Some(_) => {}
+        }
+    }
+
     /// Render the current field line into the progressive host framebuffer.
     fn render_line(&mut self, planea: &[u8], planeb: &[u8], external: Option<ExternalVideo<'_>>) {
+        self.observe_external_generation(external);
         let (ica_height, _) = geometry(self.pal);
         let scanline = self.line;
         let active_line = (scanline - ica_height) as usize;
@@ -1222,6 +1257,8 @@ impl Mcd212 {
                 // line (Philips Technical Note 69, section 3.3).
                 self.csrr[0] &= !CSR1R_DA;
                 self.frame_count += 1;
+                self.external_generation_this_field = None;
+                self.external_generation_mixed_this_field = false;
                 if self.ica_enabled(0) {
                     self.process_ica(0, planea);
                     if self.dca_enabled(0) {
@@ -1374,6 +1411,22 @@ mod serde_arrays {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mpeg1_video::DecodedVideoFrame;
+
+    fn external_video(frame: &DecodedVideoFrame, generation: u64) -> ExternalVideo<'_> {
+        ExternalVideo {
+            frame,
+            generation,
+            display_x: 0,
+            display_y: 0,
+            window_x: 0,
+            window_y: 0,
+            window_width: frame.width,
+            window_height: frame.height,
+            vcd_clock: false,
+            border: 0,
+        }
+    }
 
     fn advance_fields(mcd212: &mut Mcd212, fields: u32) {
         let plane = vec![0; 0x80000];
@@ -1381,6 +1434,26 @@ mod tests {
         for _ in 0..fields {
             mcd212.tick(field_cycles, &plane, &plane);
         }
+    }
+
+    #[test]
+    fn diagnostics_detect_external_picture_change_inside_one_field() {
+        let frame = DecodedVideoFrame {
+            width: 1,
+            height: 1,
+            pixels: vec![0],
+            first_in_sequence: false,
+            first_in_group: false,
+            last_in_sequence: false,
+        };
+        let mut mcd212 = Mcd212::new(true);
+        mcd212.image_coding_method = ICM_EV;
+
+        mcd212.observe_external_generation(Some(external_video(&frame, 7)));
+        mcd212.observe_external_generation(Some(external_video(&frame, 8)));
+        mcd212.observe_external_generation(Some(external_video(&frame, 9)));
+
+        assert_eq!(mcd212.mixed_external_generation_fields(), 1);
     }
 
     #[test]

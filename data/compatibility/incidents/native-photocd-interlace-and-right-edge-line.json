@@ -2,12 +2,12 @@
   "schema_version": 1,
   "id": "native-photocd-interlace-and-right-edge-line",
   "title": "Native Photo CD field artifacts and magenta right-edge line",
-  "symptom": "Photo CDs played through their native CD-i application show stationary field-like horizontal artifacts, and Dark Chaser Japan shows a magenta vertical line at the far right of the active raster. Similar interlace-like detail is visible on other Photo CDs in both PAL and NTSC testing. On Cosplay Night, the non-PCD startup graphic and displayed photographs show the artifacts while the intervening CD-i application menu appears clean. A supplied 768x512 Base source image does not contain these artifacts. Its paired 768x588 native capture has 76 near-black rows above the image, 34 below, and two magenta-like output columns at the right edge over 382 rows.",
+  "symptom": "Photo CDs played through their native CD-i application show stationary field-like horizontal artifacts throughout the picture, with horizontal boundaries merely making the defect easiest to see. Dark Chaser Japan also showed a magenta vertical line at the far right of the active raster. Similar interlace-like detail is visible on other Photo CDs in both PAL and NTSC testing. On Cosplay Night, the non-PCD startup graphic and displayed photographs show the artifacts while the intervening CD-i application menu appears clean. A supplied 768x512 Base source image does not contain these artifacts. Its paired 768x588 native capture has 76 near-black rows above the image, 34 below, and two magenta-like output columns at the right edge over 382 rows.",
   "expected": "The native CD-i Photo CD path displays the guest-produced still without an emulator-generated final-column line. A stationary still should weave into a stable picture unless the guest drawmaps themselves contain different odd/even field samples.",
-  "status": "reproduced",
+  "status": "resolved",
   "reported_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
   "last_reproduced_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty:651f85e505403bacf9014f9799240abe2f93bbd0b510be9ae558d2afd2bb6b1b",
-  "last_verified_revision": null,
+  "last_verified_revision": "a960c14949348ffd75773c920c4d8d22f8292cac+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
   "evidence_status": "current",
   "revalidation_reason": "The screenshots are from the native CD-i application, not the frontend's View Raw Images mode, so the affected path includes disc delivery, guest drawmaps, MCD212 field composition, aperture, and frontend presentation. Photo CD v0.9 establishes that a Base source is 768x512 square pixels (3:2) and shows informative standard/overscan-dependent 4:3 mappings; bars must therefore be separated from field and final-column corruption by live register evidence.",
   "components": ["photocd", "mcd212", "ucm", "display-provenance", "frontend"],
@@ -96,7 +96,7 @@
       "hypothesis": "A simple odd/even parity or ICA entry-address inversion creates the stationary Photo CD artifacts.",
       "implementation_strategy": "Read MCD212 section 5.2.2 and Table 5-8, Green Book V.4.5.1 and V.5.14, and TN 042; then audit Mcd212::process_ica, Mcd212::output_rows, field parity toggling, and the existing table-driven tests without changing emulation behavior.",
       "expected": "A disagreement between the specification and code would identify a deterministic device-level correction.",
-      "actual": "The current core selects byte $400 for interlaced odd PA=1 and $404 for even PA=0, writes odd-field samples to zero-based even rows and even-field samples to zero-based odd rows, toggles parity once per field, and retains the complementary field. Existing tests cover those mappings. This rules out the simplest address/parity inversion but cannot distinguish guest-authored field detail from a later per-line decode/composition defect.",
+      "actual": "The current core selects byte $400 for interlaced PA=1 and $404 for PA=0, writes PA=1 samples to zero-based even rows and PA=0 samples to zero-based odd rows, toggles parity once per field, and retains the complementary field. Existing tests covered that mapping, but the specification-only audit could not determine whether the retained host-row phase matched the guest's complementary line programs. Later decoded-plane and composite evidence invalidated the assumption that the original host-row phase was correct.",
       "applicability": {
         "conditions": "Relevant while process_ica, output_rows, parity timing, and field retention remain unchanged.",
         "invalidated_by": [
@@ -156,6 +156,23 @@
         ],
         "repeat_when": "Re-run the synthetic boundary test after any DYUV decoder rewrite and manually recheck a native Photo CD that previously showed a magenta right edge."
       }
+    },
+    {
+      "id": "interlaced-retained-row-phase",
+      "base_revision": "a960c14",
+      "outcome": "confirmed",
+      "hypothesis": "The interlaced ICA programs are selected correctly, but PA=0 and PA=1 are retained in the opposite host-row phase, displacing successive source lines throughout dual-plane pictures.",
+      "implementation_strategy": "Reconstruct each plane's visible VSR sequence from the captured ICA/DCA programs, compare the current and parity-swapped decoded planes and hardware composite, and add a device-level test for the retained PA row phase before changing output_rows.",
+      "expected": "The correct phase should preserve the guest-selected ICA entry points while making the retained source-line sequence monotonic and removing full-frame horizontal slicing in the composed picture.",
+      "actual": "The old weave repeatedly stepped backward by one 0x480-byte source line at PA boundaries in both DYUV planes. Swapping only the retained host-row phase made the source order monotonic. The user identified the resulting 768x480 composite as correct; its supplied screenshot is byte-for-byte identical to the generated parity-swapped base raster. The old device-level expectation failed before correction and passes with PA=0 in the first retained row and PA=1 in the second. Progressive row duplication is unchanged.",
+      "applicability": {
+        "conditions": "Applies to MCD212 interlaced retained-field output while Table 5-8 ICA selection and once-per-field PA toggling remain unchanged.",
+        "invalidated_by": [
+          "A primary-source or hardware trace demonstrating the opposite retained row phase",
+          "Changes to PA timing, ICA selection, or field publication"
+        ],
+        "repeat_when": "Re-run the device-level phase test after any field-timing rewrite and manually verify the native Photo CD startup, photograph, clean progressive menu, and a separate interlaced title."
+      }
     }
   ],
   "manual_verification": [
@@ -193,6 +210,16 @@
       "result": "right-edge-fix-manually-confirmed",
       "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty",
       "notes": "The user re-ran Dark Chaser Japan through the native CD-i Photo CD application and confirmed that the magenta far-right line is gone. The stationary interlaced boundary remains a separate open symptom."
+    },
+    {
+      "result": "retained-row-phase-offline-composite-confirmed",
+      "revision": "a960c14+dirty",
+      "notes": "Plane A alone appeared vertically reduced/blocky and plane B alone showed finer horizontal slicing; neither was correct in isolation. Swapping only the retained PA host-row phase in the captured hardware composite produced /tmp/base-raster-parity-swapped.png. The user identified that composite as correct, and the supplied Inspected image.png has the exact same SHA-256 027aa68e77b290ecc181a6accc1544118ebbb33307dbeb59362b59e66e8af7b3. Live-emulator verification remains pending."
+    },
+    {
+      "result": "live-native-photocd-confirmed",
+      "revision": "a960c14949348ffd75773c920c4d8d22f8292cac+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
+      "notes": "The user confirmed that the native Photo CD startup, stable menu, and displayed photograph look correct in the live corrected build. A separate transient line/area can still show field structure while a transition is moving; that symptom is tracked independently and does not remain in stable pictures."
     }
   ]
 }

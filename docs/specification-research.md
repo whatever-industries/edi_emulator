@@ -366,20 +366,30 @@ optically blend the fields at different times. This is a hypothesis to test,
 not permission to add a global deinterlacer: high-resolution field detail is
 valid CD-i output and must not be discarded without provenance evidence.
 
-The current core audit found no elementary parity reversal. `process_ica`
-selects `$400`/`$404` according to Table 5-8; `output_rows` maps odd/even fields
-to lines 1/3/5 and 2/4/6 respectively; parity toggles once at field completion;
-and the complementary field is retained. Existing tests cover those rules.
-Two four-field provenance captures now cover a non-PCD startup graphic and an
-actual photograph displayed by the native application. Both affected scenes
-program interlaced 768×480 output and switch both MCD212 planes to DYUV. Every
-decoded plane and base raster remains stable across four alternating fields,
-so this is fixed field structure rather than temporal shimmer. The photograph
-starts and ends on adjacent rows in the two guest planes; weaving them produces
-the observed thin dark or half-bright boundary at the top and bottom. The
-magenta right-edge samples also already exist in both decoded planes. Final
-plane composition, aperture extraction, and frontend presentation are therefore
-not the first divergence.
+The first core audit found no error in ICA selection: `process_ica` selects
+`$400`/`$404` according to Table 5-8, parity toggles once at field completion,
+and the complementary field is retained. It did not, however, independently
+prove which progressive host row should retain each PA phase. Two four-field
+provenance captures cover a non-PCD startup graphic and an actual photograph
+displayed by the native application. Both affected scenes program interlaced
+768×480 output and switch both MCD212 planes to DYUV. The artifacts occur
+throughout the picture, not only at its horizontal boundaries; the boundaries
+merely make the one-line displacement especially visible.
+
+Reconstructing the visible VSR sequence from both fields exposed the missing
+distinction. With the old host-row phase, the composed row order repeatedly
+stepped backward by one `$480`-byte source line at PA boundaries in both
+planes. Retaining PA=0 in the first row of each progressive pair and PA=1 in
+the second makes the source order monotonic without changing the Table 5-8 ICA
+entry points. An offline composite made with only that row-phase swap was
+identified by the user as correct and exactly matched the returned reference
+screenshot by SHA-256. A device-level regression now covers the phase while
+preserving noninterlaced row duplication. Live native-application verification
+confirmed that the startup, stable menu, and displayed photograph are clean.
+The remaining field structure is confined to a moving Photo CD transition
+line/area. Other tested CD-i transitions, including Philips FMVDemo's VMPEG
+external-video path, do not show it, so that partial-update symptom is tracked
+separately from the resolved stable-picture weave defect.
 
 The right-edge question now has a device-level answer. MCD212 section 7.1 says
 that its horizontally subsampled DYUV output interpolates missing U/V values,
@@ -392,7 +402,7 @@ independent of subsequent data. This correction targets the magenta right edge
 only and still requires native Photo CD confirmation.
 
 The captures also establish that PCD source decoding alone is not the cause of
-the separate stationary field boundaries, because
+the separate stationary field artifacts, because
 the non-PCD startup graphic uses the same affected dual-DYUV path. The visually
 clean intervening CD-i menu supplies the needed control. Its four captured
 fields are stable and byte-identical, but it programs non-interlaced 768×480
@@ -400,10 +410,9 @@ output with a CLUT4 icon/control plane over a DYUV background plane. That is
 materially different from the affected interlaced dual-DYUV startup and
 photograph regions. The symptom is therefore correlated with the native
 application's interlaced dual-DYUV path, not Photo CD source decoding, the
-hardware aperture, or the frontend generally. The remaining distinguishing
-test is an independent comparison of odd/even raw DYUV line payloads and their
-absolute starts at the top and bottom image boundaries. Do not add a global
-deinterlacer or host crop from this evidence.
+hardware aperture, or the frontend generally. The corrected retained-row phase
+addresses that generalized MCD212 path; no global deinterlacer or host crop is
+used.
 
 Similar-sized bars in ordinary European CD-i titles are a comparison lead,
 not evidence of one root cause. PAL raster/compatibility modes, authored

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "id": "native-photocd-transition-boundary-interlace",
+  "title": "Native Photo CD transition boundary shows field lines",
+  "symptom": "After correction of the stable interlaced Photo CD picture, horizontal field structure remains visible only in the moving transition line or transition area. The rest of the frame and the settled destination picture look correct.",
+  "expected": "Determine whether the native application intentionally updates a drawmap across fields or whether E-Di publishes a partial update at the wrong field boundary. Do not deinterlace or filter the settled picture.",
+  "status": "reported-unconfirmed",
+  "reported_revision": "a960c14949348ffd75773c920c4d8d22f8292cac+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
+  "last_reproduced_revision": "a960c14949348ffd75773c920c4d8d22f8292cac+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "photocd",
+    "mcd212",
+    "ucm",
+    "display-provenance",
+    "timing"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal-and-ntsc",
+    "dvc": "not required",
+    "instruction_limit": null,
+    "input_events": [
+      "launch a Photo CD through its native CD-i application",
+      "advance between displayed pictures",
+      "observe the moving transition boundary"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "guest-partial-update-crosses-fields",
+      "hardware_explanation": "The native application may intentionally reveal an in-progress drawmap update or wipe across successive television fields. A progressive capture then exposes field structure only at the moving boundary while stable regions remain coherent.",
+      "supporting_evidence": [
+        "The artifact is confined to the moving transition line or area.",
+        "The settled source and destination pictures are clean after the retained-row phase correction.",
+        "Other CD-i transitions tested by the user, including Philips FMVDemo's VMPEG path, do not show this interlacing.",
+        "CD-i applications can update display files and drawmaps incrementally while the display remains active."
+      ],
+      "contradicting_evidence": [
+        "No real-hardware transition capture is currently available.",
+        "No consecutive-field provenance capture covers the transition itself."
+      ],
+      "falsifying_test": "Capture every field from immediately before the transition until it settles, including guest writes, PCL destination, decoded planes, and composed raster. If guest plane memory already contains the boundary-specific field structure before composition, the transition is authored or guest-timed.",
+      "citations": [
+        "MCD212 Technical Specification section 5.2.2 and Table 5-8",
+        "Green Book UCM drawmap transfer and display operations",
+        "docs/debugging-workflow.md display provenance stages"
+      ]
+    },
+    {
+      "id": "partial-update-publication-phase",
+      "hardware_explanation": "E-Di may sample or publish a guest drawmap update one field too early, exposing a narrow old/new-field mismatch only where the transition is changing.",
+      "supporting_evidence": [
+        "The defect follows the changing boundary instead of remaining fixed in the picture.",
+        "The display path retains two fields, so write ownership and publication timing can affect a partial region without corrupting the settled frame."
+      ],
+      "contradicting_evidence": [
+        "The corrected stable weave and its device-level phase test pass.",
+        "The absence of comparable lines in FMVDemo transitions weakens a global frontend or universal field-publication explanation, although VMPEG uses a materially different external-video path.",
+        "No diagnostic yet shows a guest write racing the rendered field."
+      ],
+      "falsifying_test": "Compare guest write timing and per-field plane hashes with the first composed field that exposes each transition row. If publication follows the programmed hardware boundary and matches guest data, emulator publication timing is not the cause.",
+      "citations": [
+        "MCD212 Technical Specification display-file timing",
+        "docs/debugging-workflow.md partial-update provenance"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported-current",
+      "revision": "a960c14949348ffd75773c920c4d8d22f8292cac+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
+      "notes": "The user confirmed the corrected stable Photo CD output looks good and clarified that remaining interlace lines are visible only in the transition line or area while it moves. Other tested CD-i transitions, including Philips FMVDemo, do not show the same effect; FMVDemo is an external VMPEG path rather than the native Photo CD base-plane path."
+    }
+  ]
+}

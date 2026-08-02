@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "id": "alien-gate-pal-ntsc-framing-difference",
+  "title": "Alien Gate PAL and NTSC gameplay framing differs",
+  "symptom": "Alien Gate Europe presents gameplay with four-sided windowboxing and a bottom black bar, while Alien Gate USA Rev 1 retains the top and side margins but its playfield reaches the bottom of the active picture.",
+  "expected": "Each pressing preserves the aperture and drawmap placement programmed by its guest software and player standard. The emulator must not force the USA and Europe releases into identical framing without register traces or real-hardware evidence showing that they should match.",
+  "status": "reported-unconfirmed",
+  "reported_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+  "last_reproduced_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+  "last_verified_revision": null,
+  "evidence_status": "reported-current",
+  "revalidation_reason": null,
+  "components": ["mcd212", "ucm", "display-provenance", "frontend"],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal-and-ntsc",
+    "dvc": "vmpega present but title uses base graphics",
+    "instruction_limit": null,
+    "input_events": [
+      "enter gameplay in Alien Gate Europe Rev 2",
+      "enter gameplay in Alien Gate USA Rev 1",
+      "compare the active picture edges"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "authored-region-specific-placement",
+      "hardware_explanation": "The PAL and NTSC pressings may use different drawmap sizes, origins, MCD212 scan modes, or authored borders for their different active-line counts.",
+      "supporting_evidence": [
+        "The USA screenshot retains the same general inset presentation but fills the lower part of the active picture instead of producing the European bottom bar.",
+        "The releases are different regional revisions and need not share identical assets or UCM display parameters.",
+        "Real-console footage establishes four-sided windowboxing for the tested European release."
+      ],
+      "contradicting_evidence": [
+        "No real-hardware capture of Alien Gate USA Rev 1 is currently recorded.",
+        "No synchronized MCD212 state or drawmap provenance capture exists for the two pressings."
+      ],
+      "falsifying_test": "Capture the live CF/ST/FD/SM state, VSR/DCP origins, decoded planes, composed raster, and frontend aperture at equivalent gameplay frames in both pressings. Identical guest placement before divergent frontend output would falsify an authored difference.",
+      "citations": [
+        "European real-CD-i gameplay reference: https://www.youtube.com/watch?v=Vj0GFhxTsi0",
+        "docs/display-geometry.md",
+        "docs/debugging-workflow.md display provenance stages"
+      ]
+    },
+    {
+      "id": "standard-dependent-aperture-error",
+      "hardware_explanation": "A PAL/NTSC geometry, field-origin, or pixel-aspect discrepancy could expose different borders even if the guest intends equivalent framing.",
+      "supporting_evidence": [
+        "Other unresolved reports compare different PAL and NTSC picture coverage in the player shell and several titles."
+      ],
+      "contradicting_evidence": [
+        "The current geometry is derived from MCD212 state rather than a title-name crop.",
+        "The USA presentation is internally coherent and does not by itself prove a defect."
+      ],
+      "falsifying_test": "Verify both core-provided apertures against MCD212 timing tables, then compare real-hardware captures of the exact PAL and NTSC pressings. Correct state-derived apertures with matching hardware output would leave the difference as authored content.",
+      "citations": [
+        "MCD212 Technical Specification, tables 5-1 through 5-7 and section 5.8",
+        "Green Book V.2.2, V.2.3, and V.4.8",
+        "docs/display-geometry.md"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "comparative-observation",
+      "revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+      "notes": "Alien Gate USA Rev 1 displays with a top inset and side borders but no bottom black bar. The previously tested Europe Rev 2 release displays full windowboxing. Neither presentation is classified as incorrect without exact-register or hardware evidence."
+    }
+  ]
+}

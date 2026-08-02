@@ -376,19 +376,37 @@ fn line_4<B: Bus68k>(cpu: &mut Cpu, bus: &mut B, op: u16) {
             return;
         }
         0x4E73 => {
-            // RTE with 68070 format/vector word (68010-style short frame).
+            // RTE with the SCC68070 short or 17-word long frame. Long-frame
+            // layout and RR semantics are from product-spec sections 5.10.1,
+            // 5.10.2 and Table 22.
             if privileged(cpu, bus) {
+                let rte_start = cpu.cycles;
                 let sr = cpu.pop16(bus);
                 let pc = cpu.pop32(bus);
                 let format = cpu.pop16(bus);
-                // Short-form RTE is 39 clocks (Table 22). Opcode and stack
-                // transfers account for 23 of them.
-                cpu.cycles += 16;
-                if format & 0xF000 != 0 {
-                    log::warn!("RTE long frame (format {:#06x}) not implemented", format);
-                }
+                let (return_pc, total_clocks) = if format & 0xF000 == 0xF000 {
+                    let ssw = cpu.pop16(bus);
+                    let _mm = cpu.pop16(bus);
+                    let resume_pc = cpu.pop32(bus);
+                    let _tpd = cpu.pop32(bus);
+                    let _tpf = cpu.pop32(bus);
+                    let _dbin = cpu.pop32(bus);
+                    let _ir = cpu.pop16(bus);
+                    let _irc = cpu.pop16(bus);
+                    let _internal = cpu.pop16(bus);
+                    let suppress_rerun = ssw & 0x8000 != 0;
+                    (
+                        if suppress_rerun { resume_pc } else { pc },
+                        if suppress_rerun { 140 } else { 146 },
+                    )
+                } else {
+                    (pc, 39)
+                };
+                // Table totals include the four-clock opcode fetch and the
+                // three-clock execute baseline applied before this handler.
+                cpu.cycles = rte_start + total_clocks - 7;
                 cpu.set_sr(sr);
-                cpu.set_pc_checked(bus, pc);
+                cpu.set_pc_checked(bus, return_pc);
             }
             return;
         }

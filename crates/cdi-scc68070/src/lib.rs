@@ -14,7 +14,7 @@ pub mod ea;
 pub mod exec;
 pub mod periph;
 
-pub use bus::{Bus68k, FnCode};
+pub use bus::{Bus68k, BusAccessSize, BusError, FnCode};
 pub use cpu::Cpu;
 pub use periph::Peripherals;
 

@@ -6,7 +6,7 @@
 //! `$80000000`. Pages that mix regions (e.g. the MCD212 register window
 //! punched into the top of the ROM range) fall back to a linear region walk.
 
-use cdi_scc68070::bus::{Bus68k, FnCode, WaitTicks};
+use cdi_scc68070::bus::{Bus68k, BusAccessSize, BusError, FnCode, WaitTicks};
 use cdi_scc68070::Peripherals;
 use std::collections::VecDeque;
 
@@ -314,6 +314,8 @@ pub struct MachineBus {
     dvc_dma_cycles: u64,
     /// Present only while bounded diagnostics are enabled.
     dma_diagnostics: Option<DmaDiagnosticCapture>,
+    /// First CPU bus error awaiting SCC68070 exception processing.
+    pending_bus_error: Option<BusError>,
 }
 
 impl MachineBus {
@@ -400,6 +402,7 @@ impl MachineBus {
             shared_in4_owner: SharedIn4Owner::Idle,
             dvc_dma_cycles: 0,
             dma_diagnostics: None,
+            pending_bus_error: None,
         };
         bus.build_page_table();
         Ok(bus)
@@ -451,6 +454,7 @@ impl MachineBus {
         self.periph.in4_line = false;
         self.periph.in5_line = false;
         self.dvc_dma_cycles = 0;
+        self.pending_bus_error = None;
         if let Some(capture) = &mut self.dma_diagnostics {
             *capture = DmaDiagnosticCapture::default();
         }
@@ -876,6 +880,39 @@ impl MachineBus {
             .as_mut()
             .map(|capture| std::mem::take(&mut capture.pending_raw_guest_writes))
             .unwrap_or_default()
+    }
+
+    /// Mono-I motherboard ranges known to assert `BERRN` rather than return
+    /// open-bus data. These are outside the decoded board devices and match
+    /// the early firmware RAM-search probes. Other holes remain observational
+    /// open bus until the hardware address-response matrix is complete.
+    fn cpu_bus_error_address(&self, addr: u32, bytes: u32) -> bool {
+        if addr >= ONCHIP_BASE {
+            return false;
+        }
+        (0..bytes).any(|offset| {
+            let a24 = addr.wrapping_add(offset) & 0x00FF_FFFF;
+            matches!(a24, 0x0008_0000..=0x001F_FFFF | 0x0050_0000..=0x00CF_FFFF)
+        })
+    }
+
+    fn latch_bus_error(
+        &mut self,
+        address: u32,
+        function_code: FnCode,
+        size: BusAccessSize,
+        read: bool,
+        write_data: u16,
+    ) {
+        if self.pending_bus_error.is_none() {
+            self.pending_bus_error = Some(BusError {
+                address: address & 0x00FF_FFFF,
+                function_code,
+                size,
+                read,
+                write_data,
+            });
+        }
     }
 
     fn diagnostic_ram_regions(&self) -> Vec<RamDiagnosticRegion<'_>> {
@@ -1637,26 +1674,46 @@ fn diagnostic_hash_pixels(pixels: &[u32]) -> u64 {
 }
 
 impl Bus68k for MachineBus {
-    fn read8(&mut self, addr: u32, _fc: FnCode) -> (u8, WaitTicks) {
+    fn read8(&mut self, addr: u32, fc: FnCode) -> (u8, WaitTicks) {
+        if self.cpu_bus_error_address(addr, 1) {
+            self.latch_bus_error(addr, fc, BusAccessSize::Byte, true, 0);
+            return (0xFF, 0);
+        }
         (self.raw_read8(addr), 0)
     }
 
-    fn read16(&mut self, addr: u32, _fc: FnCode) -> (u16, WaitTicks) {
+    fn read16(&mut self, addr: u32, fc: FnCode) -> (u16, WaitTicks) {
+        if self.cpu_bus_error_address(addr, 2) {
+            self.latch_bus_error(addr, fc, BusAccessSize::Word, true, 0);
+            return (0xFFFF, 0);
+        }
         let hi = self.raw_read8(addr);
         let lo = self.raw_read8(addr.wrapping_add(1));
         (u16::from_be_bytes([hi, lo]), 0)
     }
 
-    fn write8(&mut self, addr: u32, val: u8, _fc: FnCode) -> WaitTicks {
+    fn write8(&mut self, addr: u32, val: u8, fc: FnCode) -> WaitTicks {
+        if self.cpu_bus_error_address(addr, 1) {
+            self.latch_bus_error(addr, fc, BusAccessSize::Byte, false, u16::from(val));
+            return 0;
+        }
         self.raw_write8(addr, val);
         0
     }
 
-    fn write16(&mut self, addr: u32, val: u16, _fc: FnCode) -> WaitTicks {
+    fn write16(&mut self, addr: u32, val: u16, fc: FnCode) -> WaitTicks {
+        if self.cpu_bus_error_address(addr, 2) {
+            self.latch_bus_error(addr, fc, BusAccessSize::Word, false, val);
+            return 0;
+        }
         let [hi, lo] = val.to_be_bytes();
         self.raw_write8(addr, hi);
         self.raw_write8(addr.wrapping_add(1), lo);
         0
+    }
+
+    fn take_bus_error(&mut self) -> Option<BusError> {
+        self.pending_bus_error.take()
     }
 
     fn iack(&mut self, level: u8) -> u8 {
@@ -1782,6 +1839,40 @@ mod tests {
         // ROM still decodes normally at its top byte.
         let rom_top = m.rom[0x7FFFF];
         assert_eq!(m.read8(0x0047_FFFF, FnCode::SupervisorData).0, rom_top);
+    }
+
+    #[test]
+    fn mono1_known_absent_ranges_latch_cpu_bus_errors() {
+        let mut m = machine();
+
+        assert_eq!(m.read8(0x0008_0000, FnCode::SupervisorData).0, 0xFF);
+        assert_eq!(
+            m.take_bus_error(),
+            Some(BusError {
+                address: 0x0008_0000,
+                function_code: FnCode::SupervisorData,
+                size: BusAccessSize::Byte,
+                read: true,
+                write_data: 0,
+            })
+        );
+
+        m.write16(0x0050_0000, 0xBEEF, FnCode::UserData);
+        assert_eq!(
+            m.take_bus_error(),
+            Some(BusError {
+                address: 0x0050_0000,
+                function_code: FnCode::UserData,
+                size: BusAccessSize::Word,
+                read: false,
+                write_data: 0xBEEF,
+            })
+        );
+
+        // An unverified hole remains open bus rather than being promoted to
+        // a fault merely because it lacks a mapped board device.
+        assert_eq!(m.read8(0x0028_0000, FnCode::SupervisorData).0, 0xFF);
+        assert_eq!(m.take_bus_error(), None);
     }
 
     #[test]

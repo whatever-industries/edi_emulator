@@ -767,13 +767,20 @@ impl Mcd212 {
                     | (u32::from(lim(y2, luts.u_to_g[u as usize] + luts.v_to_g[v as usize])) << 8)
                     | u32::from(lim(y2, luts.u_to_b[u as usize]));
 
-                // Half-step interpolation using the next pair's deltas.
-                let byte2 = fetch(plane, vsr);
-                let byte3 = fetch(plane, vsr.wrapping_add(1));
-                let u8n = u.wrapping_add(luts.delta_uv[byte2 as usize]);
-                let v8n = v.wrapping_add(luts.delta_uv[byte3 as usize]);
-                let u6 = (u >> 1).wrapping_add(u8n >> 1).wrapping_add(u & u8n & 1);
-                let v6 = (v >> 1).wrapping_add(v8n >> 1).wrapping_add(v & v8n & 1);
+                // MCD212 section 7.1: interpolate with the next chroma sample,
+                // but repeat the final U/V component at the end of a line.
+                let (u6, v6) = if x + 4 >= width {
+                    (u, v)
+                } else {
+                    let byte2 = fetch(plane, vsr);
+                    let byte3 = fetch(plane, vsr.wrapping_add(1));
+                    let u8n = u.wrapping_add(luts.delta_uv[byte2 as usize]);
+                    let v8n = v.wrapping_add(luts.delta_uv[byte3 as usize]);
+                    (
+                        (u >> 1).wrapping_add(u8n >> 1).wrapping_add(u & u8n & 1),
+                        (v >> 1).wrapping_add(v8n >> 1).wrapping_add(v & v8n & 1),
+                    )
+                };
                 let color1 = (u32::from(lim(y, luts.v_to_r[v6 as usize])) << 16)
                     | (u32::from(lim(y, luts.u_to_g[u6 as usize] + luts.v_to_g[v6 as usize])) << 8)
                     | u32::from(lim(y, luts.u_to_b[u6 as usize]));
@@ -1548,6 +1555,35 @@ mod tests {
         m.set_diagnostic_plane_capture(false);
         assert!(m.diagnostic_plane_framebuffer(0).is_none());
         assert!(m.diagnostic_plane_framebuffer(1).is_none());
+    }
+
+    #[test]
+    fn dyuv_last_chroma_repeats_instead_of_reading_past_the_line() {
+        fn decode_with_following_bytes(following: [u8; 2]) -> [u32; FB_WIDTH] {
+            let mut m = Mcd212::new(false);
+            m.dcr[0] |= DCR_CF;
+            m.image_coding_method = u32::from(ICM_DYUV);
+            m.transparency_control = 0x09;
+            m.dyuv_abs_start[0] = 0x80_8080;
+            m.set_vsr(0, 0x1000);
+
+            let mut plane = vec![0u8; 0x80000];
+            let encoded_line_bytes = FB_WIDTH / 2;
+            plane[0x1000 + encoded_line_bytes..0x1000 + encoded_line_bytes + 2]
+                .copy_from_slice(&following);
+            let other_plane = vec![0u8; 0x80000];
+            let mut pixels = [0u32; FB_WIDTH];
+            let mut transparent = [false; FB_WIDTH];
+            m.process_vsr(0, &plane, &other_plane, &mut pixels, &mut transparent);
+            pixels
+        }
+
+        let zero_following = decode_with_following_bytes([0x00, 0x00]);
+        let different_following = decode_with_following_bytes([0x80, 0x80]);
+        assert!(
+            zero_following == different_following,
+            "MCD212 section 7.1 repeats the final U/V component rather than peeking into the next line"
+        );
     }
 
     #[test]

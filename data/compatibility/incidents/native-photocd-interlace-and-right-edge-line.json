@@ -2,19 +2,19 @@
   "schema_version": 1,
   "id": "native-photocd-interlace-and-right-edge-line",
   "title": "Native Photo CD field artifacts and magenta right-edge line",
-  "symptom": "Photo CDs played through their native CD-i application show stationary field-like horizontal artifacts, and Dark Chaser Japan shows a one-pixel magenta vertical line at the far right of the active raster. Similar interlace-like detail is visible on other Photo CDs. The source PCD images do not contain these artifacts.",
+  "symptom": "Photo CDs played through their native CD-i application show stationary field-like horizontal artifacts, and Dark Chaser Japan shows a magenta vertical line at the far right of the active raster. Similar interlace-like detail is visible on other Photo CDs in both PAL and NTSC testing. On Cosplay Night, the non-PCD startup graphic and displayed photographs show the artifacts while the intervening CD-i application menu appears clean. A supplied 768x512 Base source image does not contain these artifacts. Its paired 768x588 native capture has 76 near-black rows above the image, 34 below, and two magenta-like output columns at the right edge over 382 rows.",
   "expected": "The native CD-i Photo CD path displays the guest-produced still without an emulator-generated final-column line. A stationary still should weave into a stable picture unless the guest drawmaps themselves contain different odd/even field samples.",
   "status": "reproduced",
   "reported_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
-  "last_reproduced_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+  "last_reproduced_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty:651f85e505403bacf9014f9799240abe2f93bbd0b510be9ae558d2afd2bb6b1b",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "The screenshots are from the native CD-i application, not the frontend's View Raw Images mode, so the affected path includes disc delivery, guest drawmaps, MCD212 field composition, aperture, and frontend presentation.",
+  "revalidation_reason": "The screenshots are from the native CD-i application, not the frontend's View Raw Images mode, so the affected path includes disc delivery, guest drawmaps, MCD212 field composition, aperture, and frontend presentation. Photo CD v0.9 establishes that a Base source is 768x512 square pixels (3:2) and shows informative standard/overscan-dependent 4:3 mappings; bars must therefore be separated from field and final-column corruption by live register evidence.",
   "components": ["photocd", "mcd212", "ucm", "display-provenance", "frontend"],
   "disc_fingerprint": null,
   "scenario": {
     "model": "cdi220b",
-    "video_standard": "ntsc",
+    "video_standard": "pal-and-ntsc",
     "dvc": "not required",
     "instruction_limit": null,
     "input_events": [
@@ -30,17 +30,41 @@
       "supporting_evidence": [
         "The artifacts are visible in stationary native Photo CD scenes and recur across multiple discs.",
         "The source PCD images are clean, placing the first possible divergence after source decoding or guest transfer.",
-        "MCD212 interlaced output retains distinct odd/even field rows and is a shared dependency of the affected presentation."
+        "MCD212 interlaced output retains distinct odd/even field rows and is a shared dependency of the affected presentation.",
+        "Four-field captures of both a non-PCD startup graphic and a displayed photograph show stable field-separated output, so the symptom is not specific to PCD source decoding."
       ],
       "contradicting_evidence": [
-        "A still screenshot cannot show whether live fields shimmer or merely contain stable one-line detail.",
-        "The native guest application could intentionally prefilter or construct field-separated images whose pixel-perfect output looks combed without CRT filtering."
+        "Four consecutive captures are byte-identical at each decoded-plane and base-raster stage, ruling out temporal field alternation as the source of the stationary lines.",
+        "The line structure and magenta edge already exist in both decoded guest planes before final plane composition, aperture selection, or frontend presentation."
       ],
       "falsifying_test": "Capture four consecutive fields plus PCL destination, raw plane RAM, decoded planes, composed raster, and frontend output. If identical line detail is already present in both guest drawmaps at the correct parity, the emulator weave is not the source.",
       "citations": [
         "MCD212 Technical Specification section 5.2.2 and field display tables",
         "Philips TN 042, Reduction of Flicker in Interlaced Pictures",
+        "Photo CD v0.9 IV.2.1 and Appendix II",
         "docs/debugging-workflow.md display provenance stages"
+      ]
+    },
+    {
+      "id": "authored-interlace-visible-in-progressive-weave",
+      "hardware_explanation": "The Photo CD application may intentionally construct a two-field high-resolution still. A CRT presents its odd and even lines at different times and optically blends them, while E-Di's lossless progressive weave exposes both fields simultaneously. Field-authored detail or insufficient vertical filtering can therefore become a stationary one-line structure in a PNG or LCD presentation even when parity and field addresses are correct.",
+      "supporting_evidence": [
+        "MCD212 section 5.2.2 defines interlaced pictures as odd lines from one field and even lines from the next; Green Book V.5.14 requires interlace for high-resolution FCT/LCT pictures.",
+        "Philips TN 042 says still interlaced pictures can exhibit objectionable interline structure and recommends vertical filtering instead of simple alternate-line repetition.",
+        "The reported artifact is stationary and does not alternate or shimmer, which is compatible with stable but different odd/even source rows exposed by a progressive weave.",
+        "The resolved Validation Disc CLUT4 High Res incident demonstrated that similar fixed one-line contours can already exist in the guest's field-separated drawmaps.",
+        "The affected startup graphic and displayed photograph both use two guest-programmed DYUV planes; their image boundaries begin and end on adjacent output rows, producing a stable dark or half-bright boundary when woven."
+      ],
+      "contradicting_evidence": [
+        "The supplied Base PCD source is clean, so any field-specific structure was introduced by the native application or later in the emulated display path.",
+        "A blanket host deinterlacer would discard legitimate high-resolution field detail and is not justified by the current evidence."
+      ],
+      "falsifying_test": "Capture the visually clean CD-i application menu with the same four-field provenance. If it uses the same dual-DYUV field layout and adjacent-row boundaries without the artifact, compare its raw line payloads and DYUV absolute starts against the affected scenes; if it uses another coding/layout mode, the mode transition isolates the relevant device path.",
+      "citations": [
+        "MCD212 Technical Specification section 5.2.2 and Table 5-8",
+        "Green Book V.4.5.1 and V.5.14",
+        "Philips TN 042, Reduction of Flicker in Interlaced Pictures",
+        "data/compatibility/incidents/validation-disc-clut4-highres-field-artifacts.json"
       ]
     },
     {
@@ -48,13 +72,15 @@
       "hardware_explanation": "The magenta edge may be a final-pixel fetch, line-width, DCA/run-length termination, plane-composition, aperture, or frontend copy error that exposes a stale or out-of-range color at the rightmost column.",
       "supporting_evidence": [
         "The line is exactly aligned to the far-right output boundary and is not present in the source PCD image.",
-        "Its saturated magenta color is characteristic of decoded pixel or palette data rather than an intentional black border."
+        "Its saturated magenta color is characteristic of decoded pixel or palette data rather than an intentional black border.",
+        "The supplied 768-pixel-wide capture has two affected output columns, which is consistent with but does not prove doubling of one 15 MHz source sample at the 30 MHz output boundary.",
+        "Four-field provenance places the magenta samples in both decoded guest planes before base-plane composition and frontend presentation."
       ],
       "contradicting_evidence": [
         "Only Dark Chaser Japan has currently supplied a clearly captured magenta line.",
-        "No per-stage capture yet identifies whether the line first exists in guest plane memory, core composition, or frontend output."
+        "The current capture does not yet distinguish malformed final DYUV source samples from a decoder line-termination or final-sample replication defect."
       ],
-      "falsifying_test": "At the same frame, hash and inspect the rightmost pixels of the PCL destination, raw plane rows, decoded planes, composed core raster, hardware aperture, and saved frontend image. The first stage containing the magenta column identifies the faulty boundary.",
+      "falsifying_test": "Decode the final DYUV samples of the captured raw plane rows independently, including line length and absolute start handling. If the raw payload predicts the magenta samples, the guest supplied them; otherwise the MCD212 DYUV line boundary is incorrect.",
       "citations": [
         "Green Book UCM drawmap and display operations",
         "MCD212 Technical Specification display-file and region behavior",
@@ -62,12 +88,111 @@
       ]
     }
   ],
-  "experiments": [],
+  "experiments": [
+    {
+      "id": "specification-and-current-weave-audit",
+      "base_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "outcome": "inconclusive",
+      "hypothesis": "A simple odd/even parity or ICA entry-address inversion creates the stationary Photo CD artifacts.",
+      "implementation_strategy": "Read MCD212 section 5.2.2 and Table 5-8, Green Book V.4.5.1 and V.5.14, and TN 042; then audit Mcd212::process_ica, Mcd212::output_rows, field parity toggling, and the existing table-driven tests without changing emulation behavior.",
+      "expected": "A disagreement between the specification and code would identify a deterministic device-level correction.",
+      "actual": "The current core selects byte $400 for interlaced odd PA=1 and $404 for even PA=0, writes odd-field samples to zero-based even rows and even-field samples to zero-based odd rows, toggles parity once per field, and retains the complementary field. Existing tests cover those mappings. This rules out the simplest address/parity inversion but cannot distinguish guest-authored field detail from a later per-line decode/composition defect.",
+      "applicability": {
+        "conditions": "Relevant while process_ica, output_rows, parity timing, and field retention remain unchanged.",
+        "invalidated_by": [
+          "Changes to MCD212 field parity timing or ICA selection",
+          "Evidence that channel-specific scan mode or parity differs from the currently modeled shared state"
+        ],
+        "repeat_when": "Repeat the audit only if a provenance capture shows the first divergence at ICA selection or field-row assignment."
+      }
+    },
+    {
+      "id": "native-photocd-four-field-provenance",
+      "base_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "outcome": "partial",
+      "hypothesis": "The stationary Photo CD artifacts or magenta edge are first introduced by odd/even composition, hardware-aperture extraction, or frontend presentation.",
+      "implementation_strategy": "Capture four consecutive fields from the non-PCD startup graphic and from an actual photograph displayed by the native CD-i application. Compare raw plane RAM, decoded plane images, base raster, composed raster, field parity, ICA/DCA programs, coding method, source addresses, and image-boundary rows without changing emulation behavior.",
+      "expected": "The first stage containing the lines would distinguish guest drawmap/DYUV decoding from final weave, aperture, or frontend defects.",
+      "actual": "For the startup fields 1348-1351 and photograph fields 12647-12650, each plane and raster is stable across all four captures while parity alternates normally. Both affected scenes program interlaced 768x480 output and switch both planes to DYUV (ICM 5). The photograph starts and ends on adjacent rows in the two decoded planes: plane A has content through row 449 while plane B contributes a complementary boundary through row 451, creating half-bright edge rows in the base raster. The magenta right-edge samples also exist in both decoded planes. Composition, aperture extraction, and frontend presentation are therefore not the first divergence. The capture does not yet distinguish guest-authored raw DYUV samples from a per-line DYUV decode/termination defect.",
+      "applicability": {
+        "conditions": "Relevant while the native Photo CD guest uses the captured dual-DYUV field programs and the MCD212 decoded-plane diagnostics remain pre-composition.",
+        "invalidated_by": [
+          "Changes to DYUV line decoding, absolute starts, or line termination",
+          "Evidence that decoded-plane diagnostics are captured after an unmodeled composition or presentation step"
+        ],
+        "repeat_when": "Repeat after a DYUV boundary correction or with the visually clean menu as a control; state whether its coding method or field layout differs."
+      }
+    },
+    {
+      "id": "clean-menu-rendering-mode-control",
+      "base_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "outcome": "confirmed",
+      "hypothesis": "The clean Photo CD menu avoids the affected interlaced dual-DYUV rendering path by selecting a materially different MCD212 mode.",
+      "implementation_strategy": "Capture four consecutive fields on the visually clean native Photo CD menu and compare geometry, coding methods, decoded planes, field hashes, and control-table state against the affected startup and photograph captures.",
+      "expected": "A progressive or differently coded menu would isolate the symptom to the interlaced dual-DYUV path; an identical mode would instead require a content-boundary comparison.",
+      "actual": "The menu fields 1623-1626 are stable and byte-identical at every decoded-plane and raster stage. Unlike the affected scenes, the menu programs non-interlaced 768x480 output. Plane A uses CLUT4 for the icons and controls while plane B uses DYUV for the background (final ICM $151B); the affected startup and photograph program interlaced output and use dual-DYUV during their visible regions. The menu therefore confirms a rendering-mode correlation rather than a generic Photo CD, aperture, or frontend defect.",
+      "applicability": {
+        "conditions": "Relevant while the captured native application retains its progressive CLUT4-plus-DYUV menu and interlaced dual-DYUV startup/photo paths.",
+        "invalidated_by": [
+          "Changes to scan-mode decoding or ICM path selection",
+          "Evidence from another clean interlaced dual-DYUV control that contradicts the correlation"
+        ],
+        "repeat_when": "Revalidate after a generalized interlaced DYUV correction or against another native Photo CD application with a clean interlaced dual-DYUV scene."
+      }
+    },
+    {
+      "id": "dyuv-final-chroma-repeat",
+      "base_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "outcome": "confirmed",
+      "hypothesis": "The magenta right edge is caused by the MCD212 DYUV decoder interpolating the line's final missing chroma sample from bytes beyond the end of that line.",
+      "implementation_strategy": "Add a device-level test that decodes identical 768-pixel DYUV lines followed by different bytes. Confirm the old decoder changes the final output pixels, then implement MCD212 section 7.1's rule that the last missing U/V component repeats the last U/V component.",
+      "expected": "Bytes following a complete DYUV line must not influence any pixel on that line.",
+      "actual": "The regression test failed before correction because the final half-step interpolation fetched the next two bytes. Repeating the current U/V values for the final pair makes both decodes identical and prevents the decoder from leaking next-line data into the right edge.",
+      "applicability": {
+        "conditions": "Applies to every MCD212 DYUV line, independently of title, standard, scan mode, or frontend presentation.",
+        "invalidated_by": [
+          "A new primary-source interpretation of MCD212 section 7.1",
+          "Changes to DYUV sample expansion or line-width accounting"
+        ],
+        "repeat_when": "Re-run the synthetic boundary test after any DYUV decoder rewrite and manually recheck a native Photo CD that previously showed a magenta right edge."
+      }
+    }
+  ],
   "manual_verification": [
     {
       "result": "reproduced",
       "revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
       "notes": "Two Dark Chaser Japan native-CD-i screenshots show the magenta far-right column and stationary field-like edge artifacts. The user reports comparable interlace-like artifacts on other Photo CDs and confirms View Raw Images was not used."
+    },
+    {
+      "result": "reproduced",
+      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty:651f85e505403bacf9014f9799240abe2f93bbd0b510be9ae558d2afd2bb6b1b",
+      "notes": "A second native Photo CD capture shows stationary field-like detail. The paired source is a clean 768x512 Base image (SHA-256 5c6d5bb484cea54ca999367b04d7f7bf675cbdb8b3ad1c0eb6a52a05f596e0a0), while the captured presented raster is 768x588 (SHA-256 d5c5c70b1f67c4a8214260a5a0a5fbc8db9cd437f7c2f0ff2428665d0846d700). Pixel inspection measures 76 near-black rows above, 34 below, and two magenta-like final columns over 382 rows. The user reproduced native horizontal bars in PAL and NTSC titles and noted similar-sized bars in some European CD-i titles. Photo CD v0.9 explains why 3:2-to-4:3 fitting may create padding, but not this asymmetric placement or the field/final-column artifacts."
+    },
+    {
+      "result": "presentation-distinction-confirmed",
+      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty:6ae80f9a13b2c75b3e51a8be641adc5cc5dd9a2448be9581a04fb5b663694614",
+      "notes": "A supplied Photo CD image pack (SHA-256 2bf00609459dd6e40c3d5242fbc678510fc3adef0f19b02c79d0b71799248de1) decodes to the specified 768x512 Base canvas. Its warm-content horizontal position/width normalize to 0.2891/0.4258 in the decoded source and 0.2884/0.4264 in View Raw Images, confirming that the host viewer preserves the complete 3:2 source rather than squashing it. The same feature measures 0.2604/0.4844 in native E-Di output and 0.2648/0.4762 in a user-supplied analog hardware capture. A centered 3:2-to-4:3 crop predicts 0.2627/0.4790 by retaining 682 2/3 source pixels and removing about 42 2/3 from each side. The raw-viewer bars and native television fill are therefore both expected presentations; neither explains the separate native field artifacts or magenta final column."
+    },
+    {
+      "result": "provenance-narrowed-to-guest-plane-or-dyuv-decode",
+      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "notes": "Two four-field diagnostic saves cover a non-PCD startup graphic and an actual photograph displayed in native CD-i mode. Both are stable across four alternating fields and use guest-programmed dual-DYUV planes. The thin top/bottom boundary and magenta right-edge samples already exist in the decoded planes before composition and frontend presentation. The clean intervening CD-i menu remains the requested control capture."
+    },
+    {
+      "result": "clean-menu-mode-control-confirmed",
+      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "notes": "The clean menu's four fields are byte-identical and use non-interlaced output with a CLUT4 icon plane over a DYUV background plane. This differs materially from the affected startup and photograph, which use interlaced dual-DYUV visible regions. The next device-level experiment is an independent raw-line decode of the affected interlaced DYUV payload, not a frontend deinterlacer."
+    },
+    {
+      "result": "right-edge-dyuv-boundary-corrected",
+      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty",
+      "notes": "A synthetic device-level test proved that the old DYUV decoder let bytes following a 768-pixel line influence its final two pixels. MCD212 section 7.1 requires the final missing U/V component to repeat the line's last U/V component. The corrected test passes. Native Photo CD manual verification remains required; this does not resolve the separate stationary top/bottom interlaced boundary."
+    },
+    {
+      "result": "right-edge-fix-manually-confirmed",
+      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty",
+      "notes": "The user re-ran Dark Chaser Japan through the native CD-i Photo CD application and confirmed that the magenta far-right line is gone. The stationary interlaced boundary remains a separate open symptom."
     }
   ]
 }

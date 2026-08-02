@@ -1,6 +1,6 @@
 # Philips CD-i specification research
 
-Status date: 2026-07-30
+Status date: 2026-08-01
 
 This is the durable research ledger for the local Philips CD-i/ICDIA document
 archive. It records claims that can constrain emulation behavior, their exact
@@ -97,7 +97,7 @@ These hashes pin the exact local editions used for the first priority pass:
 | Player control keys | `/pck` Play/Stop/Pause/Next/Previous/Search keys are an optional extension, separate from the base two-button pointer; Pause is code `$82` with distinct key-down/key-up events | `notes/technote073.2.pdf`, printed pp. 1-3 | Start defaults to the configurable host-level E-Di menu because `/pck` is not yet emulated; Guide/Home, L1+R1, and right-stick alternatives are available. The overlay pauses emulation only while visible. Start is never emitted as a third base-pointer button, and Select is unassigned. | Implement `/pck` as an optional advertised device with `KB_Read`/`KB_Rdy`/`KB_SSig` behavior and `ss_enable` gating. Then expose an explicit choice between native Start-to-Pause down/up and host-menu use; titles that do not open `/pck` naturally ignore the native events. |
 | Video CD engine | The engine requires DVC, starts the first PSD item, owns its control bars, and shows the multilingual dirty-disc message on disc errors | `docs_sw/vcd_on_cdi_41.pdf`, Release 4.1, pp. 7-9 | A native dirty-disc screen is affirmative evidence of a CD-i engine transport/play failure, not proof that the image is bad. | Correlate the dialog with the first PCL/decoder error and the exact PSD/entry point. |
 | Video CD filesystem | Engine files are `CDI/CDI_VCD.APP;1`, `CDI/CDI_IMAG.RTF;1`, and `CDI/CDI_TEXT.FNT;1`; the PVD application identifier launches `CDI/CDI_VCD.APP;1` | `docs_sw/vcd_on_cdi_41.pdf`, Release 4.1, p. 9 | `DiscInventory` can identify root `CDI` content. Media-panel work should preserve the on-disc application instead of bypassing it. | Add a synthetic ISO/CD-XA fixture with the documented paths and PVD identifier. |
-| Photo CD | A compliant Photo CD is a CD-i Bridge disc with an on-disc CD-i application; version 3.x supports thumbnails, per-photo resolution state, playlists, Portfolio audio, interruptible loads, rotation, and zoom | `faq/cdifaq5.html`, §§5.9-5.9.2; external package `sw_app/photocd_on_cdi_32.zip` | The Photo CD crate already parses `PHOTO_CD/INFO.PCD`, images, and playlists and presents host controls while retaining the CD-i application path. Package strings corroborate `PHOTO_CD/IMAGES`, `OVERVIEW.PCD`, `PLAYLIST.PCD`, audio, and per-disc NVRAM use. | Add a payload-free `DiscInventory` Photo CD classification and synthetic Bridge/PVD test; compare host controls with the native application rather than assuming all versions expose identical features. |
+| Photo CD | A compliant Photo CD is a CD-i Bridge disc with an on-disc CD-i application; Base images are 768×512 square pixels (3:2), while informative soft-display diagrams distinguish NTSC/PAL and 0/5/10% overscan | `faq/cdifaq5.html`, §§5.9-5.9.2; Photo CD v0.9, IV.2.1 and Appendix II; external package `sw_app/photocd_on_cdi_32.zip` | The Photo CD crate parses `PHOTO_CD/INFO.PCD`, images, and playlists and presents host controls while retaining the CD-i application path. A clean 768×512 source and native 768×588 capture prove that stationary field-like detail and a magenta final column arise after source storage; horizontal bars can be compatible with application-selected 3:2-to-4:3 presentation, but the supplied asymmetric 76/34-row placement still requires live-register evidence. | Add a payload-free `DiscInventory` Photo CD classification and synthetic Bridge/PVD test. Capture guest drawmaps, consecutive fields, composed raster, and live display registers before classifying native bars or field artifacts. |
 
 ## Detailed findings
 
@@ -305,6 +305,111 @@ The existing host Photo CD panel should remain a complementary viewer. It
 must not prevent the disc's own CD-i application from handling playlists,
 audio, or version-specific interaction.
 
+### Photo CD source and soft-display geometry
+
+Photo CD v0.9 defines the Base image as 768×512 square pixels, so the stored
+image has a 3:2 aspect ratio. Appendix II is explicitly informative rather
+than normative. Its diagrams show typical mappings of that image into 4:3
+NTSC and PAL soft displays at 0%, 5%, and 10% overscan. At 0% overscan, the
+landscape Base example extends horizontally beyond the NTSC screen but sits
+inside the PAL screen vertically. Increasing overscan changes those visible
+borders. A native Photo CD application may therefore show horizontal bars
+without proving an MCD212 aperture defect; the live application mode and
+display registers decide which mapping applies. In the supplied native raster,
+however, near-black padding measures 76 rows above and 34 below. The 3:2 source
+ratio explains possible total padding, not that asymmetric placement.
+
+A later four-way comparison isolates the host viewer from that native-display
+question. `IMG0006.PCD` decodes to the specified 768x512 Base canvas. The host
+**View Raw Images** path preserves its normalized horizontal content position
+and width to within 0.1%, so its symmetric horizontal bars are the expected
+result of fitting the complete 3:2 source inside the available display area.
+The native CD-i path and an analog hardware capture both instead match the
+center crop required to fill 4:3: retain 682 2/3 of 768 source pixels (remove
+about 42 2/3 pixels, or 5.56%, from each side) and enlarge the retained image by
+9/8. A warm-content feature spanning 42.58% of the source spans 42.64% in the
+raw viewer, 48.44% in native E-Di output, and 47.62% in the hardware capture;
+the predicted cropped width is 47.90%. This requires no vertical stretch.
+Consequently both presentations are valid for their stated purposes: the raw
+viewer exposes the complete square-pixel source, while the disc application
+produces a television-oriented soft display. Do not use the raw viewer's bars
+as evidence of an MCD212 defect or silently crop its source-pixel mode.
+
+This does not explain the reported stationary comb-like detail or saturated
+magenta final column. The supplied source is a clean 768×512 Base image, while
+the native CD-i capture is a 768×588 presented raster containing the detail.
+Its last two output columns are magenta-like over 382 rows, consistent with one
+15 MHz source sample being doubled at the 30 MHz output boundary but not proof
+of which stage supplied that sample.
+The specification supplies no rule that adds such artifacts to a still.
+Display provenance must locate their first appearance after storage: decoded
+source, guest PCL/drawmap, odd/even MCD212 planes, composed raster, aperture,
+or frontend copy.
+
+The field rules narrow that investigation. MCD212 section 5.2.2 defines an
+interlaced picture as odd display lines supplied by the odd field and even
+display lines supplied by the even field. Table 5-8 selects channel 1 ICA byte
+address `$400` for odd `PA=1` and `$404` for even `PA=0`. Green Book V.4.5.1
+requires a field-control table before each field and warns that display
+parameters are not guaranteed to survive from one field to the next. Green
+Book V.5.14 permits the same data in both fields for normal/double-resolution
+pictures and requires interlace for high-resolution FCT/LCT pictures.
+
+Philips TN 042 adds an important presentation caveat: a still can legitimately
+be built from distinct odd/even field data, but high-contrast horizontal detail
+or simple line repetition produces objectionable interline structure on a CRT.
+It recommends vertical filtering/interpolation (with a typical adjacent-line
+weight around 0.2–0.33) at authoring time. A lossless progressive weave shows
+both fields simultaneously, so such authored field structure can appear as a
+stationary one-line artifact in a PNG even though a CRT would present and
+optically blend the fields at different times. This is a hypothesis to test,
+not permission to add a global deinterlacer: high-resolution field detail is
+valid CD-i output and must not be discarded without provenance evidence.
+
+The current core audit found no elementary parity reversal. `process_ica`
+selects `$400`/`$404` according to Table 5-8; `output_rows` maps odd/even fields
+to lines 1/3/5 and 2/4/6 respectively; parity toggles once at field completion;
+and the complementary field is retained. Existing tests cover those rules.
+Two four-field provenance captures now cover a non-PCD startup graphic and an
+actual photograph displayed by the native application. Both affected scenes
+program interlaced 768×480 output and switch both MCD212 planes to DYUV. Every
+decoded plane and base raster remains stable across four alternating fields,
+so this is fixed field structure rather than temporal shimmer. The photograph
+starts and ends on adjacent rows in the two guest planes; weaving them produces
+the observed thin dark or half-bright boundary at the top and bottom. The
+magenta right-edge samples also already exist in both decoded planes. Final
+plane composition, aperture extraction, and frontend presentation are therefore
+not the first divergence.
+
+The right-edge question now has a device-level answer. MCD212 section 7.1 says
+that its horizontally subsampled DYUV output interpolates missing U/V values,
+but the last missing U or V component on a line is obtained by repeating the
+last component. E-Di instead peeked at the next two bytes when expanding the
+line's final pixel pair, allowing next-line data to color the last two output
+pixels. A synthetic regression test varied only those following bytes and
+failed before the correction; it now proves that a completed line is
+independent of subsequent data. This correction targets the magenta right edge
+only and still requires native Photo CD confirmation.
+
+The captures also establish that PCD source decoding alone is not the cause of
+the separate stationary field boundaries, because
+the non-PCD startup graphic uses the same affected dual-DYUV path. The visually
+clean intervening CD-i menu supplies the needed control. Its four captured
+fields are stable and byte-identical, but it programs non-interlaced 768×480
+output with a CLUT4 icon/control plane over a DYUV background plane. That is
+materially different from the affected interlaced dual-DYUV startup and
+photograph regions. The symptom is therefore correlated with the native
+application's interlaced dual-DYUV path, not Photo CD source decoding, the
+hardware aperture, or the frontend generally. The remaining distinguishing
+test is an independent comparison of odd/even raw DYUV line payloads and their
+absolute starts at the top and bottom image boundaries. Do not add a global
+deinterlacer or host crop from this evidence.
+
+Similar-sized bars in ordinary European CD-i titles are a comparison lead,
+not evidence of one root cause. PAL raster/compatibility modes, authored
+240-line assets, and Photo CD's 3:2 source fitting are separate mechanisms and
+must be distinguished by live MCD212 state.
+
 ## Prioritized test queue
 
 No emulation behavior changed during this research pass. Tests should precede
@@ -335,6 +440,11 @@ the corresponding corrections:
 11. **Photo CD Bridge inventory:** classify the documented filesystem and
     application path without extracting image payloads; preserve native
     application behavior when host controls are used.
+12. **Native Photo CD display provenance:** compare a clean 768×512 source
+    against guest drawmaps, four consecutive fields, composed output, and the
+    hardware aperture. Record live standard, `CF`/`ST`/`FD`/`SM`, origins, and
+    magnification so legitimate 3:2-to-4:3 borders remain separate from field
+    or last-column corruption.
 
 Research remains open while the full archive OCR and lower-priority
 player/service-manual scan continue. New findings should extend the compliance

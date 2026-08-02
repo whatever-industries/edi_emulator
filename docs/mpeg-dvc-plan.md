@@ -1,6 +1,6 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-07-30
+Status date: 2026-08-01
 
 ## Current implementation status
 
@@ -199,6 +199,18 @@ and map a six-hour SCR/PTS interval through the shared integer 90 kHz-to-45
 kHz clock without drift. All pass on the existing implementation, so no TN
 088 workaround or title-specific recovery was added.
 
+The MCD251 presentation boundary is now modeled explicitly. Due decoded
+pictures are staged without changing the video generator's source, then
+latched only on the next externally supplied VSYNC. A monotonic picture
+generation is carried through the MCD212 external-video input, and diagnostics
+count any field that samples more than one generation. The native 1.03-billion
+instruction FMVDemo pause/continue scenario presented 302 pictures, resumed
+disc DMA and presentation after Continue, reported zero decoder errors, and
+recorded zero mixed-generation fields. Manual A/B testing confirmed that the
+corrected build removes the moving-video slice while the exact pre-fix base
+restores it. Both builds retain the same older A/V offset, separating that
+synchronization issue from the VSYNC publication correction.
+
 The local title runner now captures low-frequency VMPEG milestones and emits
 `7th-guest-transition-summary.json`. Each play records its CPU-cycle and DCLK
 bounds, cumulative-counter deltas, independent decoded-audio and
@@ -208,6 +220,20 @@ not labeled as A/V drift: a play epoch can legitimately continue after one
 stream ends or external video is hidden. The summary contains no MPEG payload.
 The default 1.1-billion-instruction gate requires all five expected plays,
 while shortened investigative runs can override `CDI_VMPEG_MIN_PLAYS`.
+
+The timestamp oracle has now found a concrete Video CD startup error. The PES
+demux parsed a complete DMA batch, overwrote `last_*_pts` for every packet,
+then assigned the batch's final timestamp to its first queued decoded output.
+In the bounded Addams Family Values USA scenario this selected audio PTS
+78,403 and video PTS 105,035, making the first picture appear 304 ms after the
+first audio sample even though both deadlines were met within one field. The
+affected on-disc MPEG track begins both streams at PTS 68,999. Retaining the
+first selected PES timestamp changed the video startup PTS to 68,999 and
+removed 408 ms of false phase offset with zero decoder errors. Manual checks
+now confirm synchronized playback in Addams Family Values, The Naked Gun
+2 1/2, Pete Townshend Live, and Philips FMVDemo. Long-run drift remains a
+separate extended gate; if it appears, the next boundary is per-access-unit
+PTS association rather than a fixed host delay.
 
 Two exact five-play runs on 2026-07-30 produced byte-identical milestone
 diagnostics and byte-identical summaries. Both finished at CPU cycle
@@ -400,6 +426,10 @@ Timing invariants:
 - MPEG SCR: 90 kHz.
 - FMA DCLK: 45 kHz.
 - Driver A/V offsets: 22.5 kHz.
+- For synchronized disc playback, the decoder which first receives data
+  establishes the SCR-to-DCLK mapping used by both audio and video. A later
+  DMA arrival must not establish an independent presentation timeline
+  (Green Book IX.4.6.2.2).
 - FMV timer: approximately 100.446 Hz (`90,000 / 896`).
 - FMV ISR VSYNC: bit `$0800`, latched on each MCD212 frame transition even if
   masked in IER; masking gates IRQ assertion, not observable status.
@@ -415,10 +445,11 @@ is reported only after the displayed/queued pictures drain. Both decoders must
 be aborted before starting another play, even after a normal end.
 
 PTS-less PES packets retain the most recent valid stream timestamp. SCR/PTS
-comparison is 33-bit wrap-safe and each decoder keeps a stable SCR-to-DCLK
-anchor for the play rather than rebasing every packet. The video and audio
-system-stream parsers are independent so one elementary stream's program end
-cannot consume or reset the other stream's parser state.
+comparison is 33-bit wrap-safe. Synchronized audio and video share the stable
+SCR-to-DCLK anchor established by the first decoder to receive disc data,
+rather than rebasing on each decoder's independent DMA arrival. Their
+system-stream parsers remain independent so one elementary stream's program
+end cannot consume or reset the other stream's parser state.
 
 The external video plane is behind the base CD-i planes. MCD212 external-video
 selection, transparency, mattes, cursor, crop/window/offset, and PAL/NTSC

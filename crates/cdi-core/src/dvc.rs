@@ -44,6 +44,9 @@ const FMA_IER: usize = 0x1C;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ExternalVideo<'a> {
     pub(crate) frame: &'a DecodedVideoFrame,
+    /// Monotonic identifier for the picture latched at the most recent
+    /// vertical synchronization boundary.
+    pub(crate) generation: u64,
     pub(crate) display_x: usize,
     pub(crate) display_y: usize,
     pub(crate) window_x: usize,
@@ -205,6 +208,8 @@ pub struct DvcStats {
     pub current_video_rgb_min: u64,
     pub current_video_rgb_max: u64,
     pub current_video_frame_hash: u64,
+    /// Monotonic ID of the picture latched by the video generator at VSYNC.
+    pub display_generation: u64,
     pub video_offset_x: u64,
     pub video_offset_y: u64,
     pub video_active_x: u64,
@@ -216,6 +221,26 @@ pub struct DvcStats {
     pub video_window_width: u64,
     pub video_window_height: u64,
     pub vcd_pixel_clock_13_5: u64,
+    /// SCR/DCLK mapping supplied by the first synchronized stream.
+    pub system_clock_anchor_scr: Option<u64>,
+    pub system_clock_anchor_dclk: Option<u32>,
+    /// Timestamp and deadline used to start the current audio play.
+    pub audio_start_pts: Option<u64>,
+    pub audio_start_deadline_dclk: Option<u32>,
+    /// First decoded, enabled, and emitted audio boundaries for this play.
+    pub audio_first_decoded_dclk: Option<u32>,
+    pub audio_enabled_dclk: Option<u32>,
+    pub audio_first_output_dclk: Option<u32>,
+    /// Timestamp and deadline used to start the current video play.
+    pub video_start_pts: Option<u64>,
+    pub video_start_deadline_dclk: Option<u32>,
+    /// First decoded, enabled, and VSYNC-latched picture boundaries.
+    pub video_first_decoded_dclk: Option<u32>,
+    pub video_enabled_dclk: Option<u32>,
+    pub video_first_latched_dclk: Option<u32>,
+    /// Sparse counters used to retain first-output events in bounded traces.
+    pub audio_first_output_events: u64,
+    pub video_first_latch_events: u64,
 }
 
 /// Read-only VMPEG register/state snapshot for deterministic diagnostics.
@@ -282,8 +307,10 @@ struct MpegSystemDemux {
     selected_video_stream: Option<u8>,
     selected_audio_stream: Option<u8>,
     last_scr: Option<u64>,
+    first_video_pts: Option<u64>,
     last_video_pts: Option<u64>,
     last_video_dts: Option<u64>,
+    first_audio_pts: Option<u64>,
     last_audio_pts: Option<u64>,
     stats: DemuxStats,
 }
@@ -400,6 +427,7 @@ impl MpegSystemDemux {
             self.video.extend(payload);
             self.stats.video_bytes += payload.len() as u64;
             if let Some(pts) = pts {
+                self.first_video_pts.get_or_insert(pts);
                 self.last_video_pts = Some(pts);
             }
             if let Some(dts) = dts.or(pts) {
@@ -414,6 +442,7 @@ impl MpegSystemDemux {
             self.audio.extend(payload);
             self.stats.audio_bytes += payload.len() as u64;
             if let Some(pts) = pts {
+                self.first_audio_pts.get_or_insert(pts);
                 self.last_audio_pts = Some(pts);
             }
             self.stats.audio_packets += 1;
@@ -589,7 +618,7 @@ pub struct Vmpeg {
     audio_armed: bool,
     audio_enabled: bool,
     audio_start_dclk: Option<u32>,
-    audio_clock_anchor: Option<(u64, u32)>,
+    system_clock_anchor: Option<(u64, u32)>,
     audio_underflow_reported: bool,
     audio_underflow_after_eoi_ack: bool,
     video_armed: bool,
@@ -599,7 +628,6 @@ pub struct Vmpeg {
     video_update_scroll: bool,
     video_update_cycles: u64,
     play_start_dclk: Option<u32>,
-    video_clock_anchor: Option<(u64, u32)>,
     pause_irq_dclk: Option<u32>,
     video_input: Vec<u8>,
     audio_input: Vec<u8>,
@@ -609,7 +637,9 @@ pub struct Vmpeg {
     audio_sample_accum: u64,
     video_decoder: Mpeg1VideoDecoder,
     video_frames: VecDeque<DecodedVideoFrame>,
+    pending_video_frame: Option<DecodedVideoFrame>,
     current_video_frame: Option<DecodedVideoFrame>,
+    display_generation: u64,
     video_cycle_accum: u64,
     video_cycles_per_frame: u64,
     last_picture_due_dclk: Option<u32>,
@@ -667,7 +697,7 @@ impl Vmpeg {
             audio_armed: false,
             audio_enabled: false,
             audio_start_dclk: None,
-            audio_clock_anchor: None,
+            system_clock_anchor: None,
             audio_underflow_reported: false,
             audio_underflow_after_eoi_ack: false,
             video_armed: false,
@@ -677,7 +707,6 @@ impl Vmpeg {
             video_update_scroll: false,
             video_update_cycles: 0,
             play_start_dclk: None,
-            video_clock_anchor: None,
             pause_irq_dclk: None,
             video_input: Vec::new(),
             audio_input: Vec::new(),
@@ -687,7 +716,9 @@ impl Vmpeg {
             audio_sample_accum: 0,
             video_decoder: Mpeg1VideoDecoder::default(),
             video_frames: VecDeque::new(),
+            pending_video_frame: None,
             current_video_frame: None,
+            display_generation: 0,
             video_cycle_accum: 0,
             video_cycles_per_frame: CLOCK_HZ / 25,
             last_picture_due_dclk: None,
@@ -747,7 +778,7 @@ impl Vmpeg {
         self.audio_armed = false;
         self.audio_enabled = false;
         self.audio_start_dclk = None;
-        self.audio_clock_anchor = None;
+        self.system_clock_anchor = None;
         self.audio_underflow_reported = false;
         self.audio_underflow_after_eoi_ack = false;
         self.video_armed = false;
@@ -757,7 +788,6 @@ impl Vmpeg {
         self.video_update_scroll = false;
         self.video_update_cycles = 0;
         self.play_start_dclk = None;
-        self.video_clock_anchor = None;
         self.pause_irq_dclk = None;
         self.video_input.clear();
         self.audio_input.clear();
@@ -768,12 +798,15 @@ impl Vmpeg {
         self.audio_sample_accum = 0;
         self.video_decoder.reset();
         self.video_frames.clear();
+        self.pending_video_frame = None;
         self.current_video_frame = None;
+        self.display_generation = 0;
         self.stats.current_video_width = 0;
         self.stats.current_video_height = 0;
         self.stats.current_video_rgb_min = 0;
         self.stats.current_video_rgb_max = 0;
         self.stats.current_video_frame_hash = 0;
+        self.stats.display_generation = 0;
         self.video_cycle_accum = 0;
         self.video_cycles_per_frame = CLOCK_HZ / 25;
         self.last_picture_due_dclk = None;
@@ -955,13 +988,7 @@ impl Vmpeg {
                 self.video_input.clear();
                 if self.video_armed {
                     if let Some(scr) = self.video_demux.last_scr {
-                        if self.video_clock_anchor.is_none() {
-                            self.video_clock_anchor = Some((scr, self.dclk));
-                            log::debug!(
-                                "vmpeg: video clock anchored at DCLK {} / SCR {scr}",
-                                self.dclk
-                            );
-                        }
+                        self.ensure_system_clock_anchor(scr, "video");
                     }
                 }
                 self.schedule_video_start();
@@ -1001,6 +1028,7 @@ impl Vmpeg {
                     self.signal_video_program_end();
                 }
                 if !frames.is_empty() {
+                    self.stats.video_first_decoded_dclk.get_or_insert(self.dclk);
                     if self.video_armed && self.play_start_dclk.is_none() {
                         // Timestamp-less streams still need a small decoder
                         // priming delay. Timestamped streams use their actual
@@ -1057,13 +1085,7 @@ impl Vmpeg {
                 self.audio_input.clear();
                 if self.audio_armed {
                     if let Some(scr) = self.audio_demux.last_scr {
-                        if self.audio_clock_anchor.is_none() {
-                            self.audio_clock_anchor = Some((scr, self.dclk));
-                            log::debug!(
-                                "vmpeg: audio clock anchored at DCLK {} / SCR {scr}",
-                                self.dclk
-                            );
-                        }
+                        self.ensure_system_clock_anchor(scr, "audio");
                     }
                 }
                 if self.audio_demux.stats.program_ends != program_ends {
@@ -1074,20 +1096,28 @@ impl Vmpeg {
                 }
                 let decoded = self.mp2.decode_available(&mut self.audio_demux.audio);
                 self.stats.decoded_audio_frames += decoded;
+                if decoded != 0 {
+                    self.stats.audio_first_decoded_dclk.get_or_insert(self.dclk);
+                }
                 if decoded != 0 && self.audio_armed && self.audio_start_dclk.is_none() {
                     if let (Some(scr), Some(pts)) =
-                        (self.audio_demux.last_scr, self.audio_demux.last_audio_pts)
+                        (self.audio_demux.last_scr, self.audio_demux.first_audio_pts)
                     {
                         // MPEG timestamps use 90 kHz; FMA DCLK uses 45 kHz.
-                        // Keep the mapping established by the first accepted
-                        // pack. Later packs can arrive well ahead of their SCR.
+                        // Green Book IX.4.6.2.2 requires the decoder which
+                        // first receives disc data to supply synchronization
+                        // information to the other decoder. Later DMA arrival
+                        // must not create a second presentation timeline.
                         let (anchor_scr, anchor_dclk) =
-                            *self.audio_clock_anchor.get_or_insert((scr, self.dclk));
-                        self.audio_start_dclk = Some(Self::anchored_timestamp_deadline(
-                            anchor_dclk,
-                            anchor_scr,
-                            pts,
-                        ));
+                            self.ensure_system_clock_anchor(scr, "audio");
+                        let deadline =
+                            Self::anchored_timestamp_deadline(anchor_dclk, anchor_scr, pts);
+                        self.audio_start_dclk = Some(deadline);
+                        self.stats.audio_start_pts = Some(pts);
+                        self.stats.audio_start_deadline_dclk = Some(deadline);
+                        log::debug!(
+                            "vmpeg: audio start scheduled at DCLK {deadline} from anchor DCLK {anchor_dclk} / SCR {anchor_scr}, pack SCR {scr}, PTS {pts}"
+                        );
                     }
                 }
                 let command = Self::word(&self.fma_regs, FMA_CMD) & !0x8000;
@@ -1116,7 +1146,13 @@ impl Vmpeg {
                 .audio_start_dclk
                 .is_some_and(|start| self.dclk.wrapping_sub(start) < 0x8000_0000)
         {
+            log::debug!(
+                "vmpeg: audio playback started at DCLK {} (deadline {:?})",
+                self.dclk,
+                self.audio_start_dclk
+            );
             self.audio_enabled = true;
+            self.stats.audio_enabled_dclk = Some(self.dclk);
             self.stats.audio_start_events += 1;
             Self::or_word(&mut self.fma_regs, 0x02, 0x0010);
             Self::or_word(&mut self.fma_regs, FMA_ISR, 0x0010);
@@ -1126,9 +1162,15 @@ impl Vmpeg {
             .play_start_dclk
             .is_some_and(|start| self.dclk.wrapping_sub(start) < 0x8000_0000)
         {
+            log::debug!(
+                "vmpeg: video playback started at DCLK {} (deadline {:?})",
+                self.dclk,
+                self.play_start_dclk
+            );
             self.play_start_dclk = None;
             self.video_armed = false;
             self.playing = true;
+            self.stats.video_enabled_dclk = Some(self.dclk);
             self.prime_video_output();
         }
         if self
@@ -1163,6 +1205,10 @@ impl Vmpeg {
             self.audio_sample_accum += cycles * 44_100;
             while self.audio_sample_accum >= CLOCK_HZ && self.mp2.pcm.len() >= 2 {
                 self.audio_sample_accum -= CLOCK_HZ;
+                if self.stats.audio_first_output_dclk.is_none() {
+                    self.stats.audio_first_output_dclk = Some(self.dclk);
+                    self.stats.audio_first_output_events += 1;
+                }
                 self.audio_out.push(self.mp2.pcm.pop_front().unwrap_or(0));
                 self.audio_out.push(self.mp2.pcm.pop_front().unwrap_or(0));
             }
@@ -1172,6 +1218,13 @@ impl Vmpeg {
         if self.playing {
             self.video_cycle_accum = self.video_cycle_accum.saturating_add(cycles);
             while self.video_cycle_accum >= self.video_cycles_per_frame {
+                if self.pending_video_frame.is_some() {
+                    // The video generator has not yet latched the previous
+                    // picture at VSYNC. Keep one deadline pending instead of
+                    // replacing its source buffer during the active raster.
+                    self.video_cycle_accum = self.video_cycles_per_frame;
+                    break;
+                }
                 if self.last_picture_waiting_for_pts() {
                     // Retry on the next device tick without accumulating a
                     // large burst of overdue frame periods.
@@ -1196,6 +1249,7 @@ impl Vmpeg {
     /// normal decoder interrupts, then polls ISR.VSYNC before releasing the
     /// device.
     pub(crate) fn notify_vsync(&mut self) {
+        self.latch_pending_video_frame();
         Self::or_word(&mut self.fmv_regs, FMV_ISR, 0x0800);
     }
 
@@ -1209,7 +1263,7 @@ impl Vmpeg {
         if !self.video_armed || self.play_start_dclk.is_some() {
             return;
         }
-        let (Some(scr), Some(pts)) = (self.video_demux.last_scr, self.video_demux.last_video_pts)
+        let (Some(scr), Some(pts)) = (self.video_demux.last_scr, self.video_demux.first_video_pts)
         else {
             return;
         };
@@ -1217,12 +1271,11 @@ impl Vmpeg {
         // The PTS-SCR lead is the decoder's presentation latency; presenting
         // immediately after DMA makes LPD occur before the disc-side EOR and
         // breaks titles which pipeline the next real-time record.
-        let (anchor_scr, anchor_dclk) = *self.video_clock_anchor.get_or_insert((scr, self.dclk));
-        self.play_start_dclk = Some(Self::anchored_timestamp_deadline(
-            anchor_dclk,
-            anchor_scr,
-            pts,
-        ));
+        let (anchor_scr, anchor_dclk) = self.ensure_system_clock_anchor(scr, "video");
+        let deadline = Self::anchored_timestamp_deadline(anchor_dclk, anchor_scr, pts);
+        self.play_start_dclk = Some(deadline);
+        self.stats.video_start_pts = Some(pts);
+        self.stats.video_start_deadline_dclk = Some(deadline);
         log::debug!(
             "vmpeg: video start scheduled at DCLK {} from SCR {scr} PTS {pts}",
             self.play_start_dclk.unwrap_or(self.dclk)
@@ -1230,10 +1283,28 @@ impl Vmpeg {
     }
 
     fn present_next_video_frame(&mut self) -> bool {
+        if self.pending_video_frame.is_some() {
+            return false;
+        }
         if self.last_picture_waiting_for_pts() {
             return false;
         }
         let Some(frame) = self.video_frames.pop_front() else {
+            return false;
+        };
+        self.pending_video_frame = Some(frame);
+        true
+    }
+
+    /// Make the scheduled picture visible on the first field after VSYNC.
+    ///
+    /// The MCD251 has separate reconstruction and video-generator consumers
+    /// of its DRAM (Technical Summary, Figure 1 and Functional Description).
+    /// Its externally supplied VSYNC defines the vertical display boundary;
+    /// changing the generator's source between scanlines would combine two
+    /// reconstructed pictures in one field.
+    fn latch_pending_video_frame(&mut self) -> bool {
+        let Some(frame) = self.pending_video_frame.take() else {
             return false;
         };
         Self::set_word(&mut self.fmv_regs, 0x02, frame.width as u16);
@@ -1283,6 +1354,12 @@ impl Vmpeg {
                     })
                 });
         self.current_video_frame = Some(frame);
+        if self.stats.video_first_latched_dclk.is_none() {
+            self.stats.video_first_latched_dclk = Some(self.dclk);
+            self.stats.video_first_latch_events += 1;
+        }
+        self.display_generation = self.display_generation.wrapping_add(1);
+        self.stats.display_generation = self.display_generation;
         self.stats.presented_video_frames += 1;
         Self::or_word(&mut self.fmv_regs, FMV_ISR, 0x0004);
         if self.video_update_pending && !self.video_update_scroll {
@@ -1313,7 +1390,7 @@ impl Vmpeg {
     }
 
     fn video_timestamp_deadline(&self) -> Option<u32> {
-        let (scr, dclk) = self.video_clock_anchor?;
+        let (scr, dclk) = self.system_clock_anchor?;
         Some(Self::anchored_timestamp_deadline(
             dclk,
             scr,
@@ -1332,6 +1409,43 @@ impl Vmpeg {
             && self
                 .last_picture_due_dclk
                 .is_some_and(|deadline| !self.dclk_reached(deadline))
+    }
+
+    fn ensure_system_clock_anchor(&mut self, scr: u64, source: &str) -> (u64, u32) {
+        if let Some(anchor) = self.system_clock_anchor {
+            return anchor;
+        }
+        let anchor = (scr, self.dclk);
+        self.system_clock_anchor = Some(anchor);
+        self.stats.system_clock_anchor_scr = Some(scr);
+        self.stats.system_clock_anchor_dclk = Some(self.dclk);
+        log::debug!(
+            "vmpeg: system clock anchored by {source} at DCLK {} / SCR {scr}",
+            self.dclk
+        );
+        anchor
+    }
+
+    fn reset_audio_presentation_probe(&mut self) {
+        self.stats.audio_start_pts = None;
+        self.stats.audio_start_deadline_dclk = None;
+        self.stats.audio_first_decoded_dclk = None;
+        self.stats.audio_enabled_dclk = None;
+        self.stats.audio_first_output_dclk = None;
+    }
+
+    fn reset_video_presentation_probe(&mut self) {
+        self.stats.video_start_pts = None;
+        self.stats.video_start_deadline_dclk = None;
+        self.stats.video_first_decoded_dclk = None;
+        self.stats.video_enabled_dclk = None;
+        self.stats.video_first_latched_dclk = None;
+    }
+
+    fn release_system_clock_if_idle(&mut self) {
+        if !self.audio_armed && !self.audio_enabled && !self.video_armed && !self.playing {
+            self.system_clock_anchor = None;
+        }
     }
 
     fn complete_video_update(&mut self) {
@@ -1405,6 +1519,7 @@ impl Vmpeg {
             | u32::from(Self::word(&self.fmv_regs, 0x6A) as u8);
         Some(ExternalVideo {
             frame,
+            generation: self.display_generation,
             display_x: usize::from(Self::word(&self.fmv_regs, 0x76)),
             display_y: usize::from(Self::word(&self.fmv_regs, 0x74)),
             window_x,
@@ -1537,7 +1652,6 @@ impl Vmpeg {
                     self.audio_armed = false;
                     self.audio_enabled = false;
                     self.audio_start_dclk = None;
-                    self.audio_clock_anchor = None;
                     self.audio_input.clear();
                     // A stopped transport may leave an incomplete PES packet
                     // in the incremental parser. It belongs to the old play
@@ -1545,6 +1659,7 @@ impl Vmpeg {
                     self.audio_demux.pending.clear();
                     self.audio_demux.audio.clear();
                     self.audio_demux.last_scr = None;
+                    self.audio_demux.first_audio_pts = None;
                     self.audio_demux.last_audio_pts = None;
                     Self::set_word(&mut self.fma_regs, 0x02, 0x0200);
                     Self::set_word(&mut self.fma_regs, FMA_ISR, 0);
@@ -1558,10 +1673,12 @@ impl Vmpeg {
                     self.audio_underflow_reported = false;
                     self.audio_underflow_after_eoi_ack = false;
                     self.audio_iso_end_reported = false;
+                    self.release_system_clock_if_idle();
                 }
                 if value & 0x0002 != 0 {
                     if !self.audio_armed {
                         log::debug!("vmpeg: audio play armed at DCLK {}", self.dclk);
+                        self.reset_audio_presentation_probe();
                     }
                     self.audio_armed = true;
                 }
@@ -1597,7 +1714,7 @@ impl Vmpeg {
                     self.decoder_enabled = false;
                     self.video_armed = false;
                     self.playing = false;
-                    self.video_clock_anchor = None;
+                    self.release_system_clock_if_idle();
                 }
                 if value & 0x0100 != 0 {
                     log::debug!("vmpeg: video decoder reset at DCLK {}", self.dclk);
@@ -1616,11 +1733,13 @@ impl Vmpeg {
                         .saturating_add(self.video_decoder.errors);
                     self.video_decoder.reset();
                     self.video_frames.clear();
+                    self.pending_video_frame = None;
                     self.current_video_frame = None;
+                    self.display_generation = 0;
+                    self.stats.display_generation = 0;
                     self.video_armed = false;
                     self.playing = false;
                     self.play_start_dclk = None;
-                    self.video_clock_anchor = None;
                     self.last_picture_due_dclk = None;
                     self.pause_irq_dclk = None;
                     Self::set_word(&mut self.fmv_regs, FMV_ISR, 0);
@@ -1629,8 +1748,10 @@ impl Vmpeg {
                     self.video_underflow_after_eoi_ack = false;
                     self.video_sequence_end_seen = false;
                     self.video_demux.last_scr = None;
+                    self.video_demux.first_video_pts = None;
                     self.video_demux.last_video_pts = None;
                     self.video_demux.last_video_dts = None;
+                    self.release_system_clock_if_idle();
                 }
                 if value & 0x1000 != 0 {
                     log::debug!("vmpeg: video decoder enable at DCLK {}", self.dclk);
@@ -1639,6 +1760,7 @@ impl Vmpeg {
                 if value & 0x0008 != 0 {
                     log::debug!("vmpeg: video play at DCLK {}", self.dclk);
                     self.stats.play_events += 1;
+                    self.reset_video_presentation_probe();
                     self.video_armed = true;
                     self.play_start_dclk = None;
                     self.schedule_video_start();
@@ -1662,9 +1784,9 @@ impl Vmpeg {
                     self.video_armed = false;
                     self.playing = false;
                     self.play_start_dclk = None;
-                    self.video_clock_anchor = None;
                     self.last_picture_due_dclk = None;
                     self.pause_irq_dclk = None;
+                    self.release_system_clock_if_idle();
                 }
                 if value & 0x8000 != 0 {
                     self.dma_target = Some(DmaTarget::Video);
@@ -1860,6 +1982,12 @@ mod tests {
         assert!(dvc.write8(0xE0_40C1, low));
     }
 
+    fn write_fma_command(dvc: &mut Vmpeg, command: u16) {
+        let [high, low] = command.to_be_bytes();
+        assert!(dvc.write8(0xE0_3000, high));
+        assert!(dvc.write8(0xE0_3001, low));
+    }
+
     fn test_video_frame(pixel: u32) -> DecodedVideoFrame {
         DecodedVideoFrame {
             width: 1,
@@ -1937,6 +2065,7 @@ mod tests {
         };
         let video = ExternalVideo {
             frame: &frame,
+            generation: 1,
             display_x: 1,
             display_y: 0,
             window_x: 0,
@@ -1967,6 +2096,7 @@ mod tests {
         };
         let video = ExternalVideo {
             frame: &frame,
+            generation: 1,
             display_x: 0,
             display_y: 0,
             window_x: 7,
@@ -2071,8 +2201,30 @@ mod tests {
         bytes.extend(mpeg1_pes(0xE0, b"second"));
         let mut demux = MpegSystemDemux::default();
         demux.feed(&bytes);
+        assert_eq!(demux.first_video_pts, Some(123_456));
         assert_eq!(demux.last_video_pts, Some(123_456));
         assert_eq!(demux.last_video_dts, Some(123_456));
+    }
+
+    #[test]
+    fn startup_timestamp_is_the_first_pts_in_a_dma_batch() {
+        // A VMPEG DMA can contain several timestamp-bearing PES packets.
+        // Scheduling after parsing the whole batch from `last_*_pts` applies
+        // a later packet's timestamp to the first decoded access unit and
+        // creates an artificial A/V offset when audio and video DMA sizes
+        // differ. The startup timestamp belongs to the first selected PES.
+        let mut bytes = mpeg1_pes_with_pts(0xE0, 68_999, b"first picture");
+        bytes.extend(mpeg1_pes_with_pts(0xE0, 105_035, b"later picture"));
+        bytes.extend(mpeg1_pes_with_pts(0xC0, 68_999, b"first audio"));
+        bytes.extend(mpeg1_pes_with_pts(0xC0, 78_403, b"later audio"));
+
+        let mut demux = MpegSystemDemux::default();
+        demux.feed(&bytes);
+
+        assert_eq!(demux.first_video_pts, Some(68_999));
+        assert_eq!(demux.last_video_pts, Some(105_035));
+        assert_eq!(demux.first_audio_pts, Some(68_999));
+        assert_eq!(demux.last_audio_pts, Some(78_403));
     }
 
     #[test]
@@ -2156,6 +2308,17 @@ mod tests {
         assert!(dvc.playing);
         dvc.tick(100);
         assert_eq!(dvc.video_frames.len(), 1);
+        assert!(dvc.pending_video_frame.is_some());
+        assert_eq!(
+            dvc.current_video_frame
+                .as_ref()
+                .and_then(|frame| frame.pixels.first()),
+            Some(&1)
+        );
+        assert_eq!(dvc.stats.presented_video_frames, 0);
+
+        dvc.notify_vsync();
+        assert!(dvc.pending_video_frame.is_none());
         assert_eq!(
             dvc.current_video_frame
                 .as_ref()
@@ -2163,6 +2326,90 @@ mod tests {
             Some(&2)
         );
         assert_eq!(dvc.stats.presented_video_frames, 1);
+    }
+
+    #[test]
+    fn scheduled_picture_is_latched_only_at_vertical_sync() {
+        // MCD251 Technical Summary Figure 1 separates reconstruction from
+        // the externally synchronized video generator. A decoded picture may
+        // become due during active display, but it must not replace the
+        // generator's source until the next vertical boundary.
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+        dvc.current_video_frame = Some(test_video_frame(1));
+        dvc.video_frames.push_back(test_video_frame(2));
+
+        assert!(dvc.present_next_video_frame());
+        assert_eq!(dvc.display_generation, 0);
+        assert_eq!(
+            dvc.external_video()
+                .and_then(|video| video.frame.pixels.first()),
+            None,
+            "hidden video should remain hidden during scheduling"
+        );
+        assert_eq!(
+            dvc.current_video_frame
+                .as_ref()
+                .and_then(|frame| frame.pixels.first()),
+            Some(&1),
+            "active display must retain the previous picture"
+        );
+        assert_eq!(dvc.stats.presented_video_frames, 0);
+
+        dvc.notify_vsync();
+        assert_eq!(dvc.display_generation, 1);
+        assert_eq!(
+            dvc.current_video_frame
+                .as_ref()
+                .and_then(|frame| frame.pixels.first()),
+            Some(&2)
+        );
+        assert_eq!(dvc.stats.presented_video_frames, 1);
+    }
+
+    #[test]
+    fn presentation_probes_record_only_the_first_output_of_each_play() {
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+
+        write_fma_command(&mut dvc, 0x0002);
+        dvc.audio_enabled = true;
+        dvc.mp2.pcm.extend([1, 1, 2, 2]);
+        dvc.tick(CLOCK_HZ / 44_100 + 1);
+        let first_audio_dclk = dvc.stats.audio_first_output_dclk;
+        assert!(first_audio_dclk.is_some());
+        assert_eq!(dvc.stats.audio_first_output_events, 1);
+
+        dvc.tick(CLOCK_HZ / 44_100 + 1);
+        assert_eq!(dvc.stats.audio_first_output_dclk, first_audio_dclk);
+        assert_eq!(dvc.stats.audio_first_output_events, 1);
+
+        write_fma_command(&mut dvc, 0x0001);
+        write_fma_command(&mut dvc, 0x0002);
+        assert_eq!(dvc.stats.audio_first_output_dclk, None);
+        dvc.audio_enabled = true;
+        dvc.mp2.pcm.extend([3, 3]);
+        dvc.tick(CLOCK_HZ / 44_100 + 1);
+        assert_eq!(dvc.stats.audio_first_output_events, 2);
+
+        write_fmv_system_command(&mut dvc, 0x0008);
+        dvc.pending_video_frame = Some(test_video_frame(1));
+        dvc.notify_vsync();
+        let first_video_dclk = dvc.stats.video_first_latched_dclk;
+        assert!(first_video_dclk.is_some());
+        assert_eq!(dvc.stats.video_first_latch_events, 1);
+
+        dvc.pending_video_frame = Some(test_video_frame(2));
+        dvc.notify_vsync();
+        assert_eq!(dvc.stats.video_first_latched_dclk, first_video_dclk);
+        assert_eq!(dvc.stats.video_first_latch_events, 1);
+
+        write_fmv_system_command(&mut dvc, 0x0080);
+        write_fmv_system_command(&mut dvc, 0x0008);
+        assert_eq!(dvc.stats.video_first_latched_dclk, None);
+        dvc.pending_video_frame = Some(test_video_frame(3));
+        dvc.notify_vsync();
+        assert_eq!(dvc.stats.video_first_latch_events, 2);
     }
 
     #[test]
@@ -2174,6 +2421,7 @@ mod tests {
         dvc.decoder_enabled = true;
         dvc.playing = true;
         dvc.current_video_frame = Some(test_video_frame(1));
+        dvc.pending_video_frame = Some(test_video_frame(2));
         dvc.video_frames.push_back(test_video_frame(2));
         dvc.last_picture_due_dclk = Some(123);
 
@@ -2182,6 +2430,7 @@ mod tests {
         assert!(dvc.decoder_enabled);
         assert!(!dvc.playing);
         assert!(dvc.current_video_frame.is_none());
+        assert!(dvc.pending_video_frame.is_none());
         assert!(dvc.video_frames.is_empty());
         assert_eq!(dvc.last_picture_due_dclk, None);
         assert_eq!(Vmpeg::word(&dvc.fmv_regs, FMV_ISR), 0);
@@ -2369,7 +2618,7 @@ mod tests {
     fn presentation_deadline_keeps_the_initial_scr_clock_mapping() {
         let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
         let mut dvc = Vmpeg::new(config).unwrap();
-        dvc.video_clock_anchor = Some((1_000, 500));
+        dvc.system_clock_anchor = Some((1_000, 500));
         dvc.video_demux.last_scr = Some(5_000);
         dvc.video_demux.last_video_pts = Some(7_000);
         dvc.dclk = 2_000;
@@ -2377,6 +2626,27 @@ mod tests {
         // The 90 kHz PTS remains tied to the original 45 kHz DCLK anchor;
         // arrival of a later pack does not move the presentation timeline.
         assert_eq!(dvc.video_timestamp_deadline(), Some(3_500));
+    }
+
+    #[test]
+    fn synchronized_audio_video_use_the_first_stream_clock() {
+        // Green Book IX.4.6.2.2: when both plays come from disc, whichever
+        // decoder first receives data supplies synchronization information
+        // to the other. A delayed second DMA must not establish a new clock.
+        let config = DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap();
+        let mut dvc = Vmpeg::new(config).unwrap();
+        dvc.system_clock_anchor = Some((90_000, 45_000));
+        dvc.dclk = 90_000;
+        dvc.video_armed = true;
+        dvc.video_demux.last_scr = Some(90_000);
+        dvc.video_demux.first_video_pts = Some(93_600);
+        dvc.video_demux.last_video_pts = Some(180_000);
+
+        dvc.schedule_video_start();
+
+        assert_eq!(dvc.play_start_dclk, Some(46_800));
+        assert_eq!(dvc.stats.video_start_pts, Some(93_600));
+        assert_eq!(dvc.stats.video_start_deadline_dclk, Some(46_800));
     }
 
     #[test]
@@ -2408,6 +2678,10 @@ mod tests {
         dvc.dclk = 200;
         assert!(dvc.present_next_video_frame());
         assert!(dvc.video_frames.is_empty());
+        assert!(dvc.pending_video_frame.is_some());
+        assert_eq!(Vmpeg::word(&dvc.fmv_regs, FMV_ISR), 0);
+
+        dvc.notify_vsync();
         assert_eq!(
             Vmpeg::word(&dvc.fmv_regs, FMV_ISR) & (0x0004 | 0x0008 | 0x0020),
             0x002C

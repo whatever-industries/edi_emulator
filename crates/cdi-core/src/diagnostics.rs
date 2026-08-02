@@ -76,6 +76,8 @@ pub struct DisplayProvenanceSnapshot {
     pub plane_b_hash: u64,
     /// Composed hardware raster before frontend presentation.
     pub raster_hash: u64,
+    /// Fields that sampled more than one MCD251 picture generation.
+    pub mixed_external_generation_fields: u64,
 }
 
 /// Green Book VII.2 Play Control List state decoded from guest RAM.
@@ -286,7 +288,7 @@ pub(crate) struct DiagnosticProbe {
     pub cdic_state: [u16; 5],
     pub cdic_interrupt: bool,
     pub dvc_errors: [u64; 6],
-    pub dvc_milestones: [u64; 10],
+    pub dvc_milestones: [u64; 12],
     pub dvc_state: Option<DvcRegisterSnapshot>,
 }
 

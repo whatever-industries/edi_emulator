@@ -57,6 +57,8 @@ if paused is None or stats["continue_events"] < 1:
     raise SystemExit("native FMVDemo pause/continue inputs did not reach both commands")
 if stats["demux_errors"] or stats["video_errors"] or stats["audio_errors"]:
     raise SystemExit("decoder error occurred during native pause/continue scenario")
+if evidence["snapshot"]["display_provenance"]["mixed_external_generation_fields"]:
+    raise SystemExit("one MCD212 field sampled more than one VMPEG picture generation")
 if stats["dma_words"] <= paused["dma_words"] or stats["presented_video_frames"] <= paused["presented_video_frames"]:
     raise SystemExit(
         "VMPEG accepted Continue but disc delivery/presentation did not resume; "

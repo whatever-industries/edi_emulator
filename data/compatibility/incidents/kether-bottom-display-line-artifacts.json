@@ -6,7 +6,7 @@
   "expected": "The displayed active picture ends at the authored lower boundary without exposing content-correlated decoded or drawmap data from an extra row",
   "status": "reproduced",
   "reported_revision": "52013394225572beb9346dbefea136cf8f92596c",
-  "last_reproduced_revision": "52013394225572beb9346dbefea136cf8f92596c",
+  "last_reproduced_revision": "c5ac422185774c8e2e16f207812ccf2588259550",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": null,
@@ -35,7 +35,8 @@
       ],
       "contradicting_evidence": [
         "No PCL destination or drawmap capture yet establishes that the artifact exists before MCD212 fetch.",
-        "The exact Kether real-time file and coding active in each submitted screenshot have not yet been traced."
+        "The exact Kether real-time file and coding active in each submitted screenshot have not yet been traced.",
+        "Women of the World - Brazilian Girls exposes a similar bottom-row pattern through the VMPEG external-video path, which bypasses the base-plane RTF drawmap route and therefore weakens a single shared RTF-transfer explanation."
       ],
       "falsifying_test": "Capture the delivered real-time record, PCL destination bounds, and final two drawmap rows for a stable affected Kether frame. If the drawmap is clean while the individual MCD212 plane contains the artifact, common RTF transfer/final-row handling is not causal.",
       "citations": [
@@ -52,7 +53,8 @@
         "The same symptom occurs across PAL Kether and NTSC Laser Lords and across DYUV/RL7/CLUT8 versus QHY source coding."
       ],
       "contradicting_evidence": [
-        "If the unintended row is already present in the drawmap, MCD212 fetch and composition may be behaving correctly."
+        "If the unintended row is already present in the drawmap, MCD212 fetch and composition may be behaving correctly.",
+        "The VCD counterexample reaches MCD212 through the external-video input rather than a decoded base-plane drawmap, so visually similar final-row defects could still have independent upstream causes."
       ],
       "falsifying_test": "Compare the last two completed drawmap rows, individual decoded MCD212 planes, composed hardware raster, and frontend image for the same frame. An artifact already present in the drawmap falsifies an MCD212-only explanation.",
       "citations": [
@@ -89,6 +91,11 @@
       "result": "cross-title-corroboration",
       "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
       "notes": "Kether uses CLUT8/RL7/DYUV RTF video and no DVC, while Laser Lords uses QHY. Their shared content-correlated lower-edge symptom weakens a codec-specific explanation and prioritizes common RTF destination, drawmap, or MCD212 boundary stages."
+    },
+    {
+      "result": "related-different-path",
+      "revision": "c5ac422185774c8e2e16f207812ccf2588259550",
+      "notes": "Women of the World - Brazilian Girls Europe shows a thin changing multicolored pattern at the bottom of a VCD MPEG frame. Because this uses VMPEG external video rather than the base-plane RTF drawmap path, it weakens common CDFM/RTF transfer as the sole explanation and raises the shared MCD212/aperture boundary while preserving the possibility of two independent upstream final-line defects."
     }
   ]
 }

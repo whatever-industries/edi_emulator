@@ -156,6 +156,18 @@ struct CaseResult {
     unique_rasters: Option<usize>,
     longest_identical_raster_run: Option<usize>,
     dvc_errors: Option<u64>,
+    #[serde(default)]
+    disc_content_kind: Option<cdi_disc::DiscContentKind>,
+    #[serde(default)]
+    cdic_lba: Option<u32>,
+    #[serde(default)]
+    vcd_specification_version: Option<u16>,
+    #[serde(default)]
+    vcd_entry_count: Option<usize>,
+    #[serde(default)]
+    vcd_list_count: Option<usize>,
+    #[serde(default)]
+    vcd_current_entry: Option<u16>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -323,6 +335,10 @@ fn run_case(
     };
 
     let stats = evidence.as_ref().map(evidence_stats);
+    let vcd_current_entry = evidence.as_ref().and_then(|evidence| {
+        let navigation = evidence.disc.as_ref()?.vcd_navigation.as_ref()?;
+        vcd_entry_at_lba(navigation, evidence.snapshot.cdic.current_lba)
+    });
     Ok(CaseResult {
         id: case.id.clone(),
         title: case.title.clone(),
@@ -362,7 +378,40 @@ fn run_case(
             .as_ref()
             .map(|stats| stats.longest_identical_raster_run),
         dvc_errors: evidence.as_ref().map(total_dvc_errors),
+        disc_content_kind: evidence
+            .as_ref()
+            .and_then(|evidence| evidence.disc.as_ref())
+            .map(|disc| disc.content_kind),
+        cdic_lba: evidence
+            .as_ref()
+            .map(|evidence| evidence.snapshot.cdic.current_lba),
+        vcd_specification_version: evidence
+            .as_ref()
+            .and_then(|evidence| evidence.disc.as_ref())
+            .and_then(|disc| disc.vcd_navigation.as_ref())
+            .map(|navigation| navigation.specification_version),
+        vcd_entry_count: evidence
+            .as_ref()
+            .and_then(|evidence| evidence.disc.as_ref())
+            .and_then(|disc| disc.vcd_navigation.as_ref())
+            .map(|navigation| navigation.entries.len()),
+        vcd_list_count: evidence
+            .as_ref()
+            .and_then(|evidence| evidence.disc.as_ref())
+            .and_then(|disc| disc.vcd_navigation.as_ref())
+            .map(|navigation| navigation.lists.len()),
+        vcd_current_entry,
     })
+}
+
+fn vcd_entry_at_lba(navigation: &cdi_disc::VcdNavigationInventory, lba: u32) -> Option<u16> {
+    let absolute_frame = lba.saturating_add(150);
+    navigation
+        .entries
+        .iter()
+        .filter(|entry| entry.absolute_frame <= absolute_frame)
+        .max_by_key(|entry| entry.absolute_frame)
+        .map(|entry| entry.number)
 }
 
 fn boot_command(
@@ -624,11 +673,27 @@ fn print_report(report_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             display_option(case.longest_identical_raster_run),
             display_option(case.dvc_errors),
         );
+        if let Some(kind) = case.disc_content_kind {
+            println!(
+                "  media={kind:?}; cdic-lba={}; vcd-version={}; entries={}; lists={}; current-entry={}",
+                display_option(case.cdic_lba),
+                case.vcd_specification_version
+                    .map(format_vcd_version)
+                    .unwrap_or_else(|| "n/a".to_owned()),
+                display_option(case.vcd_entry_count),
+                display_option(case.vcd_list_count),
+                display_option(case.vcd_current_entry),
+            );
+        }
         for reason in case.reasons {
             println!("  {reason}");
         }
     }
     Ok(())
+}
+
+fn format_vcd_version(version: u16) -> String {
+    format!("{}.{}", version >> 8, version & 0xff)
 }
 
 fn display_option<T: std::fmt::Display>(value: Option<T>) -> String {
@@ -803,5 +868,41 @@ mod tests {
         assert!(!json.contains("/Users/"));
         assert!(!json.contains("/Volumes/"));
         assert!(!json.contains(".cue"));
+    }
+
+    #[test]
+    fn vcd_entry_lookup_uses_absolute_disc_time() {
+        let navigation = cdi_disc::VcdNavigationInventory {
+            specification_version: 0x0200,
+            album_id: "TEST".into(),
+            volume_count: 1,
+            volume_number: 1,
+            psd_bytes: 0,
+            offset_multiplier: 8,
+            maximum_list_id: 0,
+            entries: vec![
+                cdi_disc::VcdEntryInventory {
+                    number: 1,
+                    track: 2,
+                    minute: 0,
+                    second: 2,
+                    frame: 0,
+                    absolute_frame: 150,
+                },
+                cdi_disc::VcdEntryInventory {
+                    number: 2,
+                    track: 2,
+                    minute: 0,
+                    second: 3,
+                    frame: 0,
+                    absolute_frame: 225,
+                },
+            ],
+            lists: Vec::new(),
+        };
+
+        assert_eq!(vcd_entry_at_lba(&navigation, 0), Some(1));
+        assert_eq!(vcd_entry_at_lba(&navigation, 74), Some(1));
+        assert_eq!(vcd_entry_at_lba(&navigation, 75), Some(2));
     }
 }

@@ -107,7 +107,7 @@
     {
       "requirement": "MCD212 cursor blink timing uses twelve television fields per programmed on/off unit",
       "subsystem": "mcd212",
-      "status": "gap",
+      "status": "implemented-tested",
       "specification": [
         "MCD212 section 7.6 and cursor-control register description"
       ],
@@ -170,18 +170,23 @@
       "subsystem": "vcd",
       "status": "gap",
       "specification": [
+        "Video CD 2.0 chapter III section 2.5 and chapter VI",
         "Video CD on CD-i Release 4.1 pages 7 through 9"
       ],
       "firmware_evidence": [],
       "source_symbols": [
         "cdi_disc::DiscImage::inspect",
+        "cdi_disc::DiscContentKind",
+        "cdi_disc::VcdNavigationInventory",
         "cdi_core::cdic",
         "cdi_core::dvc"
       ],
-      "tests": [],
+      "tests": [
+        "cdi_disc::inventory::tests::synthetic_bridge_pvd_and_cdi_entry_point_classify_video_cd",
+        "cdi_disc::inventory::tests::classifies_bridge_profiles_from_standardized_filesystem_evidence"
+      ],
       "known_gaps": [
-        "The multilingual dirty-disc dialog is known native engine behavior but is not correlated with the first failing PCL or decoder event",
-        "Synthetic CDI/CDI_VCD.APP and PVD entry-point coverage is pending"
+        "The multilingual dirty-disc dialog is known native engine behavior but is not correlated with the selected PSD list and first failing PCL or decoder event"
       ]
     },
     {
@@ -224,11 +229,12 @@
         "scripts/test-vmpeg-stream-switch-local.sh"
       ],
       "tests": [
-        "dvc::tests::audio_stream_switch_is_recorded_without_changing_decoder_state"
+        "dvc::tests::audio_stream_switch_waits_for_selected_pes_before_reacquiring_sync",
+        "dvc::tests::mp2_stream_boundary_discards_only_incomplete_segment_tail",
+        "scripts/test-vmpeg-stream-switch-local.sh"
       ],
       "known_gaps": [
-        "The native Dutch-to-Japanese title gate currently records one MP2 error and 54 sync-acquisition bytes",
-        "The hardware FIFO boundary for a changed FMA stream selector has not yet been established"
+        "A real-cartridge capture is still needed to compare whether its decoder also mutes the one newly selected partial Layer-II frame"
       ]
     }
   ]

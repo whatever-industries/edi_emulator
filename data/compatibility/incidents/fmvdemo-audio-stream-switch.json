@@ -4,10 +4,10 @@
   "title": "Philips FMV Demonstration Disc multilingual stream switch",
   "symptom": "Switching the running Multilingual sample from Dutch to Japanese records one MP2 decode error",
   "expected": "The native in-place audio-stream change continues cleanly without decoder errors or underflow",
-  "status": "open",
+  "status": "resolved",
   "reported_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
-  "last_reproduced_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
-  "last_verified_revision": null,
+  "last_reproduced_revision": "322e18083c8ffeaffc99c99690a3d79d04557c66",
+  "last_verified_revision": "322e18083c8ffeaffc99c99690a3d79d04557c66+dirty:6e5fd0a546b78d2656469a7989cce5069a5c390f6fe3a78845cf3ef03dc7545e",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": ["dvc", "mpeg-audio", "disc-cdfm"],
@@ -35,7 +35,7 @@
         "The run records one audio error and 54 resynchronization bytes, with zero demux/video errors."
       ],
       "contradicting_evidence": [
-        "Discarding the old compressed tail removes the decode error but creates repeated audio underflows, so the correct FIFO boundary is not yet established."
+        "Discarding all buffered compressed audio at the selector-register write removes the decode error but creates repeated audio underflows; that write precedes the actual selected PES boundary."
       ],
       "falsifying_test": "Capture the compressed audio queue and PES boundaries immediately before and after ma_cntrl. If the new selected stream begins on a complete MP2 frame and no old bytes remain, the error originates inside frame decoding rather than selection-boundary handling.",
       "citations": ["Philips FMVDemo SUN/SRC/APPL/multilingual.c", "Philips TN 088"]
@@ -140,7 +140,75 @@
         "invalidated_by": ["Changes to PES delivery timing or a later proven switch boundary"],
         "repeat_when": ["The reset can be moved to a proven packet/frame boundary"]
       }
+    },
+    {
+      "id": "selected-pes-boundary-concealment",
+      "context": {
+        "base_revision": "322e18083c8ffeaffc99c99690a3d79d04557c66",
+        "dirty_diff_hash": "74ef9a705172dd501eec43ade019ba4bf254a1fb788d38f334dc91d31ddcd41b",
+        "component_fingerprints": {
+          "dvc": "bbda3634985107fcc2143c6876a8345651d8ef373a054e6bd814e7ba2cac63ce",
+          "cdic": "677626799a7ffa659634580e7ab1dccf97cc17034122fe1f03870804db814075"
+        },
+        "dependencies": {
+          "Cargo.lock": "da94ce470c588c776fa91786d0bde983413f1c4326ee68511062718483067305"
+        },
+        "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega.rom",
+        "scenario": "FMVDemo Multilingual Dutch-to-Japanese switch with selected-PES boundary trace",
+        "timing": "1120000000 instructions"
+      },
+      "hypothesis_id": "mp2-stream-boundary",
+      "strategy": "Delay the stream discontinuity until the first selected PES packet, decode complete old-stream frames, discard only its incomplete 63-byte tail, acquire the new stream after its 619-byte leading partial frame, and conceal that one missing Layer-II frame to preserve the presentation clock.",
+      "symbols": [
+        "Vmpeg::complete_dma",
+        "Mp2Decoder::finish_stream_segment",
+        "Mp2Decoder::decode_available",
+        "scripts/test-vmpeg-stream-switch-local.sh"
+      ],
+      "assumptions": [
+        "A stream-selector write does not retroactively remove compressed old-stream frames already buffered.",
+        "The decoder mutes an incomplete newly selected Layer-II frame while preserving continuous audio timing."
+      ],
+      "expected": "The native switch advances both decoders with no malformed frames or audio underflow and one bounded concealment event.",
+      "actual": "The selector changed from stream 0 to 2. The trace decoded the final complete 627-byte old frame, discarded 63 incomplete old-tail bytes, acquired the new stream after 619 partial-frame bytes, and concealed one frame. The run reached 985 video and 1,497 decoded audio frames with zero demux/video/audio errors, zero underflows, and the unchanged final framebuffer hash 0e6b4c501bc955ed6e27dd54572216f8008477b3cd3c13e62ea4be199ca47a34.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "Removed the false malformed-frame count without the 58 underflows caused by clearing at the register write.",
+        "The local title gate now requires zero underflows and exactly one boundary concealment."
+      ],
+      "reverted": false,
+      "evidence_quality": "high: direct Philips sample source, exact PES/frame-boundary trace, and deterministic native-title gate",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "VMPEG in-place FMA audio-stream selection where the first selected PES begins mid-Layer-II frame"
+        ],
+        "invalidated_by": [
+          "Changes to FMA stream selection, PES routing, MP2 queue ownership, concealment, or audio presentation timing"
+        ],
+        "repeat_when": [
+          "Any invalidating dependency changes or real-cartridge audio from the same FMVDemo switch becomes available"
+        ]
+      }
     }
   ],
-  "manual_verification": []
+  "manual_verification": [
+    {
+      "revision": null,
+      "status": "requested",
+      "steps": "In FMVDemo Multilingual, start a clip, switch from Dutch to Japanese while it continues, and listen across the switch.",
+      "expected": "Video continues, Japanese audio begins without a repeated underflow/stutter sequence, and playback remains synchronized. A single brief muted boundary frame may be audible."
+    },
+    {
+      "revision": "322e18083c8ffeaffc99c99690a3d79d04557c66+dirty:6e5fd0a546b78d2656469a7989cce5069a5c390f6fe3a78845cf3ef03dc7545e",
+      "status": "verified",
+      "steps": "Use FMVDemo Edit Room > Multilingual and switch among the authored language controls during uninterrupted playback.",
+      "expected": "Picture and audio continue through each language change without a repeated stutter or loss of synchronization.",
+      "notes": "The user confirmed that language switching works well in the release GUI."
+    }
+  ]
 }

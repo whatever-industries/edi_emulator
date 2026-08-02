@@ -1,6 +1,6 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-08-01
+Status date: 2026-08-02
 
 ## Current implementation status
 
@@ -26,6 +26,12 @@ The 7th Guest (VMPEG required, 368x176 stream) and a VCD (ISO `CDI`
 application plus three 352x240 `AVSEQ` streams). These are investigative
 inputs for M3.11 and the sustained-MPEG/VCD regression; they do not bypass the
 native CDIC-to-DVC path.
+
+The VCD inventory now also follows White Book `INFO.VCD`, `ENTRIES.VCD`,
+`LOT.VCD`, and `PSD.VCD` metadata. Its synthetic Mode-2 fixture covers
+selection, play, and end lists; a local Video CD 2.0 validation records 156
+lists without retaining payload. This supplies authored control-flow evidence
+for future native-engine incidents and does not implement host-side playback.
 
 White Book media identification is implemented but its machine integration is
 deferred. `DiscImage` recognizes the LBA-16 Mode-2 Form-1 PVD combination
@@ -275,18 +281,23 @@ Continue controls resume both video and audio normally.
 
 `scripts/test-vmpeg-stream-switch-local.sh` selects Japanese audio during the
 running Multilingual sample and requires both video and audio decode to
-continue without errors. Read-only diagnostics count the in-place stream
-change and expose the selected FMA stream. The title continues, but the first
-current run reports one Layer-II decode error and 54 sync-acquisition bytes.
-Philips `multilingual.c` confirms this is an uninterrupted `ma_cntrl()` stream
-change. Clearing the old compressed tail removed that error but introduced 58
-audio underflows; merely resetting decoder synchronization retained the
-original error. Both behavior changes were reverted and recorded as failed
-implementations, leaving nominal playback unchanged.
+continue without errors or underflow. Read-only diagnostics proved that the
+FMA selector register changes before the first selected PES packet: one
+complete old-stream Layer-II frame remains buffered, followed by a 63-byte
+incomplete old tail, while the first selected PES begins 619 bytes into a new
+frame. VMPEG now waits for that selected PES boundary, decodes complete old
+frames, discards only the incomplete old tail, reacquires the selected stream,
+and inserts one muted Layer-II frame for the missing partial frame. This is a
+standard discontinuity concealment at the device boundary, not a host delay.
+The exact 1.12-billion-instruction title gate reaches 985 video frames and
+1,497 decoded audio frames plus one concealed frame, with zero demux, video,
+audio, or underflow errors and an unchanged final framebuffer hash. The two
+earlier register-write experiments remain recorded as contextual failures.
+Manual GUI testing on 2026-08-02 confirmed that the authored language controls
+switch cleanly during uninterrupted playback.
 
-Next, isolate the Layer-II boundary at an in-place FMA stream change, then run
-the cake-puzzle extended title gate. A perceptual or
-timestamp-based A/V drift oracle is still needed; deterministic throughput
+Next, run the cake-puzzle extended title gate and devise a perceptual or
+timestamp/presentation-overlap A/V drift oracle. Deterministic throughput
 counters alone do not establish lip sync.
 
 The apparent v0.1.0-to-v0.2.0 regression in The 7th Guest's post-title video

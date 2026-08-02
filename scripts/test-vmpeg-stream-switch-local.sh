@@ -52,6 +52,13 @@ if stats["decoded_video_frames"] <= switched["decoded_video_frames"] or stats["d
     raise SystemExit("audio/video decoding did not continue after the native stream switch")
 if stats["demux_errors"] or stats["video_errors"] or stats["audio_errors"]:
     raise SystemExit("decoder error occurred during the native stream switch")
+if stats["audio_underflow_events"]:
+    raise SystemExit("audio underflow occurred during the native stream switch")
+if stats["audio_concealed_frames"] != 1:
+    raise SystemExit(
+        "expected exactly one concealed partial Layer-II frame at the stream switch, "
+        f"got {stats['audio_concealed_frames']}"
+    )
 print("native FMVDemo stream switch continued audio/video without decoder errors")
 PY
 

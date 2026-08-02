@@ -69,12 +69,52 @@
       ]
     }
   ],
-  "experiments": [],
+  "experiments": [
+    {
+      "id": "bounded-consecutive-field-capture-tooling",
+      "context": {
+        "base_revision": "322e18083c8ffeaffc99c99690a3d79d04557c66",
+        "scenario": "Stable native Photo CD picture captured for four consecutive fields; moving wipe not yet captured"
+      },
+      "hypothesis_id": "guest-partial-update-crosses-fields",
+      "strategy": "Extend the existing display diagnostic shortcut to capture a bounded 1-120 fields and summarize hashes, changed-byte bounds, and changed runs without retaining media in tracked data.",
+      "symbols": [
+        "cdi_frontend::display_diagnostic_field_count",
+        "scripts/summarize-display-fields.py"
+      ],
+      "expected": "A later 50/60-field capture can locate the first stage that changes at the moving wipe boundary without altering presentation behavior.",
+      "actual": "The existing stable four-field capture had identical composed-raster hashes; plane A changed only 16, 32, and 33 bytes between later fields. It did not contain the moving transition and therefore neither confirms nor falsifies either incident hypothesis.",
+      "outcome": "inconclusive",
+      "regressions": [],
+      "improvements": [
+        "A moving transition can now be captured in one bounded request and reduced to a payload-free field summary."
+      ],
+      "reverted": false,
+      "evidence_quality": "medium for stable-field behavior; insufficient for the reported moving boundary",
+      "confidence": "high that the existing capture did not reproduce the incident",
+      "applicability": {
+        "conditions": [
+          "Native Photo CD base-plane output at a stable displayed picture"
+        ],
+        "invalidated_by": [
+          "Changes to MCD212 field retention or diagnostic plane capture"
+        ],
+        "repeat_when": [
+          "The shortcut can be triggered immediately before a native Photo CD moving transition"
+        ]
+      }
+    }
+  ],
   "manual_verification": [
     {
       "result": "reported-current",
       "revision": "a960c14949348ffd75773c920c4d8d22f8292cac+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
       "notes": "The user confirmed the corrected stable Photo CD output looks good and clarified that remaining interlace lines are visible only in the transition line or area while it moves. Other tested CD-i transitions, including Philips FMVDemo, do not show the same effect; FMVDemo is an external VMPEG path rather than the native Photo CD base-plane path."
+    },
+    {
+      "result": "unchanged",
+      "revision": "322e18083c8ffeaffc99c99690a3d79d04557c66+dirty:6e5fd0a546b78d2656469a7989cce5069a5c390f6fe3a78845cf3ef03dc7545e",
+      "notes": "The user noticed no presentation difference in native Photo CD transitions. This was expected from the diagnostic-only field-capture tooling; the moving-boundary incident remains open."
     }
   ]
 }

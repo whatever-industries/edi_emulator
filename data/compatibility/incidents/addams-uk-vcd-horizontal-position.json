@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "id": "addams-uk-vcd-horizontal-position",
+  "title": "Addams Family Values UK VCD picture is shifted right",
+  "symptom": "Under the correct White Book type-4/13.5 MHz path, the copyright warning and MPEG picture are horizontally biased to the right. The native chapter menu and playback controls remain correctly located.",
+  "expected": "The guest-programmed MCD251 output position and 13.5 MHz conversion should reproduce the real-player placement without a title-specific offset.",
+  "status": "reproduced",
+  "reported_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:498775b6062053516c5567d09c6db291e19cbe522f1811a44563b09b8130f10f",
+  "last_reproduced_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": "A clean VCD compatibility pass with uniquely imported evidence overturns the earlier resolved observation: the warning remains shifted right and MPEG playback exposes a left black pillar, while Accused Netherlands remains a clean same-standard control. The older post-overscan result is retained as context rather than deleted.",
+  "components": [
+    "dvc",
+    "vcd"
+  ],
+  "disc_fingerprint": "inventory fingerprint recorded by the parent VCD comparison",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "mcd251-output-clock-coordinate-units",
+      "hardware_explanation": "The 13.5 MHz converter scales horizontal output-clock coordinates by 15/13.5, but the emulator currently widens decoded samples while treating the MCD251 display position as an unscaled 15 MHz coordinate. Output position/origin registers and decoded source-window registers may belong to different coordinate domains.",
+      "supporting_evidence": [
+        "Expert hardware feedback confirms a 15/13.5 horizontal scale and states that position registers remain active and are stretched.",
+        "The current model widens source samples but converts Xd with the fixed 15 MHz factor of two.",
+        "Addams UK programs Xd=16, Xw=0, Ww=352 and is right-biased; Accused programs Xd=0, Xw=7, Ww=345 and is correctly centered.",
+        "Both titles previously exposed the same Xo=65, Yo=26, Xa=384, and Ya=280 under type 4."
+      ],
+      "contradicting_evidence": [
+        "Naively multiplying the positive Addams Xd value by 15/13.5 would move its picture farther right, so the missing rule cannot be assumed to apply to Xd in isolation.",
+        "No synchronized real-hardware register/output capture is available for this exact Addams UK screen."
+      ],
+      "falsifying_test": "Capture consecutive MCD251 register snapshots and external-video output bounds for Addams UK and Accused at equivalent warning/MPEG frames, then apply one documented clock-domain equation to all output timing coordinates. If the same equation cannot retain Accused while centering Addams, this explanation is incomplete.",
+      "citations": [
+        "Motorola MCD251 Technical Summary register map",
+        "Philips Interactive Engineer 96/05 White Book pixel-clock note",
+        "expert hardware feedback recorded in the VCD incident history"
+      ]
+    },
+    {
+      "id": "authored-position",
+      "hardware_explanation": "The Addams UK application may intentionally program a different display position from Accused, and the observed right bias could match real hardware.",
+      "supporting_evidence": [
+        "The two applications intentionally program different Xd/Xw/Ww values.",
+        "No same-frame real-player Addams UK reference has established the intended placement."
+      ],
+      "contradicting_evidence": [
+        "Both the warning and MPEG picture look right-biased while the native menu is correctly placed, matching a shared external-video positioning error.",
+        "The user reports the warning as visibly off-center rather than merely inset."
+      ],
+      "falsifying_test": "Compare the same Addams UK warning and MPEG frame against a direct real-player capture. A matching right bias classifies the placement as authored rather than an emulator defect.",
+      "citations": [
+        "docs/debugging-workflow.md",
+        "data/compatibility/incidents/addams-usa-right-edge-black-column.json"
+      ]
+    },
+    {
+      "id": "native-player-edition-or-configuration",
+      "hardware_explanation": "The two discs may exercise different native Video CD player revisions or configuration semantics that legitimately program different MCD251 display and source windows; the emulator may be mishandling one of those generalized register combinations.",
+      "supporting_evidence": [
+        "Disc architecture analysis identifies Philips cdi_videocd edition 2 with a 53-byte configuration on Addams UK and edition 3 with a 65-byte configuration on Accused Netherlands.",
+        "Addams UK programs Xd=16, Xw=0, Ww=352 while Accused programs Xd=0, Xw=7, Ww=345.",
+        "The current clean pass reproduces Addams UK warning/picture displacement while Accused warning, menu, MPEG, and in-video controls remain correct."
+      ],
+      "contradicting_evidence": [
+        "The extra Accused configuration field is INITLAN=DAT and does not specify display geometry.",
+        "Other custom player applications have reproduced related one-sided columns, so application edition alone is not a general cause.",
+        "No evidence currently establishes that the discs use different White Book revisions rather than different native application revisions."
+      ],
+      "falsifying_test": "Compare synchronized MCD251 register writes and external-video bounds from Addams UK and Accused across warning, menu, and MPEG playback. If a single documented interpretation of both programmed windows reproduces their real-hardware placement regardless of player edition, the edition/configuration itself is not causal.",
+      "citations": [
+        "data/compatibility/incidents/addams-usa-right-edge-black-column.json",
+        "Motorola MCD251 Technical Summary",
+        "Philips White Book Video CD player behavior"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "remove-host-overscan-simulation",
+      "context": {
+        "base_revision": "30135d037898ed096169165d3335e1e2a64d652f",
+        "dirty_diff_hash": "e54baeefba88eae948e5779399f26dd0821b47d75e771d106e3bbdb5e3633715",
+        "component_fingerprints": {},
+        "dependencies": {
+          "white_book_type4": "enabled",
+          "mcd251_13_5mhz": "enabled"
+        },
+        "disc_fingerprint": "inventory fingerprint recorded by the parent VCD comparison",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega",
+        "scenario": "manual warning/menu/MPEG playback",
+        "timing": "native"
+      },
+      "hypothesis_id": "mcd251-output-clock-coordinate-units",
+      "strategy": "Remove the frontend's content-sensitive 720x440 analog-overscan simulation and present only cdi-core's hardware-defined DisplayGeometry aperture.",
+      "symbols": [
+        "cdi_frontend::presentation::display_aperture",
+        "cdi_frontend::presentation::screenshot_image"
+      ],
+      "assumptions": [
+        "The core hardware aperture is authoritative for presentation.",
+        "Analog television overscan is not a guest-programmable CD-i display mode."
+      ],
+      "expected": "The menu and MPEG picture no longer inherit a host-selected crop or offset while the native White Book clock behavior remains intact.",
+      "actual": "The user confirms both Addams Family Values UK and USA menus are no longer cropped, and both MPEG pictures display properly without pillarboxing or letterboxing.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "Removed the Addams UK right-biased presentation symptom.",
+        "Removed the Addams USA base-menu crop without changing VCD clock or firmware behavior."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "Frontend presents the core DisplayGeometry aperture directly"
+        ],
+        "invalidated_by": [
+          "Reintroducing host overscan cropping or content-sensitive aperture selection",
+          "Changing MCD251 clock or output-position semantics"
+        ],
+        "repeat_when": [
+          "Either Addams UK or USA regains asymmetric borders or menu cropping",
+          "DisplayGeometry or MCD251 positioning changes"
+        ]
+      }
+    }
+  ],
+  "manual_verification": [
+    {
+      "result": "reproduced",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:498775b6062053516c5567d09c6db291e19cbe522f1811a44563b09b8130f10f",
+      "notes": "The copyright warning and MPEG picture are shifted right. The chapter menu has no new zoom and its native controls are properly located. Accused Netherlands is the known-good same-path control: its warning, menu, MPEG placement and width, and playback all appear correct with no pillars or other observed error."
+    },
+    {
+      "result": "resolved",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:e54baeefba88eae948e5779399f26dd0821b47d75e771d106e3bbdb5e3633715",
+      "notes": "After removing the frontend overscan simulation, Addams Family Values UK and USA both show uncropped menus and properly presented MPEG pictures with no pillarboxing or letterboxing."
+    },
+    {
+      "result": "reproduced-current-clean-pass",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
+      "notes": "The warning is visibly shifted right (evidence img-20260802T234154.665329Z-04e9f9243376-e81f40335ac0, SHA-256 e81f40335ac0703c73e808c0c94d199aad5e91c15758a841e7cf3b43bbd7f19f). MPEG playback exposes a black pillar at the left edge (evidence img-20260802T234154.705703Z-aa3bb8e02685-eaf0fa25ac6a, SHA-256 eaf0fa25ac6a93d03a90823939c64c086fb2f685d481ae9cb52ae4a5d0e2361f). Accused Netherlands remains a clean control, including with its native in-video controls visible."
+    }
+  ]
+}

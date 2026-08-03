@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "id": "vampire-savior-vcd-play-all-does-not-launch",
+  "title": "Vampire Savior Video CD PLAY ALL does not launch",
+  "symptom": "Vampire Savior - Disc Teleca - Darkstalkers I reaches its main menu. Pressing CD-i button 1 on PLAY ALL makes the selection flash but launches no video, and neither mouse nor controller navigation moves to another menu item.",
+  "expected": "The standard Video CD 2.0 PBC selection menu accepts navigation and PLAY ALL starts the referenced play list.",
+  "status": "reproduced",
+  "reported_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+  "last_reproduced_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "slave",
+    "input",
+    "vcd",
+    "dvc"
+  ],
+  "disc_fingerprint": "a8e36a3065729d8ae7e207a53107ea0d306090ae",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "ntsc",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": [
+      "navigate main menu",
+      "press CD-i button 1 on PLAY ALL"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "pbc-selection-or-playback-command",
+      "hardware_explanation": "The CD-i application receives the activation input but the subsequent Video CD 2.0 PBC selection or native playback command is not completed by the emulated player path.",
+      "supporting_evidence": [
+        "PLAY ALL visibly flashes when button 1 is pressed, indicating that at least the activation input reaches the application.",
+        "DiscInventory identifies a standard Video CD 2.0 structure (specification value $0200), CD-ROM XA Bridge media, a CD-i application, eight MPEG entries, and a valid PBC selection list with selection base 1.",
+        "The selection list references ordinary play lists rather than an unknown proprietary media format."
+      ],
+      "contradicting_evidence": [
+        "Mouse and controller navigation do not move between menu items, so an input-mode or selection-state issue may still precede playback.",
+        "No bounded command/sector trace has established whether the guest issues a CDIC or VMPEG play request after the visual flash.",
+        "No real-player or independent-emulator trace has confirmed the intended input sequence for this exact CD-i application."
+      ],
+      "falsifying_test": "Trace SLAVE input packets, guest selection state, PBC list choice, CDIC commands, and VMPEG play requests from the button press through the next bounded interval. If the guest never requests playback despite receiving the same input packet as working menus, the fault is in guest-required input/navigation semantics rather than PBC or MPEG transport.",
+      "citations": [
+        "White Book Video CD 2.0 playback control",
+        "local DiscInventory schema 3 for fingerprint a8e36a3065729d8ae7e207a53107ea0d306090ae",
+        "docs/debugging-workflow.md"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "inspect-disc-structure",
+      "context": {
+        "base_revision": "30135d037898ed096169165d3335e1e2a64d652f",
+        "dirty_diff_hash": "cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+        "component_fingerprints": {
+          "disc_inventory": "a8e36a3065729d8ae7e207a53107ea0d306090ae"
+        },
+        "dependencies": {
+          "disc_inventory_schema": "3"
+        },
+        "disc_fingerprint": "a8e36a3065729d8ae7e207a53107ea0d306090ae",
+        "model": "none-read-only",
+        "video_standard": "not-applicable",
+        "dvc": "not-applicable",
+        "scenario": "read-only CUE/ISO/VCD inventory",
+        "timing": "not-applicable"
+      },
+      "hypothesis_id": "pbc-selection-or-playback-command",
+      "strategy": "Inspect the disc's TOC, ISO tree, VCD metadata, and PBC lists without changing emulation behavior.",
+      "symbols": [],
+      "assumptions": [
+        "DiscInventory correctly parses White Book INFO, ENTRIES, PSD, and LOT data."
+      ],
+      "expected": "Determine whether the title is structurally non-standard before assigning the failure to unsupported media.",
+      "actual": "The disc is a CD-ROM XA Bridge Video CD 2.0 with a CD-i application, standard VCD/MPEGAV/SEGMENT/CDI directories, eight MPEG entries, and a valid selection list that points to ordinary play lists. It is unusual in presentation but not structurally an unknown format.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "Rules out an unrecognized disc format as the immediate explanation."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "Exact local disc fingerprint a8e36a3065729d8ae7e207a53107ea0d306090ae"
+        ],
+        "invalidated_by": [
+          "A correction to DiscInventory's VCD/PBC parser"
+        ],
+        "repeat_when": [
+          "The VCD/PBC parser changes or a second dump disagrees"
+        ]
+      }
+    }
+  ],
+  "manual_verification": [
+    {
+      "result": "reproduced-current-clean-pass",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "notes": "The main menu appears, PLAY ALL flashes when activated, but no video launches. Mouse and controller cannot navigate the menu."
+    }
+  ]
+}

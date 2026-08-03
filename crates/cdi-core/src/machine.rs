@@ -1587,12 +1587,9 @@ impl Machine {
     /// This is intended for construction and restoration. For a live player,
     /// use [`Machine::change_disc`] so the SLAVE reports a drive event.
     pub fn set_disc(&mut self, disc: Option<DiscImage>) {
-        // DiscImage can identify CD-ROM XA Bridge media, and SlaveHle can
-        // report its native type-4 status. Do not expose that status here
-        // until the MCD251 sample-rate-converter origin is implemented:
-        // enabling the guest's White Book path without those Xo semantics
-        // fixes one title's placement while shifting another.
+        let cd_rom_xa_bridge = disc.as_ref().is_some_and(DiscImage::is_cd_rom_xa_bridge);
         self.bus.cdic.set_disc_layout(disc.as_ref());
+        self.bus.slave.set_cd_rom_xa_bridge(cd_rom_xa_bridge);
         self.bus.slave.set_disc_present(disc.is_some());
         self.bus.disc = disc;
     }
@@ -1603,7 +1600,9 @@ impl Machine {
     /// drive-status packet that its SERVO link supplies on real hardware.
     pub fn change_disc(&mut self, disc: Option<DiscImage>) {
         let replacing = self.bus.disc.is_some() && disc.is_some();
+        let cd_rom_xa_bridge = disc.as_ref().is_some_and(DiscImage::is_cd_rom_xa_bridge);
         self.bus.cdic.media_changed(disc.as_ref());
+        self.bus.slave.set_cd_rom_xa_bridge(cd_rom_xa_bridge);
         self.bus.slave.notify_disc_change(disc.is_some(), replacing);
         self.bus.disc = disc;
     }
@@ -1736,6 +1735,7 @@ impl Bus68k for MachineBus {
 mod tests {
     use super::*;
     use crate::boards::CDI220B;
+    use cdi_disc::{Msf, RAW_SECTOR_SIZE};
 
     fn machine() -> MachineBus {
         let mut rom = vec![0u8; 512 * 1024];
@@ -1902,6 +1902,68 @@ mod tests {
         assert_eq!(m.bus.slave.read(3), 0x00);
         assert_eq!(m.bus.slave.read(3), 0x42);
         assert_eq!(m.bus.slave.read(3), 0x15);
+    }
+
+    fn synthetic_mode2_disc(name: &str, xa_bridge: bool) -> DiscImage {
+        let dir = std::env::temp_dir().join(format!("edi-machine-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut sectors = vec![[0u8; RAW_SECTOR_SIZE]; 20];
+        for (index, sector) in sectors.iter_mut().enumerate() {
+            sector[..12].copy_from_slice(&cdi_disc::sector::SYNC);
+            sector[12..15].copy_from_slice(&Msf::from_frames(150 + index as u32).to_bcd());
+            sector[15] = 2;
+        }
+
+        let descriptor = &mut sectors[16];
+        descriptor[16..20].copy_from_slice(&[0, 0, 0x08, 0]);
+        descriptor[20..24].copy_from_slice(&[0, 0, 0x08, 0]);
+        let user = &mut descriptor[24..24 + 2048];
+        user[..8].copy_from_slice(b"\x01CD001\x01\x00");
+        let system_id = b"CD-RTOS CD-BRIDGE";
+        user[8..8 + system_id.len()].copy_from_slice(system_id);
+        user[1024..1032].copy_from_slice(if xa_bridge { b"CD-XA001" } else { b"CD-XA000" });
+
+        let mut image = Vec::with_capacity(sectors.len() * RAW_SECTOR_SIZE);
+        for sector in sectors {
+            image.extend_from_slice(&sector);
+        }
+        std::fs::write(dir.join("disc.bin"), image).unwrap();
+        std::fs::write(
+            dir.join("disc.cue"),
+            "FILE \"disc.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n",
+        )
+        .unwrap();
+        DiscImage::load(&dir.join("disc.cue")).unwrap()
+    }
+
+    fn slave_disc_type(machine: &mut Machine) -> u8 {
+        for byte in [0xB0, 0, 0, 0] {
+            machine.bus.slave.write(3, byte);
+        }
+        machine.bus.slave.tick(15_000_000 / 4);
+        let packet = [
+            machine.bus.slave.read(3),
+            machine.bus.slave.read(3),
+            machine.bus.slave.read(3),
+            machine.bus.slave.read(3),
+        ];
+        assert_eq!(packet[0], 0xB0);
+        packet[2] & 0x07
+    }
+
+    #[test]
+    fn disc_insertion_reports_bridge_media_as_type_four_only() {
+        let mut rom = vec![0u8; 512 * 1024];
+        rom[..8].copy_from_slice(&[0x00, 0x00, 0x15, 0x00, 0x00, 0x40, 0x04, 0xB8]);
+        let mut machine = Machine::new(&CDI220B, rom).unwrap();
+
+        machine.set_disc(Some(synthetic_mode2_disc("bridge", true)));
+        assert_eq!(slave_disc_type(&mut machine), 4);
+
+        machine.set_disc(Some(synthetic_mode2_disc("native", false)));
+        assert_eq!(slave_disc_type(&mut machine), 2);
     }
 
     #[test]

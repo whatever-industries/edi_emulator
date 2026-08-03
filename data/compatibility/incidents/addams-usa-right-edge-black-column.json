@@ -4,19 +4,19 @@
   "title": "Video CD right-edge black column",
   "symptom": "Addams Family Values USA, Forrest Gump USA, Pete Townshend Live USA, Accused Netherlands, and Women of the World - Brazilian Girls Europe show a persistent vertical black line at the right edge of the picture. Forrest Gump's native bottom control panel remains correctly positioned while its MPEG picture appears shifted left. Pete Townshend's pre-concert screens appear left-biased and its concert footage clearly retains the right-side column. The two European titles prove the symptom is not specific to NTSC or USA-authored media.",
   "expected": "Base graphics, native Video CD controls, and MPEG video use their programmed hardware windows without a persistent one-sided black column.",
-  "status": "reproduced",
+  "status": "fixed-but-unverified",
   "reported_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
   "last_reproduced_revision": "c5ac422185774c8e2e16f207812ccf2588259550",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "A bounded comparison locates the column in the disabled White Book path, but manual guards confirm that exposing type 4 before implementing MCD251 sample-origin semantics is regression-causing: it removes the tested USA edge and centers the Accused warning while shifting Addams UK right. The USA screenshot's additional 720-pixel crop is separately identified as the existing frontend Typical CRT aperture. Pete Townshend Live USA, Accused Netherlands, and Women of the World - Brazilian Girls Europe independently reproduce the MPEG right-edge column on current builds, so the incident remains current and is neither authoring-layout- nor video-standard-specific.",
+  "revalidation_reason": "New expert hardware evidence supersedes the earlier assumption that a separate MCD251 phase register was missing: White Book type 4 selects $E01000's 13.5 MHz clock and the horizontal output coordinate system scales by 15/13.5. On the current media-derived type-4 candidate, RoboCop USA MPEG has no right column and is centered, with its menus and playback controls correctly located. An older Addams Family Values USA base-menu observation was affected by the now-removed frontend overscan simulation and must be revalidated against the hardware aperture. Re-test the other affected VCDs and resolve the exact output-versus-source register scaling before declaring the incident resolved.",
   "components": [
     "mcd212",
     "dvc",
     "frontend",
     "vcd"
   ],
-  "disc_fingerprint": "Addams Family Values USA: dd9adb80a89378d97acfecaf50ce20d0f769c442; Forrest Gump USA: inventory pending; Pete Townshend Live USA Disc 1: b640c77e36148e07b141b24e627aeced84c598e4; Accused Netherlands Disc 1: inventory pending; Women of the World - Brazilian Girls Europe: inventory pending",
+  "disc_fingerprint": "Addams Family Values USA: dd9adb80a89378d97acfecaf50ce20d0f769c442; Forrest Gump USA: inventory pending; Pete Townshend Live USA Disc 1: b640c77e36148e07b141b24e627aeced84c598e4; Accused Netherlands Disc 1: inventory pending; Women of the World - Brazilian Girls Europe: inventory pending; RoboCop USA Disc 1: 3e23560d668bd6934c4a13c97e205acba5fc56d3",
   "scenario": {
     "model": "cdi220b",
     "video_standard": "pal-and-ntsc",
@@ -118,7 +118,7 @@
         "No frontend crop or title-name behavior should participate."
       ],
       "expected": "The exact Addams USA run changes from type 2 / converter off / undersized external video to type 4 / converter on / full-width external video.",
-      "actual": "The baseline programs frame 352x240, display X=0, window X=4 W=348 with the converter off, predicting 696 framebuffer pixels. The candidate reports type 4, converter on, retains the same guest window, and the captured 768x480 raster no longer has the previous one-sided edge. Both runs have zero demux, video, audio, and stream errors. Manual testing confirms the USA edge is gone, Accused remains acceptable, and Addams UK shifts right. The USA menu screenshot is 720x539 because Typical CRT cropped the unchanged 768x480 hardware raster.",
+      "actual": "The baseline programs frame 352x240, display X=0, window X=4 W=348 with the converter off, predicting 696 framebuffer pixels. The candidate reports type 4, converter on, retains the same guest window, and the captured 768x480 raster no longer has the previous one-sided edge. Both runs have zero demux, video, audio, and stream errors. Manual testing confirms the USA edge is gone, Accused remains acceptable, and Addams UK shifts right. The historical 720x539 USA menu screenshot came from the now-removed frontend overscan simulation rather than the 768x480 hardware raster.",
       "outcome": "regression-causing",
       "regressions": [
         "Addams Family Values UK warning content moves from a raw center near x=382 under type 2 to x=421 under type 4.",
@@ -275,7 +275,7 @@
     {
       "result": "regression-causing",
       "revision": "04cc43b+dirty:76e5d757fbe563327e163232066ce730a91992809c2d637a36738dc2c84d1468",
-      "notes": "Media-derived type 4 removes the Addams USA right edge. Accused Netherlands shows no new surprise, but Addams UK warning content is shifted right. The USA menu capture is 720x539 because the existing Typical CRT presentation aperture removes 24 source pixels per side; the raw raster remains 768x480."
+      "notes": "Media-derived type 4 removes the Addams USA right edge. Accused Netherlands shows no new surprise, but Addams UK warning content is shifted right. The historical 720x539 USA menu capture used the now-removed frontend overscan simulation; the hardware raster remains 768x480."
     },
     {
       "result": "reproduced",
@@ -296,6 +296,41 @@
       "result": "counterexample-with-separate-framing-concern",
       "revision": "c5ac422185774c8e2e16f207812ccf2588259550",
       "notes": "Addams Family Values UK does not show the large one-sided right-edge column during MPEG playback. It instead has substantial approximately symmetric left/right margins, which may itself be inaccurate. Treat it as a distinct framing symptom and a useful MCD251 window-position counterexample, not as proof that the current presentation is correct."
+    },
+    {
+      "result": "fixed-pending-cross-title-verification",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:4d39dde2d669c0bc1f1287e9165557c07e9c0bd3c94207bf2db0326e41975150",
+      "notes": "RoboCop USA Disc 1, the hardware reviewer's checked White Book reference, automatically takes the type-4/13.5 MHz path. Its MPEG picture has no persistent right column and is properly centered; menus and playback controls remain correctly located. The picture is horizontally enlarged/cropped as expected from the clock change. The historical Addams Family Values USA base-menu observation was affected by a now-removed frontend overscan simulation."
+    },
+    {
+      "result": "fixed-pending-cross-title-verification",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:498775b6062053516c5567d09c6db291e19cbe522f1811a44563b09b8130f10f",
+      "notes": "Accused Netherlands now displays its ATTENTIE warning, native menu, and MPEG picture correctly centered with no persistent side column under automatic White Book type 4. Addams Family Values UK has a separate right-biased warning and MPEG picture while its native menu remains correct; that symptom is tracked independently as addams-uk-vcd-horizontal-position."
+    },
+    {
+      "result": "fixed-pending-framing-verification",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:498775b6062053516c5567d09c6db291e19cbe522f1811a44563b09b8130f10f",
+      "notes": "Forrest Gump USA no longer shows the reported right-edge column under automatic White Book type 4 and otherwise appears correct. A subtle horizontal enlargement remains visually uncertain; compare the same stable frame at the core raster and frontend hardware-aperture stages before classifying it as authored framing or an emulation defect."
+    },
+    {
+      "result": "frontend-aperture-confirmed",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:323d24aa6e6872558cdcb94922b0f00652111f283ce00cfc637a5127029476f8",
+      "notes": "A same-frame Forrest Gump comparison proves that additional edge content exists in the complete hardware signal and is hidden by the normal NTSC Typical CRT aperture. The full-signal PNG is 768x588 (SHA-256 8da65144eabe87f744280b650bc6be56ae678df8fad762735ce380fe04c2e994); the CRT-aperture PNG is 720x539 (SHA-256 4ca55d4d9ec6df18a86f65f2ec771dd33a8bf034a6b20b5b4d64273be3b2d034). This isolates the visible enlargement to frontend analog presentation rather than missing decoded MPEG pixels. Whether the Typical CRT aperture is the desirable default remains a separate hardware-presentation question."
+    },
+    {
+      "result": "addams-variants-verified",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:e54baeefba88eae948e5779399f26dd0821b47d75e771d106e3bbdb5e3633715",
+      "notes": "After removing the frontend's host-created overscan simulation, Addams Family Values UK and USA both present uncropped menus and MPEG pictures without pillarboxing or letterboxing. This confirms the menu crop was frontend presentation, while the native White Book type-4/13.5 MHz correction remains valid."
+    },
+    {
+      "result": "accused-clean-pass-control",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
+      "notes": "Accused Netherlands passes the current clean VCD review with no observed warning-screen, menu, MPEG-placement, audio, or native in-video-control issue. This is current counterexample evidence for the separately reproduced Addams UK offset; it does not by itself resolve the multi-title historical incident."
+    },
+    {
+      "result": "women-of-the-world-column-not-reproduced",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "notes": "Women of the World - Brazilian Girls Europe has no current right-edge column or other placement issue. Its separate dotted bottom-edge pattern remains reproduced and is retained in kether-bottom-display-line-artifacts as a related external-video-path observation."
     }
   ]
 }

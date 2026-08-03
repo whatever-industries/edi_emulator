@@ -71,7 +71,7 @@
         "Screenshots, window aspect, and mouse mapping share the same core-provided DisplayGeometry.",
         "Other PAL titles have been manually reported as correctly proportioned on the same build."
       ],
-      "falsifying_test": "Compare Full signal and Typical CRT presentation from one captured hardware raster, then verify the 4:3 pixel-aspect calculation against the traced geometry. Identical content proportions before and after frontend aperture selection falsify a frontend-only cause.",
+      "falsifying_test": "Compare one captured core raster with frontend output, then verify the pixel-aspect calculation against the traced geometry. Identical content proportions at both stages falsify a frontend-only cause.",
       "citations": [
         "docs/display-geometry.md",
         "Philips TN 093 image-format and safe-area guidance"

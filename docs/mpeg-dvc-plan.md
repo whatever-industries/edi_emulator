@@ -126,13 +126,10 @@ standard. Horizontal Compatibility Mode masks 24 double-resolution pixels on
 each side, and 625/50 vertical Compatibility Mode masks 40 host rows above and
 below the 720x480 picture. `DisplayGeometry` carries Philips TSA-003's measured
 PAL/NTSC pixel aspect. Rendering, screenshots, window aspect, and pointer
-mapping use the same geometry and the global `Typical CRT` or `Full signal`
-presentation choice. Typical CRT exposes a fixed 360x220 viewing area only
-when a 525-line title supplies the full 384x240 signal. Four-sided windowboxes
-are centered; pictures which substantially reach the bottom overscan edge use
-the bottom-aligned form of that same aperture. No disc name or profile enters
-the decision. PAL and hardware Compatibility Mode are not host-cropped.
-Raw-square-pixel presentation remains a Settings diagnostic.
+mapping use the same geometry. The frontend presents the complete hardware-
+defined active picture and does not simulate television overscan or choose a
+crop from framebuffer contents. PAL/NTSC pixel-aspect correction is independent
+of that aperture; raw-square-pixel presentation remains a Settings diagnostic.
 Mixed-region filenames no longer force whichever standard appears first in
 the label. Full source notes are in `docs/display-geometry.md`.
 

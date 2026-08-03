@@ -30,7 +30,6 @@ use library::{
 };
 use presentation::{
     display_aperture, fit_aspect, pointer_mapping, presentation_aspect, screenshot_image,
-    DisplayArea,
 };
 use storage::{backup_nvram, configured_nvram_path, load_nvram, write_nvram};
 
@@ -345,7 +344,6 @@ struct Prefs {
     smooth_scaling: bool,
     #[serde(default = "default_true")]
     crt_aspect: bool,
-    display_area: DisplayArea,
     capture_mouse_enabled: bool,
     #[serde(default = "default_true")]
     auto_region: bool,
@@ -380,7 +378,6 @@ impl Default for Prefs {
             show_fps: true,
             smooth_scaling: false,
             crt_aspect: true,
-            display_area: DisplayArea::TypicalCrt,
             capture_mouse_enabled: true,
             auto_region: true,
             disc_overrides: BTreeMap::new(),
@@ -2046,7 +2043,6 @@ struct App {
     show_fps: bool,
     smooth_scaling: bool,
     crt_aspect: bool,
-    display_area: DisplayArea,
     disc_overrides: BTreeMap<String, DiscOverride>,
     active_fingerprint: Option<String>,
     capture_mouse_enabled: bool,
@@ -2153,7 +2149,6 @@ impl App {
             show_fps: prefs.show_fps,
             smooth_scaling: prefs.smooth_scaling,
             crt_aspect: prefs.crt_aspect,
-            display_area: prefs.display_area,
             disc_overrides,
             active_fingerprint: None,
             capture_mouse_enabled: prefs.capture_mouse_enabled,
@@ -2666,7 +2661,7 @@ impl App {
     fn save_player_screenshot(&self) {
         let image = {
             let frame = self.shared.frame.lock().unwrap();
-            screenshot_image(&frame, self.display_area, self.crt_aspect)
+            screenshot_image(&frame, self.crt_aspect)
         };
         let disc_name = self.shared.disc_name.lock().unwrap().clone();
         let stem = disc_name
@@ -3048,24 +3043,9 @@ impl App {
 
         ui.separator();
         ui.heading("Display");
-        ui.horizontal(|ui| {
-            ui.label("Display area:");
-            ui.radio_value(
-                &mut self.display_area,
-                DisplayArea::TypicalCrt,
-                "Typical CRT",
-            )
-            .on_hover_text("Hide the nominal NTSC analog overscan margin");
-            ui.radio_value(
-                &mut self.display_area,
-                DisplayArea::FullSignal,
-                "Full signal",
-            )
-            .on_hover_text("Show the complete MCD212 hardware output");
-        });
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut self.crt_aspect, "CRT aspect")
-                .on_hover_text("Use measured Philips PAL/NTSC pixel shape");
+            ui.checkbox(&mut self.crt_aspect, "Correct pixel aspect")
+                .on_hover_text("Use the measured Philips PAL/NTSC pixel shape");
             ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
             ui.checkbox(&mut self.show_fps, "Show FPS");
         });
@@ -3643,7 +3623,6 @@ impl eframe::App for App {
             show_fps: self.show_fps,
             smooth_scaling: self.smooth_scaling,
             crt_aspect: self.crt_aspect,
-            display_area: self.display_area,
             capture_mouse_enabled: self.capture_mouse_enabled,
             auto_region: self.shared.auto_region.load(Ordering::Relaxed),
             disc_overrides: self.disc_overrides.clone(),
@@ -4175,7 +4154,7 @@ impl eframe::App for App {
         if !fullscreen {
             let aspect = {
                 let frame = self.shared.frame.lock().unwrap();
-                let aperture = display_aperture(&frame, self.display_area);
+                let aperture = display_aperture(&frame);
                 presentation_aspect(aperture, frame.geometry, self.crt_aspect)
             };
             let picture = ctx.available_rect();
@@ -4230,7 +4209,7 @@ impl eframe::App for App {
                 let avail = ui.available_size();
                 let (uv_rect, aspect, pointer_origin, pointer_extent) = {
                     let frame = self.shared.frame.lock().unwrap();
-                    let aperture = display_aperture(&frame, self.display_area);
+                    let aperture = display_aperture(&frame);
                     let uv_min = egui::pos2(
                         aperture.left as f32 / frame.width as f32,
                         aperture.top as f32 / frame.height as f32,
@@ -4388,7 +4367,7 @@ mod tests {
         load_nvram, parental_passcode, pointer_mapping, presentation_aspect,
         quick_menu_chord_pressed, quick_menu_consumes_controller_poll, region_is_pal,
         screenshot_image, signed_pcm_to_u8, suppress_guest_buttons_until_release, write_nvram,
-        DiscLoadAction, DiscOverride, DisplayArea, HostMenuBinding, LibraryPadAction, SharedFrame,
+        DiscLoadAction, DiscOverride, HostMenuBinding, LibraryPadAction, SharedFrame,
         MAX_DISPLAY_DIAGNOSTIC_FIELDS, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
@@ -4756,14 +4735,7 @@ mod tests {
             width: 768,
             height: 480,
         };
-        let typical = DisplayAperture {
-            left: 24,
-            top: 20,
-            width: 720,
-            height: 440,
-        };
         assert!((presentation_aspect(full, ntsc, true) - 1.306_122_4).abs() < 0.000_001);
-        assert!((presentation_aspect(typical, ntsc, true) - 1.335_807).abs() < 0.000_001);
 
         let pal = DisplayGeometry {
             raster_height: 560,
@@ -4778,8 +4750,8 @@ mod tests {
         };
         assert!((presentation_aspect(pal_aperture, pal, true) - 1.337_979_1).abs() < 0.000_001);
 
-        let size = fit_aspect(egui::vec2(720.0, 700.0), 720.0 / 539.0);
-        assert_eq!(size, egui::vec2(720.0, 539.0));
+        let size = fit_aspect(egui::vec2(720.0, 700.0), 4.0 / 3.0);
+        assert_eq!(size, egui::vec2(720.0, 540.0));
     }
 
     #[test]
@@ -4832,19 +4804,6 @@ mod tests {
         assert_eq!(
             screenshot_dimensions(
                 DisplayAperture {
-                    left: 24,
-                    top: 20,
-                    width: 720,
-                    height: 440,
-                },
-                ntsc,
-                true,
-            ),
-            (720, 539)
-        );
-        assert_eq!(
-            screenshot_dimensions(
-                DisplayAperture {
                     left: 0,
                     top: 0,
                     width: 768,
@@ -4882,7 +4841,7 @@ mod tests {
             },
             frame_no: 0,
         };
-        let image = screenshot_image(&frame, DisplayArea::FullSignal, false);
+        let image = screenshot_image(&frame, false);
         assert_eq!((image.width, image.height), (2, 2));
         assert_eq!(image.rgb, vec![255; 12]);
     }
@@ -4917,12 +4876,12 @@ mod tests {
             geometry,
             frame_no: 0,
         };
-        let aperture = display_aperture(&patterned, DisplayArea::TypicalCrt);
+        let aperture = display_aperture(&patterned);
         assert_eq!(
             (aperture.left, aperture.top, aperture.width, aperture.height),
             (24, 40, 720, 480)
         );
-        assert_eq!(display_aperture(&black, DisplayArea::TypicalCrt), aperture);
+        assert_eq!(display_aperture(&black), aperture);
     }
 
     #[test]
@@ -4950,61 +4909,6 @@ mod tests {
         let (origin, extent) = pointer_mapping(aperture, geometry);
         assert_eq!(origin, egui::Pos2::ZERO);
         assert_eq!(extent, egui::vec2(768.0, 560.0));
-    }
-
-    #[test]
-    fn ntsc_crt_framing_centers_windowboxes_and_fills_bottom_aligned_pictures() {
-        let geometry = DisplayGeometry {
-            raster_width: 768,
-            raster_height: 480,
-            active_x: 0,
-            active_y: 0,
-            active_width: 768,
-            active_height: 480,
-            compatibility_mode: false,
-            interlaced: false,
-            odd_field: false,
-            frame_duration_60hz: true,
-            pixel_aspect_num: 49,
-            pixel_aspect_den: 40,
-        };
-        let bottom_aligned = SharedFrame {
-            pixels: vec![0x0012_3456; 768 * 480],
-            width: 768,
-            height: 480,
-            geometry,
-            frame_no: 0,
-        };
-        let black = SharedFrame {
-            pixels: vec![0; 768 * 480],
-            width: 768,
-            height: 480,
-            geometry,
-            frame_no: 0,
-        };
-        let centered = display_aperture(&black, DisplayArea::TypicalCrt);
-        assert_eq!(
-            (centered.left, centered.top, centered.width, centered.height),
-            (24, 20, 720, 440)
-        );
-        let filled = display_aperture(&bottom_aligned, DisplayArea::TypicalCrt);
-        assert_eq!(
-            (filled.left, filled.top, filled.width, filled.height),
-            (24, 40, 720, 440)
-        );
-        assert_eq!(
-            display_aperture(&black, DisplayArea::FullSignal),
-            DisplayAperture {
-                left: 0,
-                top: 0,
-                width: 768,
-                height: 480,
-            }
-        );
-
-        let (origin, extent) = pointer_mapping(filled, geometry);
-        assert_eq!(origin, egui::pos2(24.0, 560.0 / 12.0));
-        assert_eq!(extent, egui::vec2(720.0, 560.0 * 11.0 / 12.0));
     }
 
     #[test]

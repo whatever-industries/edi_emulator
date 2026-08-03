@@ -1,5 +1,7 @@
 # Build artifacts
 /target
+__pycache__/
+*.py[cod]
 
 # Local firmware scratch directory (supported distributable images live in
 # tracked firmware/ instead)

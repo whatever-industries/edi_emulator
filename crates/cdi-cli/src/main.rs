@@ -146,6 +146,9 @@ enum Command {
         /// Write the final plane-A/plane-B video RAM to a diagnostic directory.
         #[arg(long)]
         dump_video_ram: Option<PathBuf>,
+        /// Write synchronized display-provenance PNGs and state to a directory.
+        #[arg(long)]
+        dump_display_diagnostics: Option<PathBuf>,
         /// Write the VMPEG extension RAM containing native driver modules.
         #[arg(long, hide = true)]
         dump_dvc_ram: Option<PathBuf>,
@@ -191,6 +194,133 @@ struct BootDiagnosticEvidence {
     disc: Option<cdi_disc::DiscInventory>,
 }
 
+fn write_diagnostic_rgb_png(
+    path: &std::path::Path,
+    pixels: &[u32],
+    width: usize,
+    height: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let expected = width
+        .checked_mul(height)
+        .ok_or("diagnostic raster dimensions overflow")?;
+    if pixels.len() < expected {
+        return Err(format!(
+            "{}: expected at least {expected} pixels, found {}",
+            path.display(),
+            pixels.len()
+        )
+        .into());
+    }
+    let mut rgb = Vec::with_capacity(expected * 3);
+    for pixel in &pixels[..expected] {
+        let pixel = cdi_core::mcd212::presentation_rgb(*pixel);
+        rgb.extend_from_slice(&[(pixel >> 16) as u8, (pixel >> 8) as u8, pixel as u8]);
+    }
+    let file = std::fs::File::create(path)?;
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width as u32, height as u32);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.write_header()?.write_image_data(&rgb)?;
+    Ok(())
+}
+
+fn write_display_diagnostics(
+    machine: &cdi_core::Machine,
+    out_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(out_dir)?;
+    let snapshot = machine.diagnostic_snapshot();
+    let geometry = snapshot.mcd212.geometry;
+    std::fs::write(
+        out_dir.join("snapshot.json"),
+        serde_json::to_vec_pretty(&snapshot)?,
+    )?;
+
+    for (path, name) in [(0, "plane-a"), (1, "plane-b")] {
+        let ram = machine
+            .bus
+            .ram
+            .get(path)
+            .ok_or_else(|| format!("{name} RAM is unavailable"))?;
+        std::fs::write(out_dir.join(format!("{name}-ram.bin")), ram)?;
+        let decoded = machine
+            .bus
+            .mcd212
+            .diagnostic_plane_framebuffer(path)
+            .ok_or_else(|| format!("{name} diagnostic raster is unavailable"))?;
+        write_diagnostic_rgb_png(
+            &out_dir.join(format!("{name}-decoded.png")),
+            decoded,
+            geometry.raster_width,
+            geometry.raster_height,
+        )?;
+    }
+
+    write_diagnostic_rgb_png(
+        &out_dir.join("base-raster.png"),
+        machine.bus.mcd212.diagnostic_base_framebuffer(),
+        geometry.raster_width,
+        geometry.raster_height,
+    )?;
+    let composed = machine.bus.mcd212.framebuffer();
+    write_diagnostic_rgb_png(
+        &out_dir.join("composed-raster.png"),
+        composed,
+        geometry.raster_width,
+        geometry.raster_height,
+    )?;
+
+    let mut aperture = Vec::with_capacity(geometry.active_width * geometry.active_height);
+    for y in geometry.active_y..geometry.active_y + geometry.active_height {
+        let start = y * geometry.raster_width + geometry.active_x;
+        aperture.extend_from_slice(&composed[start..start + geometry.active_width]);
+    }
+    write_diagnostic_rgb_png(
+        &out_dir.join("aperture.png"),
+        &aperture,
+        geometry.active_width,
+        geometry.active_height,
+    )?;
+
+    if let Some(video) = machine
+        .bus
+        .dvc
+        .as_ref()
+        .and_then(cdi_core::Vmpeg::diagnostic_external_video_frame)
+    {
+        write_diagnostic_rgb_png(
+            &out_dir.join("external-source.png"),
+            &video.source_pixels,
+            video.source_width,
+            video.source_height,
+        )?;
+        write_diagnostic_rgb_png(
+            &out_dir.join("external-raster.png"),
+            &video.output_pixels,
+            video.output_width,
+            video.output_height,
+        )?;
+        let metadata = serde_json::json!({
+            "source_width": video.source_width,
+            "source_height": video.source_height,
+            "output_width": video.output_width,
+            "output_height": video.output_height,
+            "display_x": video.display_x,
+            "display_y": video.display_y,
+            "window_x": video.window_x,
+            "window_y": video.window_y,
+            "window_width": video.window_width,
+            "window_height": video.window_height,
+            "vcd_clock": video.vcd_clock,
+        });
+        std::fs::write(
+            out_dir.join("external-video.json"),
+            serde_json::to_vec_pretty(&metadata)?,
+        )?;
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     match Cli::parse().command {
@@ -212,6 +342,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             audio_wav,
             dump_vmpeg_es,
             dump_video_ram,
+            dump_display_diagnostics,
             dump_dvc_ram,
             hash,
             diagnostics,
@@ -232,6 +363,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             audio_wav.as_deref(),
             dump_vmpeg_es.as_deref(),
             dump_video_ram.as_deref(),
+            dump_display_diagnostics.as_deref(),
             dump_dvc_ram.as_deref(),
             hash,
             diagnostics.as_deref(),
@@ -404,6 +536,7 @@ fn boot(
     audio_wav: Option<&std::path::Path>,
     dump_vmpeg_es: Option<&std::path::Path>,
     dump_video_ram: Option<&std::path::Path>,
+    dump_display_diagnostics: Option<&std::path::Path>,
     dump_dvc_ram: Option<&std::path::Path>,
     hash: bool,
     diagnostics: Option<&std::path::Path>,
@@ -450,6 +583,9 @@ fn boot(
         })
         .transpose()?;
     let mut machine = cdi_core::Machine::with_dvc(&model, image, dvc)?;
+    if dump_display_diagnostics.is_some() {
+        machine.bus.mcd212.set_diagnostic_plane_capture(true);
+    }
     if let Some(path) = nvram {
         let data = std::fs::read(path)?;
         if data.len() != machine.bus.nvram.len() {
@@ -745,6 +881,10 @@ fn boot(
         std::fs::write(out_dir.join("plane-a.bin"), plane_a)?;
         std::fs::write(out_dir.join("plane-b.bin"), plane_b)?;
         println!("Video RAM written to {}", out_dir.display());
+    }
+    if let Some(out_dir) = dump_display_diagnostics {
+        write_display_diagnostics(&machine, out_dir)?;
+        println!("Display diagnostics written to {}", out_dir.display());
     }
     if let Some(out_path) = dump_dvc_ram {
         let bytes = machine

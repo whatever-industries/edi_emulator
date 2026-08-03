@@ -96,6 +96,16 @@
       "result": "related-different-path",
       "revision": "c5ac422185774c8e2e16f207812ccf2588259550",
       "notes": "Women of the World - Brazilian Girls Europe shows a thin changing multicolored pattern at the bottom of a VCD MPEG frame. Because this uses VMPEG external video rather than the base-plane RTF drawmap path, it weakens common CDFM/RTF transfer as the sole explanation and raises the shared MCD212/aperture boundary while preserving the possibility of two independent upstream final-line defects."
+    },
+    {
+      "result": "related-but-materially-different",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:323d24aa6e6872558cdcb94922b0f00652111f283ce00cfc637a5127029476f8",
+      "notes": "The thin bottom line visible in the paired Forrest Gump Full-signal/CRT captures occurs while the title's native Video CD control overlay is open and is also seen with RoboCop's corresponding controls. It is not direct evidence for Kether's Green Book real-time-record decode or transfer path. However, both the native VCD overlay and Kether's decoded base-plane drawmap ultimately pass through MCD212, so a shared lower-boundary presentation rule remains possible and must be distinguished with plane/raster provenance captures."
+    },
+    {
+      "result": "vcd-bottom-pattern-revalidated",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "notes": "Women of the World - Brazilian Girls Europe still shows its dotted bottom-edge pattern during the clean VCD pass but has no other observed issue. Its former right-edge column is not reproduced. The external-video path remains related but materially different from Kether's base-plane RTF path."
     }
   ]
 }

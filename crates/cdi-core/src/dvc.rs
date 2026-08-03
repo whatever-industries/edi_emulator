@@ -97,6 +97,29 @@ impl ExternalVideo<'_> {
     }
 }
 
+/// Read-only VMPEG picture provenance for diagnostic captures.
+///
+/// `source_pixels` is the decoded MPEG picture before MCD251 positioning.
+/// `output_pixels` is the exact 768x280 logical raster supplied to MCD212
+/// after applying the guest-programmed source window, display origin, sample
+/// clock conversion, and border color.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DvcDiagnosticVideoFrame {
+    pub source_width: usize,
+    pub source_height: usize,
+    pub source_pixels: Vec<u32>,
+    pub output_width: usize,
+    pub output_height: usize,
+    pub output_pixels: Vec<u32>,
+    pub display_x: usize,
+    pub display_y: usize,
+    pub window_x: usize,
+    pub window_y: usize,
+    pub window_width: usize,
+    pub window_height: usize,
+    pub vcd_clock: bool,
+}
+
 /// Supported/recognized Digital Video Cartridge chipset families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DvcKind {
@@ -1621,6 +1644,38 @@ impl Vmpeg {
 
     pub fn take_audio(&mut self) -> Vec<i16> {
         std::mem::take(&mut self.audio_out)
+    }
+
+    /// Capture the currently latched external-video source and MCD251 output.
+    ///
+    /// This is diagnostic-only state: reading it does not acknowledge an
+    /// interrupt, consume a picture, or otherwise alter cartridge behavior.
+    pub fn diagnostic_external_video_frame(&self) -> Option<DvcDiagnosticVideoFrame> {
+        const OUTPUT_WIDTH: usize = 768;
+        const OUTPUT_HEIGHT: usize = 280;
+
+        let external = self.external_video()?;
+        let mut output_pixels = Vec::with_capacity(OUTPUT_WIDTH * OUTPUT_HEIGHT);
+        for y in 0..OUTPUT_HEIGHT {
+            for x in 0..OUTPUT_WIDTH {
+                output_pixels.push(external.pixel(x, y));
+            }
+        }
+        Some(DvcDiagnosticVideoFrame {
+            source_width: external.frame.width,
+            source_height: external.frame.height,
+            source_pixels: external.frame.pixels.clone(),
+            output_width: OUTPUT_WIDTH,
+            output_height: OUTPUT_HEIGHT,
+            output_pixels,
+            display_x: external.display_x,
+            display_y: external.display_y,
+            window_x: external.window_x,
+            window_y: external.window_y,
+            window_width: external.window_width,
+            window_height: external.window_height,
+            vcd_clock: external.vcd_clock,
+        })
     }
 
     pub(crate) fn external_video(&self) -> Option<ExternalVideo<'_>> {

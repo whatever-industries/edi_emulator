@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "id": "addams-usa-video-controls-bottom-color-line",
+  "title": "Video CD native controls intermittently expose a colored bottom line",
+  "symptom": "A thin multicolored line intermittently appears at the bottom edge while native Video CD controls are displayed. It is reproduced by Addams Family Values USA, CD-i See It Hear It, Forrest Gump, Pete Townshend Live, and RoboCop. A playback-state change can clear it while controls remain available: CONTENTS-to-playback clears it in CD-i See It Hear It and Forrest Gump, while fast-forward clears it in Pete Townshend. Die schoensten Frauen der Welt - Naomi Campbell is a clean counterexample.",
+  "expected": "Opening the native Video CD controls does not expose unintended colored samples below the authored control panel.",
+  "status": "reproduced",
+  "reported_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
+  "last_reproduced_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+  "last_verified_revision": null,
+  "evidence_status": "current",
+  "revalidation_reason": null,
+  "components": [
+    "mcd212",
+    "dvc",
+    "vcd"
+  ],
+  "disc_fingerprint": "Addams Family Values USA: dd9adb80a89378d97acfecaf50ce20d0f769c442; Pete Townshend Live USA Disc 1: b640c77e36148e07b141b24e627aeced84c598e4; RoboCop USA Disc 1: 3e23560d668bd6934c4a13c97e205acba5fc56d3; CD-i See It Hear It, Forrest Gump USA Disc 1, and Die schoensten Frauen der Welt - Naomi Campbell Germany: inventory pending",
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "ntsc",
+    "dvc": "vmpega",
+    "instruction_limit": null,
+    "input_events": []
+  },
+  "hypotheses": [
+    {
+      "id": "native-controls-lower-boundary",
+      "hardware_explanation": "The native Video CD controls may program a base-plane or composed-raster lower boundary that the emulator presents one line too far, exposing content-dependent data below the panel.",
+      "supporting_evidence": [
+        "The submitted frame confines the colored pattern to a thin line immediately below the native control panel.",
+        "A later frame with the same controls open is clean, consistent with an exposed boundary row whose pixels vary with video or display state rather than a static control-panel graphic.",
+        "CD-i See It Hear It reproduces the same line, and a CONTENTS-to-playback round trip clears it without removing native playback controls.",
+        "Forrest Gump reproduces the line until a CONTENTS-to-playback round trip, and Pete Townshend reproduces it until fast-forward changes playback state.",
+        "RoboCop independently reproduces the same controls-line symptom.",
+        "Kether and Laser Lords have separate content-correlated bottom-edge incidents that also prioritize MCD212 lower-boundary provenance."
+      ],
+      "contradicting_evidence": [
+        "The controls can remain open without reproducing the line, so control visibility alone is insufficient to trigger it.",
+        "The two imported observations are different video frames rather than a controlled same-frame comparison.",
+        "The CONTENTS round trip also advances or reconstructs playback state, so it does not yet isolate a control-plane redraw from a change in underlying video content.",
+        "Die schoensten Frauen der Welt - Naomi Campbell does not reproduce the line under its controls, proving the fault is not unconditional across Video CD titles.",
+        "No drawmap, individual-plane, composed-raster, and aperture capture has located the first divergent stage.",
+        "The visually related Kether and Laser Lords paths do not use the same VMPEG/native-control source path."
+      ],
+      "falsifying_test": "Reproduce a stable affected frame, capture external-video, MCD212-plane, composed-raster, and frontend-aperture stages, then perform the CONTENTS-to-playback round trip and capture the same stages again. If only MPEG content changes while the control-plane boundary is identical, stale control-boundary state is falsified; if the line is authored or appears on real hardware, an emulator boundary defect is falsified.",
+      "citations": [
+        "MCD212 Technical Specification display-file and DCA lower-boundary behavior",
+        "docs/debugging-workflow.md display-provenance stages",
+        "data/compatibility/incidents/kether-bottom-display-line-artifacts.json",
+        "data/compatibility/incidents/laser-lords-bottom-video-line-artifacts.json"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reproduced-current-clean-pass",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
+      "notes": "The thin colored line is visible below the native controls in evidence img-20260802T234154.747285Z-61a0caeb9148-0fae9a062200 (SHA-256 0fae9a062200c238aab993810666f79d4ea9773d728c26a62be87e6f877a3c0b). The user reports no other issue in Addams Family Values USA during this pass."
+    },
+    {
+      "result": "intermittent-counterexample",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "notes": "A later playback frame retains the native controls but has no colored bottom line (evidence img-20260802T234813.741970Z-f06d74d4c2d6-f73a3729cf8b, SHA-256 f73a3729cf8b6bc8c40acb4adf67b5929ac418d6c6d89d1df6f9aa0e45484fdb). Control visibility is therefore not a sufficient trigger; the symptom is intermittent or dependent on underlying video/display state."
+    },
+    {
+      "result": "cross-title-state-transition",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "notes": "CD-i See It Hear It displays correctly except for the same odd line below its native in-video controls. Selecting CONTENTS and then returning to video removes the line while playback controls remain available. This makes permanent MPEG corruption or a static control graphic less likely and prioritizes stateful control-plane redraw, DCA/lower-boundary latching, or content-dependent exposure of an unintended row."
+    },
+    {
+      "result": "cross-title-pattern-confirmed",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "notes": "Forrest Gump has the line until CONTENTS is opened and playback restarts. Pete Townshend has the line until fast-forward is pressed. RoboCop also reproduces it. All three otherwise pass the current review. The two different clearing actions show that a broader playback/control-state transition, not CONTENTS specifically, jars the faulty state clear."
+    },
+    {
+      "result": "clean-counterexample",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "notes": "Die schoensten Frauen der Welt - Naomi Campbell (Germany) never shows the controls-line symptom during the current review."
+    }
+  ]
+}

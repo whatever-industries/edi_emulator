@@ -1,4 +1,4 @@
-# CD-i display geometry and analog presentation
+# CD-i display geometry and presentation
 
 ## Model boundary
 
@@ -7,24 +7,17 @@
 `ST`, `FD`, `SM`, and field-parity state. MCD212 Compatibility Mode is part of
 that hardware geometry.
 
-An analog television did not necessarily expose every generated sample. The
-frontend therefore offers two presentation choices:
+The frontend always presents that hardware-defined active picture. It does not
+simulate analog television overscan, inspect framebuffer contents to choose a
+crop, or expose a host-defined CRT/full-signal mode. Rendering, screenshots,
+window aspect, and pointer endpoints consume the same core aperture. Authored
+padding therefore remains visible unless the guest selects an MCD212 hardware
+Compatibility Mode.
 
-- **Typical CRT** (default): presents a conventional television-safe area. Its
-  current 525-line implementation retains a temporary frontend heuristic from
-  earlier compatibility work: four-sided windowboxed material uses the
-  centered host aperture x=24, y=20, width=720, height=440, while picture
-  content in the bottom ten source lines selects a bottom-aligned y=40
-  aperture. PAL and hardware Compatibility Mode are left unchanged.
-- **Full signal**: present the complete MCD212 hardware aperture.
-
-The 525-line edge heuristic is independent of title names and disc hashes, but
-it is content-sensitive and therefore is not part of the specification-derived
-`DisplayGeometry`. It remains isolated in frontend presentation code pending a
-hardware-derived replacement, as tracked in `docs/code-audit.md`. The same
-selected aperture drives texture UVs, screenshots, window aspect, and pointer
-endpoints. Raw square pixels remain available separately as a diagnostic;
-normal presentation uses the measured Philips player pixel aspect.
+Normal presentation uses the measured Philips player pixel aspect. The
+optional raw-square-pixel diagnostic changes only pixel shape; it never crops
+or repositions the core aperture. Real television overscan varied by set and is
+outside the emulated player boundary.
 
 Green Book V.4.8 distinguishes 525-line **monitor** and **TV** outputs.
 Compatibility mode is a centered 360-pixel picture on the 525 TV output but a
@@ -76,14 +69,13 @@ noninterlaced), so the correct digital signal remains 384x240. The title's
 display-control program independently creates a 360x220 picture at normal
 resolution: its visible bounding box is x=12..371 and y=20..239, or
 x=24..743/y=40..479 in E-Di's double-resolution framebuffer. That authored
-picture is bottom-aligned within the signal, so Typical CRT uses the
-bottom-aligned aperture for this frame. The opening logos and four-sided
-windowboxes remain centered.
+picture is bottom-aligned within the signal. E-Di preserves the complete
+hardware aperture, including that placement and any surrounding padding.
 
 The title developer's surviving technical note also documents that the main
 game deliberately uses black top/bottom borders as sprite-overflow space.
-Those internal gameplay borders are title graphics; the edge rule only
-chooses which ten source-line analog overscan margin is omitted.
+Those internal gameplay borders are title graphics and are not removed by
+host presentation.
 
 With the measured NTSC pixel aspect, that intended viewing area is:
 
@@ -92,14 +84,14 @@ With the measured NTSC pixel aspect, that intended viewing area is:
 ```
 
 which is effectively 4:3. The complete 384x240 signal is only 1.306:1 after
-the same correction. This explains the apparent top and side borders without
-changing MCD212 region-control semantics. Different intro screens may still
-contain their own padding inside the signal; a global viewing area preserves
-those differences instead of resizing every scene.
+the same correction. This explains why a historically simulated television-
+safe crop appeared close to 4:3, but it is not a specified player aperture.
+Different intro screens may contain their own padding inside the signal; the
+hardware aperture preserves those differences instead of resizing every
+scene.
 
 An older MESS/MAME result is not a reliable geometry oracle here. Historical
 MCD212 code failed to stop implicit region-control register scanning after an
 operation-0 instruction, contrary to the MCD212 specification. Reproducing
 that behavior can make some frames look fuller but changes the emulated
-display program. E-Di retains the specified operation-0 termination and keeps
-analog presentation outside the core.
+display program. E-Di retains the specified operation-0 termination.

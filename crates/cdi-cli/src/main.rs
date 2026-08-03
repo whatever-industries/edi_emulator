@@ -33,6 +33,45 @@ struct ClickEvent {
     duration: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MemoryWriteEvent {
+    at: u64,
+    address: u32,
+    bytes: Vec<u8>,
+}
+
+fn parse_prefixed_u32(value: &str) -> Result<u32, String> {
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    u32::from_str_radix(value, 16).map_err(|_| "invalid hexadecimal address".to_owned())
+}
+
+fn parse_memory_write_event(value: &str) -> Result<MemoryWriteEvent, String> {
+    let mut fields = value.split(':');
+    let at = fields
+        .next()
+        .ok_or("missing instruction number")?
+        .parse()
+        .map_err(|_| "invalid instruction number".to_owned())?;
+    let address = parse_prefixed_u32(fields.next().ok_or("missing address")?)?;
+    let encoded = fields.next().ok_or("missing hexadecimal bytes")?;
+    if fields.next().is_some() {
+        return Err("expected INSTRUCTION:ADDRESS:HEXBYTES".to_owned());
+    }
+    if encoded.is_empty() || encoded.len() % 2 != 0 || encoded.len() > 512 {
+        return Err("hexadecimal bytes must contain 1 to 256 complete bytes".to_owned());
+    }
+    let bytes = encoded
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let pair =
+                std::str::from_utf8(pair).map_err(|_| "invalid hexadecimal bytes".to_owned())?;
+            u8::from_str_radix(pair, 16).map_err(|_| "invalid hexadecimal bytes".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(MemoryWriteEvent { at, address, bytes })
+}
+
 fn parse_click_event(value: &str) -> Result<ClickEvent, String> {
     let (at, event) = value
         .split_once(':')
@@ -134,6 +173,15 @@ enum Command {
         /// 2=right, and 4=both/third CD-i action.
         #[arg(long = "click-event", value_parser = parse_click_event)]
         click_events: Vec<ClickEvent>,
+        /// Deliberately patch mapped guest RAM at
+        /// INSTRUCTION:ADDRESS:HEXBYTES for a bounded native-driver fixture.
+        #[arg(
+            long = "memory-write-event",
+            value_parser = parse_memory_write_event,
+            requires = "diagnostics",
+            hide = true
+        )]
+        memory_write_events: Vec<MemoryWriteEvent>,
         /// Write the final framebuffer to a PNG file.
         #[arg(long)]
         screenshot: Option<PathBuf>,
@@ -338,6 +386,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             click,
             click_at,
             click_events,
+            memory_write_events,
             screenshot,
             audio_wav,
             dump_vmpeg_es,
@@ -359,6 +408,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             click.as_deref(),
             click_at,
             click_events,
+            memory_write_events,
             screenshot.as_deref(),
             audio_wav.as_deref(),
             dump_vmpeg_es.as_deref(),
@@ -532,6 +582,7 @@ fn boot(
     click: Option<&str>,
     click_at: Option<u64>,
     mut click_events: Vec<ClickEvent>,
+    mut memory_write_events: Vec<MemoryWriteEvent>,
     screenshot: Option<&std::path::Path>,
     audio_wav: Option<&std::path::Path>,
     dump_vmpeg_es: Option<&std::path::Path>,
@@ -659,6 +710,8 @@ fn boot(
     }
     click_events.sort_by_key(|event| event.at);
     let mut click_event_index = 0usize;
+    memory_write_events.sort_by_key(|event| event.at);
+    let mut memory_write_event_index = 0usize;
     for i in 0..instructions {
         if disc_at == Some(i) {
             machine.change_disc(delayed_disc.take());
@@ -669,6 +722,18 @@ fn boot(
                 "{i:>8} pc={:#010x} sr={:#06x} d0={:#010x} a7={:#010x}",
                 machine.cpu.pc, machine.cpu.sr, machine.cpu.d[0], machine.cpu.a[7]
             );
+        }
+        while let Some(event) = memory_write_events.get(memory_write_event_index) {
+            if event.at != i {
+                break;
+            }
+            machine.apply_diagnostic_ram_patch(event.address, &event.bytes)?;
+            println!(
+                "Diagnostic RAM patch at instruction {i}: {:#010x}, {} byte(s)",
+                event.address,
+                event.bytes.len()
+            );
+            memory_write_event_index += 1;
         }
         if let Some(event) = click_events.get(click_event_index) {
             // Hover before the requested point, hold for a deterministic
@@ -1046,7 +1111,39 @@ fn info(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::WavWriter;
+    use super::{parse_memory_write_event, MemoryWriteEvent, WavWriter};
+
+    #[test]
+    fn legacy_cdic_diagnostic_events_default_new_routing_fields() {
+        let event: cdi_core::MachineDiagnosticEvent = serde_json::from_str(
+            r#"{"kind":"cdic-state","cycle":1,"command":42,"audio_buffer":0,"x_buffer":0,"z_buffer":0,"data_buffer":0,"interrupt_asserted":false}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            event,
+            cdi_core::MachineDiagnosticEvent::CdicState {
+                selected_file: 0,
+                selected_channels: 0,
+                audio_channel: 0,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn memory_write_event_parses_bounded_hexadecimal_bytes() {
+        assert_eq!(
+            parse_memory_write_event("300000000:0x0027ada8:00000000").unwrap(),
+            MemoryWriteEvent {
+                at: 300_000_000,
+                address: 0x0027_ADA8,
+                bytes: vec![0; 4],
+            }
+        );
+        assert!(parse_memory_write_event("1:20:0").is_err());
+        assert!(parse_memory_write_event("1:20:gg").is_err());
+        assert!(parse_memory_write_event("1:20:éé").is_err());
+    }
 
     #[test]
     fn wav_writer_emits_a_standard_stereo_pcm_header() {

@@ -2,8 +2,8 @@
   "schema_version": 1,
   "id": "addams-usa-video-controls-bottom-color-line",
   "title": "Video CD native controls intermittently expose a colored bottom line",
-  "symptom": "A thin multicolored line intermittently appears at the bottom edge while native Video CD controls are displayed. It is reproduced by Addams Family Values USA, CD-i See It Hear It, Forrest Gump, Pete Townshend Live, and RoboCop. A playback-state change can clear it while controls remain available: CONTENTS-to-playback clears it in CD-i See It Hear It and Forrest Gump, while fast-forward clears it in Pete Townshend. Die schoensten Frauen der Welt - Naomi Campbell is a clean counterexample.",
-  "expected": "Opening the native Video CD controls does not expose unintended colored samples below the authored control panel.",
+  "symptom": "A thin multicolored line intermittently appears at the bottom edge while native Video CD controls are displayed. It is reproduced by Addams Family Values USA, CD-i See It Hear It, Forrest Gump, Pete Townshend Live, and RoboCop. A playback-state change can clear it while controls remain available: CONTENTS-to-playback clears it in CD-i See It Hear It, Forrest Gump, and Addams Family Values USA, while fast-forward clears it in Pete Townshend. Die schoensten Frauen der Welt - Naomi Campbell and Addams Family Values UK are clean counterexamples.",
+  "expected": "Whether a native control bar covers, transparently reveals, or is flush with the final picture rows must follow the title's configured engine and the player compositor; the current captures do not establish a universal expected lower boundary.",
   "status": "reproduced",
   "reported_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
   "last_reproduced_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
@@ -33,13 +33,15 @@
         "CD-i See It Hear It reproduces the same line, and a CONTENTS-to-playback round trip clears it without removing native playback controls.",
         "Forrest Gump reproduces the line until a CONTENTS-to-playback round trip, and Pete Townshend reproduces it until fast-forward changes playback state.",
         "RoboCop independently reproduces the same controls-line symptom.",
-        "Kether and Laser Lords have separate content-correlated bottom-edge incidents that also prioritize MCD212 lower-boundary provenance."
+        "Kether and Laser Lords have separate content-correlated bottom-edge incidents that also prioritize MCD212 lower-boundary provenance.",
+        "Addams Family Values USA retains noisy plane-B bottom rows in both a failing capture and a CONTENTS-cleared capture; the difference is whether the composed raster exposes them."
       ],
       "contradicting_evidence": [
         "The controls can remain open without reproducing the line, so control visibility alone is insufficient to trigger it.",
         "The two imported observations are different video frames rather than a controlled same-frame comparison.",
         "The CONTENTS round trip also advances or reconstructs playback state, so it does not yet isolate a control-plane redraw from a change in underlying video content.",
-        "Die schoensten Frauen der Welt - Naomi Campbell does not reproduce the line under its controls, proving the fault is not unconditional across Video CD titles.",
+        "Die schoensten Frauen der Welt - Naomi Campbell and Addams Family Values UK do not reproduce the line under their controls, proving the behavior is not unconditional across Video CD titles.",
+        "Accused NL shows a small amount of picture data behind its native bar without the colored-line symptom, so some lower-edge picture visibility may be configured behavior rather than a leak.",
         "No drawmap, individual-plane, composed-raster, and aperture capture has located the first divergent stage.",
         "The visually related Kether and Laser Lords paths do not use the same VMPEG/native-control source path."
       ],
@@ -52,7 +54,38 @@
       ]
     }
   ],
-  "experiments": [],
+  "experiments": [
+    {
+      "id": "dca-stop-field-latch",
+      "context": {
+        "base_revision": "cd351260f978a8e09a1125f3aa6ec3ad2708f349",
+        "component_fingerprints": {
+          "mcd212-dca": "process_dca per-line 64-byte slot advance"
+        },
+        "model": "cdi220b",
+        "video_standard": "ntsc",
+        "dvc": "vmpega",
+        "scenario": "Addams Family Values USA native control opening"
+      },
+      "hypothesis": "A DCA STOP instruction halts all subsequent line-control fetches until the next field, so the emulator must retain a per-field stopped latch.",
+      "strategy": "Add synthetic STOP and RELOAD-DCP-and-STOP tests, then prevent MCD212 from fetching successor 64-byte DCA slots after either instruction.",
+      "expected": "The invalid lower-memory walk would stop, leaving the native controls intact while masking the colored line.",
+      "actual": "The synthetic tests passed but a new four-field Addams USA capture immediately lost the native control panel, leaving only a broken cyan pattern and clock before playback resumed. The title's valid DCA program relies on STOP terminating the current line's fetch while later scanlines still consume their successor slots. The implementation was fully reverted.",
+      "outcome": "hypothesis-falsified",
+      "reverted": true,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "MCD212 DCA programs with STOP-padded 64-byte per-line slots"
+        ],
+        "invalidated_by": [],
+        "repeat_when": [
+          "Only if a primary hardware trace distinguishes a field-wide DCA-stop latch from the documented per-line automatic-stop behavior"
+        ]
+      }
+    }
+  ],
   "manual_verification": [
     {
       "result": "reproduced-current-clean-pass",
@@ -78,6 +111,11 @@
       "result": "clean-counterexample",
       "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
       "notes": "Die schoensten Frauen der Welt - Naomi Campbell (Germany) never shows the controls-line symptom during the current review."
+    },
+    {
+      "result": "regional-engine-geometry-comparison",
+      "revision": "cd351260f978a8e09a1125f3aa6ec3ad2708f349",
+      "notes": "Accused NL shows a few lower picture rows behind its in-video bar without the colored-line symptom. Addams Family Values UK is flush at the lower edge and shows neither the colored line nor picture peeking below the bar. Addams Family Values USA reproduces the colored line, then a diagnostic captured after CONTENTS-to-playback shows it cleared. These observations support title engine/configuration or compositor state as variables; they do not establish a different Video CD specification by region. Local diagnostic images retain the detailed raster evidence."
     }
   ]
 }

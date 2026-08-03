@@ -112,6 +112,41 @@ decoded video frames, 45 decoded audio frames, no PCL overwrite, and zero
 demux/video/audio/stream errors. This closes the current VCD audio divergence
 without changing transport timing or decoded output.
 
+The read-only CDFM trace now also snapshots the complete PCB associated with
+each discovered PCL chain. It reports the EOR-delimited `PCB_Rec` countdown,
+the transition to zero, re-arming, `PCB_Chan` selection, `PCB_AChan`
+direct-audio routing, and all CIL pointers. The Philips *master Disc Building
+Utility*, printed pp. 3-64--3-65, supplies the worked record-count example;
+Green Book R2 VII.2 supplies the structure. Focused tests cover the event
+transitions and prove that audio PCL context follows `PCB_Chan`, not the
+separate direct-audio mask. This is diagnostic-only: the next CDFM action is a
+native selected-sector termination fixture, not duplicated PCB behavior in
+CDIC. That first native gate now uses Philips FPD805 `bmp_nat` source and media:
+an uninterrupted three-record play reaches normal EOR/`PCB_Rec` exhaustion,
+while its two-button handler calls `ss_abort` during channel-15 direct audio.
+`scripts/test-cdfm-play-termination-local.sh` proves the abort path clears the
+live direct-audio route and issues CDIC Update earlier, emits fewer audio
+frames, and returns to the same player shell. The source makes the ordering
+important: `abort_bumper()` itself clears `PCB_AChan` during fade-down, before
+`play_bumper()` later calls `ss_abort`; the route change must not be attributed
+to the system call.
+
+The selected-sector fixture is now complete for the current 220 target.
+`scripts/test-cdfm-pcb-rec-local.sh` uses bounded, explicitly recorded guest-RAM
+patches after preflighting the exact FPD805 fingerprint and 220 ROM hash. It
+validates the expected before/after field hashes, isolates channel-15 audio, and
+sets `PCB_Rec` from one to zero mid-play in three cases: direct audio unchanged,
+Philips TN 085.1's `PCB_AChan`-clear workaround with a null audio CIL entry, and
+the same workaround with a valid one-sector PCL initialized and published only
+after its former video channel is inactive. All three wait for the same next
+selected audio-sector interrupt before ending the route; the two workaround
+cases have cycle-identical `PCB_Rec`, selected-sector, and route-clear milestones
+and return cleanly. This records the fast
+behavior Green Book permits on this player/driver combination, while TN 085.1's
+warning remains relevant to other players that only recognize sectors selected
+for RAM delivery. No emulator behavior changed. The M3 title action remains the
+cake-puzzle gate.
+
 Philips TN 088 and TN 102 also separate decoder-transition failures from that
 transport issue. Pause/continue, abort/restart, EOS+SOS in one sector,
 sequence changes, stale B-pictures, and redundant EOS codes each need a

@@ -6,13 +6,6 @@ use cdi_core::mcd212::{presentation_rgb, DisplayGeometry};
 
 use super::SharedFrame;
 
-#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub(super) enum DisplayArea {
-    #[default]
-    TypicalCrt,
-    FullSignal,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct DisplayAperture {
     pub(super) left: usize,
@@ -44,49 +37,13 @@ pub(super) fn fit_aspect(available: egui::Vec2, aspect: f32) -> egui::Vec2 {
     egui::vec2(width, width / aspect)
 }
 
-pub(super) fn display_aperture(frame: &SharedFrame, display_area: DisplayArea) -> DisplayAperture {
-    let hardware = DisplayAperture {
+pub(super) fn display_aperture(frame: &SharedFrame) -> DisplayAperture {
+    DisplayAperture {
         left: frame.geometry.active_x,
         top: frame.geometry.active_y,
         width: frame.geometry.active_width,
         height: frame.geometry.active_height,
-    };
-    if display_area == DisplayArea::TypicalCrt
-        && frame.geometry.raster_height == 480
-        && hardware
-            == (DisplayAperture {
-                left: 0,
-                top: 0,
-                width: 768,
-                height: 480,
-            })
-    {
-        // Philips TN 093 gives the 525-line player pixel aspect as 1.225.
-        // The 360x220 normal-resolution television viewing area therefore
-        // presents at 1.336:1, effectively 4:3, while the surrounding
-        // 384x240 signal remains available through Full signal. Four-sided
-        // windowboxed material stays centered. A picture which reaches the
-        // bottom overscan edge uses the title/game convention that places
-        // the same 220-line area against the bottom of the signal.
-        let mut bottom_picture_pixels = 0usize;
-        for y in 460..480 {
-            bottom_picture_pixels += frame.pixels[y * frame.width + 24..y * frame.width + 744]
-                .iter()
-                .filter(|pixel| {
-                    let pixel = **pixel;
-                    ((pixel >> 16) & 0xFF) > 20 || ((pixel >> 8) & 0xFF) > 20 || (pixel & 0xFF) > 20
-                })
-                .count();
-        }
-        let bottom_edge_picture = bottom_picture_pixels >= 3_600;
-        return DisplayAperture {
-            left: 24,
-            top: if bottom_edge_picture { 40 } else { 20 },
-            width: 720,
-            height: 440,
-        };
     }
-    hardware
 }
 
 pub(super) fn pointer_mapping(
@@ -126,10 +83,9 @@ pub(super) fn screenshot_dimensions(
 /// PNG square display pixels.
 pub(super) fn screenshot_image(
     frame: &SharedFrame,
-    display_area: DisplayArea,
     crt_aspect: bool,
 ) -> cdi_photocd::decode::DecodedImage {
-    let aperture = display_aperture(frame, display_area);
+    let aperture = display_aperture(frame);
     let (width, height) = screenshot_dimensions(aperture, frame.geometry, crt_aspect);
     let mut rgb = Vec::with_capacity(width * height * 3);
     for y in 0..height {

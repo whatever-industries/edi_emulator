@@ -60,14 +60,14 @@
     },
     {
       "id": "frontend-overscan-presentation",
-      "hardware_explanation": "The global Typical CRT aperture may be cropping screens 3 and 4 differently from the intended analog viewing area, independently of the QHY bottom-row artifact.",
+      "hardware_explanation": "A frontend crop may have affected historical screens 3 and 4 independently of the QHY bottom-row artifact; that overscan simulation has since been removed.",
       "supporting_evidence": [
         "Screens 3 and 4 show text and graphics touching or crossing the visible edges."
       ],
       "contradicting_evidence": [
-        "No real-hardware comparison or Full signal capture is recorded yet."
+        "No real-hardware comparison or core-raster capture is recorded yet."
       ],
-      "falsifying_test": "Capture the same stable screens using Full signal and Typical CRT. If Full signal already lacks the edge content, frontend aperture selection is not causal.",
+      "falsifying_test": "Capture the same stable screen at the core raster and frontend output. Any first divergence at the frontend would identify presentation as causal.",
       "citations": [
         "docs/display-geometry.md",
         "Philips TN 093 image-format and safe-area guidance"
@@ -79,7 +79,7 @@
     {
       "result": "reported-current",
       "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:52f9474f4fb4ca328bb894fc697c174c0e728cb711c8af4502370ee7e1b1f293",
-      "notes": "User screenshots reproduce shot-dependent bottom-row patterns during QHY video and possible edge clipping in later screens. A future pass should compare the same stable frames under Full signal and Typical CRT and capture the six display-provenance stages."
+      "notes": "User screenshots reproduce shot-dependent bottom-row patterns during QHY video and possible edge clipping in later screens. A future pass should capture the same stable frames through all six display-provenance stages; the former host overscan simulation is no longer present."
     },
     {
       "result": "cross-title-corroboration",

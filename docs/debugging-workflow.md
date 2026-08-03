@@ -62,6 +62,31 @@ it still needs a falsifying test against the affected device boundary.
 5. Compare the two `evidence.json` files. If they diverge before the reported
    symptom, first investigate the nondeterminism.
 
+### Import manual screenshots immediately
+
+Attachment names are not evidence identifiers. They are commonly reused, and
+an application or browser may continue showing bytes cached under the old
+name. Before inspecting, comparing, or citing a manually supplied screenshot,
+copy it into ignored diagnostic storage with:
+
+```sh
+python3 scripts/import-diagnostic-image.py \
+  "/local/path/reused screenshot.png" \
+  --incident INCIDENT \
+  --label "screen and observation"
+```
+
+The importer prints a canonical `img-...` evidence ID and path. Every import
+gets a new timestamp/UUID ID even if its original filename and content match a
+previous import. Adjacent JSON records the original filename and SHA-256, so
+identical bytes remain detectable. Refer to the evidence ID thereafter, not
+the attachment name. Importing prevents later filename reuse or overwrite
+from changing the observation; it cannot repair an attachment whose source
+bytes were already stale, so inspect the canonical copy immediately.
+
+Imported images and metadata remain under
+`tests-data/local/diagnostics/` and must never be promoted or committed.
+
 For a disc-only architecture pass (including CD-i Green Book volumes and ISO
 9660/VCD trees), write a payload-free inventory:
 

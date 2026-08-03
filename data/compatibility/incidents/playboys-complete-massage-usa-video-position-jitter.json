@@ -73,6 +73,11 @@
       "result": "reproduced-clean-nvram",
       "revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
       "notes": "After all current and backup NVRAM stores were removed, the USA pressing retained the same margins, bottom bar, and intermittent vertical jitter. The Europe pressing played normally but also showed windowboxing."
+    },
+    {
+      "result": "cross-title-corroboration",
+      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:4d39dde2d669c0bc1f1287e9165557c07e9c0bd3c94207bf2db0326e41975150",
+      "notes": "RoboCop USA White Book VCD intermittently exhibits the previously reported rapid vertical bumping even though its 13.5 MHz horizontal presentation is centered and the right-edge column is gone. This separates the vertical jitter from the horizontal VCD clock defect and broadens the incident beyond Playboy's Complete Massage."
     }
   ]
 }

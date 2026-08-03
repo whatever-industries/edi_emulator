@@ -23,6 +23,6 @@ pub use diagnostics::{
     MachineDiagnosticSnapshot, Mcd212DiagnosticSnapshot, PclDataKind, PclDiagnosticSnapshot,
     PclTransition,
 };
-pub use dvc::{DvcConfig, DvcKind, DvcStats, Vmpeg};
+pub use dvc::{DvcConfig, DvcDiagnosticVideoFrame, DvcKind, DvcStats, Vmpeg};
 pub use machine::{Machine, MachineBus};
 pub use sched::{EventId, Scheduler, Ticks};

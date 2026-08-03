@@ -97,6 +97,33 @@ pub struct PclDiagnosticSnapshot {
     pub count: u32,
 }
 
+/// Green Book VII.2 Play Control Block state decoded from guest RAM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+pub struct PcbDiagnosticSnapshot {
+    pub address: u32,
+    pub status: u16,
+    pub signal: u16,
+    /// Real-time records left to play, where EOR marks a record boundary.
+    pub records_remaining: u32,
+    pub channel_mask: u32,
+    pub audio_channel_mask: u16,
+    pub video_cil: u32,
+    pub audio_cil: u32,
+    pub data_cil: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "savestate", serde(rename_all = "kebab-case"))]
+pub enum PcbTransition {
+    Discovered,
+    RecordsDecremented,
+    RecordsReachedZero,
+    RecordsIncreased,
+    Reconfigured,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "savestate", serde(rename_all = "kebab-case"))]
@@ -154,6 +181,12 @@ pub enum MachineDiagnosticEvent {
     CdicState {
         cycle: u64,
         command: u16,
+        #[cfg_attr(feature = "savestate", serde(default))]
+        selected_file: u16,
+        #[cfg_attr(feature = "savestate", serde(default))]
+        selected_channels: u32,
+        #[cfg_attr(feature = "savestate", serde(default))]
+        audio_channel: u16,
         audio_buffer: u16,
         x_buffer: u16,
         z_buffer: u16,
@@ -243,6 +276,19 @@ pub enum MachineDiagnosticEvent {
         source_dma_bytes: u32,
         pcl_addresses: Vec<u32>,
     },
+    /// A bounded test harness deliberately changed guest RAM.
+    ///
+    /// This is never produced by emulated software. It makes synthetic
+    /// native-driver experiments auditable without storing guest payloads in
+    /// the diagnostic JSON.
+    DiagnosticRamPatch {
+        cycle: u64,
+        memory_address: u32,
+        bytes: u32,
+        changed_bytes: u32,
+        before_hash: u64,
+        after_hash: u64,
+    },
     PclState {
         cycle: u64,
         /// CPU program counter immediately after the instruction that made
@@ -254,6 +300,20 @@ pub enum MachineDiagnosticEvent {
         pcb_address: Option<u32>,
         cil_address: Option<u32>,
         pcl: PclDiagnosticSnapshot,
+    },
+    /// Guest CDFM play-control state associated with a discovered PCL chain.
+    ///
+    /// Green Book R2 VII.2 defines the layout. The worked real-time-file
+    /// example in the Philips master Disc Building Utility, pp. 3-64--3-65,
+    /// confirms that `PCB_Rec` counts EOR-delimited records rather than
+    /// sectors. These events are observational and do not implement CDFM.
+    PcbState {
+        cycle: u64,
+        /// CPU program counter immediately after the instruction that made
+        /// this transition observable.
+        cpu_pc: u32,
+        transition: PcbTransition,
+        pcb: PcbDiagnosticSnapshot,
     },
     /// Guest software stored the address of a discovered PCL in RAM.
     ///
@@ -286,6 +346,9 @@ pub(crate) struct DiagnosticProbe {
     pub cdic_mode: u8,
     pub cdic_lba: u32,
     pub cdic_state: [u16; 5],
+    pub cdic_selected_file: u16,
+    pub cdic_selected_channels: u32,
+    pub cdic_audio_channel: u16,
     pub cdic_interrupt: bool,
     pub dvc_errors: [u64; 6],
     pub dvc_milestones: [u64; 12],
@@ -313,10 +376,16 @@ struct WatchedPcl {
     context_retry_done: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct WatchedPcb {
+    snapshot: PcbDiagnosticSnapshot,
+}
+
 /// Diagnostic-only ownership tracker anchored to actual DMA buffer ranges.
 #[derive(Debug, Default)]
 pub(crate) struct PclOwnershipTracker {
     watched: Vec<WatchedPcl>,
+    watched_pcbs: Vec<WatchedPcb>,
 }
 
 impl PclOwnershipTracker {
@@ -399,6 +468,7 @@ impl PclOwnershipTracker {
         regions: &[RamDiagnosticRegion<'_>],
     ) -> Vec<MachineDiagnosticEvent> {
         let mut events = Vec::new();
+        let mut discovered_pcbs = Vec::new();
         for watch in &mut self.watched {
             let Some(current) = parse_pcl(regions, watch.snapshot.address) else {
                 continue;
@@ -409,8 +479,9 @@ impl PclOwnershipTracker {
                 && current.submode & 0x0E != 0
             {
                 let context = find_pcl_context(regions, current);
-                if context.pcb_address.is_some() {
+                if let Some(pcb_address) = context.pcb_address {
                     watch.context = context;
+                    discovered_pcbs.push(pcb_address);
                 }
                 watch.context_retry_done = true;
             }
@@ -432,6 +503,29 @@ impl PclOwnershipTracker {
             };
             watch.snapshot = current;
             events.push(pcl_state_event(cycle, transition, current, watch.context));
+        }
+        for pcb_address in discovered_pcbs {
+            self.watch_pcb(regions, pcb_address, cycle, &mut events);
+        }
+        for watch in &mut self.watched_pcbs {
+            let Some(current) = parse_pcb(regions, watch.snapshot.address) else {
+                continue;
+            };
+            if current == watch.snapshot {
+                continue;
+            }
+            let previous = watch.snapshot;
+            let transition = if previous.records_remaining != 0 && current.records_remaining == 0 {
+                PcbTransition::RecordsReachedZero
+            } else if current.records_remaining < previous.records_remaining {
+                PcbTransition::RecordsDecremented
+            } else if current.records_remaining > previous.records_remaining {
+                PcbTransition::RecordsIncreased
+            } else {
+                PcbTransition::Reconfigured
+            };
+            watch.snapshot = current;
+            events.push(pcb_state_event(cycle, transition, current));
         }
         events
     }
@@ -461,6 +555,9 @@ impl PclOwnershipTracker {
                 context,
                 context_retry_done: false,
             });
+            if let Some(pcb_address) = context.pcb_address {
+                self.watch_pcb(regions, pcb_address, cycle, events);
+            }
             events.push(pcl_state_event(
                 cycle,
                 PclTransition::Discovered,
@@ -473,6 +570,27 @@ impl PclOwnershipTracker {
                 parse_plausible_pcl(regions, snapshot.next)
             };
         }
+    }
+
+    fn watch_pcb(
+        &mut self,
+        regions: &[RamDiagnosticRegion<'_>],
+        pcb_address: u32,
+        cycle: u64,
+        events: &mut Vec<MachineDiagnosticEvent>,
+    ) {
+        if self
+            .watched_pcbs
+            .iter()
+            .any(|watch| watch.snapshot.address == pcb_address)
+        {
+            return;
+        }
+        let Some(snapshot) = parse_pcb(regions, pcb_address) else {
+            return;
+        };
+        self.watched_pcbs.push(WatchedPcb { snapshot });
+        events.push(pcb_state_event(cycle, PcbTransition::Discovered, snapshot));
     }
 }
 
@@ -508,6 +626,19 @@ fn pcl_state_event(
         pcb_address: context.pcb_address,
         cil_address: context.cil_address,
         pcl,
+    }
+}
+
+fn pcb_state_event(
+    cycle: u64,
+    transition: PcbTransition,
+    pcb: PcbDiagnosticSnapshot,
+) -> MachineDiagnosticEvent {
+    MachineDiagnosticEvent::PcbState {
+        cycle,
+        cpu_pc: 0,
+        transition,
+        pcb,
     }
 }
 
@@ -647,11 +778,10 @@ fn find_pcl_context(regions: &[RamDiagnosticRegion<'_>], pcl: PclDiagnosticSnaps
                     if read_u32(pcb, pcb_cil_offset as usize) != cil_address {
                         continue;
                     }
-                    let selected = if data_kind == PclDataKind::Audio {
-                        u32::from(u16::from_be_bytes([pcb[12], pcb[13]])) & (1u32 << channel) != 0
-                    } else {
-                        read_u32(pcb, 8) & (1u32 << channel) != 0
-                    };
+                    // PCB_Chan selects sectors for processing regardless of
+                    // data kind. PCB_AChan separately routes selected audio
+                    // directly to the audio processor instead of RAM.
+                    let selected = read_u32(pcb, 8) & (1u32 << channel) != 0;
                     if !selected {
                         continue;
                     }
@@ -680,6 +810,21 @@ fn find_pcl_context(regions: &[RamDiagnosticRegion<'_>], pcl: PclDiagnosticSnaps
         pcb_address: None,
         cil_address: None,
     }
+}
+
+fn parse_pcb(regions: &[RamDiagnosticRegion<'_>], address: u32) -> Option<PcbDiagnosticSnapshot> {
+    let bytes = read_memory(regions, address, 26)?;
+    Some(PcbDiagnosticSnapshot {
+        address,
+        status: u16::from_be_bytes([bytes[0], bytes[1]]),
+        signal: u16::from_be_bytes([bytes[2], bytes[3]]),
+        records_remaining: read_u32(bytes, 4),
+        channel_mask: read_u32(bytes, 8),
+        audio_channel_mask: u16::from_be_bytes([bytes[12], bytes[13]]),
+        video_cil: read_u32(bytes, 14),
+        audio_cil: read_u32(bytes, 18),
+        data_cil: read_u32(bytes, 22),
+    })
 }
 
 fn pointer_occurrences(regions: &[RamDiagnosticRegion<'_>], value: u32) -> Vec<u32> {
@@ -742,6 +887,20 @@ mod pcl_tests {
         put_u32(memory, address + 24, 0);
     }
 
+    fn put_pcb(
+        memory: &mut [u8],
+        address: usize,
+        records_remaining: u32,
+        channel_mask: u32,
+        audio_channel_mask: u16,
+    ) {
+        put_u16(memory, address, 1);
+        put_u16(memory, address + 2, 0x1234);
+        put_u32(memory, address + 4, records_remaining);
+        put_u32(memory, address + 8, channel_mask);
+        put_u16(memory, address + 12, audio_channel_mask);
+    }
+
     #[test]
     fn circular_pcl_trace_detects_reuse_before_release() {
         let mut memory = vec![0u8; 0x3000];
@@ -752,7 +911,7 @@ mod pcl_tests {
         let buffer0 = 0x1000;
         let buffer1 = 0x2000;
 
-        put_u32(&mut memory, pcb + 8, 1);
+        put_pcb(&mut memory, pcb, 1, 1, 0);
         put_u32(&mut memory, pcb + 14, cil as u32);
         put_u32(&mut memory, cil, pcl0 as u32);
         put_pcl(&mut memory, pcl0, pcl1 as u32, buffer0 as u32);
@@ -819,5 +978,143 @@ mod pcl_tests {
         assert!(!events
             .iter()
             .any(|event| matches!(event, MachineDiagnosticEvent::PclOverwriteRisk { .. })));
+    }
+
+    #[test]
+    fn pcb_trace_reports_record_count_and_routing_changes() {
+        let mut memory = vec![0u8; 0x2000];
+        let pcb = 0x100;
+        let cil = 0x200;
+        let pcl = 0x300;
+        let buffer = 0x1000;
+
+        put_pcb(&mut memory, pcb, 2, 0x0000_0003, 0x0001);
+        put_u32(&mut memory, pcb + 14, cil as u32);
+        put_u32(&mut memory, cil + 4, pcl as u32);
+        put_pcl(&mut memory, pcl, pcl as u32, buffer as u32);
+
+        let mut tracker = PclOwnershipTracker::default();
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &memory,
+        }];
+        let (_, events) = tracker.observe_cdic_dma(10, &regions, buffer as u32, 2324);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, MachineDiagnosticEvent::PcbState { .. }))
+                .count(),
+            1
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::PcbState {
+                transition: PcbTransition::Discovered,
+                pcb: snapshot,
+                ..
+            } if snapshot.address == pcb as u32
+                && snapshot.status == 1
+                && snapshot.signal == 0x1234
+                && snapshot.records_remaining == 2
+                && snapshot.channel_mask == 3
+                && snapshot.audio_channel_mask == 1
+                && snapshot.video_cil == cil as u32
+        )));
+
+        put_u32(&mut memory, pcb + 4, 1);
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &memory,
+        }];
+        assert!(tracker.sample(20, &regions).iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::PcbState {
+                transition: PcbTransition::RecordsDecremented,
+                pcb: snapshot,
+                ..
+            } if snapshot.records_remaining == 1
+        )));
+
+        put_u32(&mut memory, pcb + 4, 0);
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &memory,
+        }];
+        assert!(tracker.sample(30, &regions).iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::PcbState {
+                transition: PcbTransition::RecordsReachedZero,
+                pcb: snapshot,
+                ..
+            } if snapshot.records_remaining == 0
+        )));
+
+        put_u32(&mut memory, pcb + 4, 3);
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &memory,
+        }];
+        assert!(tracker.sample(40, &regions).iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::PcbState {
+                transition: PcbTransition::RecordsIncreased,
+                pcb: snapshot,
+                ..
+            } if snapshot.records_remaining == 3
+        )));
+
+        put_u32(&mut memory, pcb + 8, 2);
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &memory,
+        }];
+        assert!(tracker.sample(50, &regions).iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::PcbState {
+                transition: PcbTransition::Reconfigured,
+                pcb: snapshot,
+                ..
+            } if snapshot.channel_mask == 2
+        )));
+    }
+
+    #[test]
+    fn audio_pcl_context_uses_channel_mask_not_direct_audio_mask() {
+        let mut memory = vec![0u8; 0x2000];
+        let pcb = 0x100;
+        let cil = 0x200;
+        let pcl = 0x300;
+        let buffer = 0x1000;
+
+        put_pcb(&mut memory, pcb, 1, 1 << 2, 0);
+        put_u32(&mut memory, pcb + 18, cil as u32);
+        put_u32(&mut memory, cil + 8, pcl as u32);
+        put_pcl(&mut memory, pcl, pcl as u32, buffer as u32);
+        memory[pcl + 2] = 0x24;
+
+        let mut tracker = PclOwnershipTracker::default();
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &memory,
+        }];
+        let (_, events) = tracker.observe_cdic_dma(10, &regions, buffer as u32, 2304);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::PclState {
+                transition: PclTransition::Discovered,
+                data_kind: PclDataKind::Audio,
+                channel: Some(2),
+                pcb_address: Some(0x100),
+                cil_address: Some(0x200),
+                ..
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::PcbState {
+                pcb: snapshot,
+                ..
+            } if snapshot.channel_mask == 1 << 2 && snapshot.audio_channel_mask == 0
+        )));
     }
 }

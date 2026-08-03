@@ -33,6 +33,7 @@ const DMA_SINGLE_ADDRESS_WORD_CYCLES: u64 = 6;
 const PAGE_SHIFT: u32 = 12;
 const PAGE_COUNT: usize = 1 << (24 - PAGE_SHIFT); // 4096 pages / 16 MB
 const ONCHIP_BASE: u32 = 0x8000_0000;
+const MAX_DIAGNOSTIC_RAM_PATCH_BYTES: usize = 256;
 
 #[derive(Debug, Clone, Copy)]
 struct DmaDiagnosticObservation {
@@ -933,6 +934,51 @@ impl MachineBus {
         regions
     }
 
+    fn apply_diagnostic_ram_patch(
+        &mut self,
+        address: u32,
+        bytes: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        if bytes.is_empty() {
+            return Err("diagnostic RAM patch must contain at least one byte".to_owned());
+        }
+        if bytes.len() > MAX_DIAGNOSTIC_RAM_PATCH_BYTES {
+            return Err(format!(
+                "diagnostic RAM patch exceeds {MAX_DIAGNOSTIC_RAM_PATCH_BYTES} bytes"
+            ));
+        }
+        let byte_count = u32::try_from(bytes.len())
+            .map_err(|_| "diagnostic RAM patch is too large".to_owned())?;
+        let end = address
+            .checked_add(byte_count)
+            .ok_or("diagnostic RAM patch address overflow")?;
+        let mut target = None;
+        for offset in 0..byte_count {
+            let current = address + offset;
+            let mapped = self
+                .regions
+                .iter()
+                .rev()
+                .find(|region| region.contains(current));
+            let Some(Region::Ram { block, base, .. }) = mapped.copied() else {
+                return Err(format!(
+                    "diagnostic RAM patch {address:#010x}..{end:#010x} is outside mapped RAM"
+                ));
+            };
+            if target.get_or_insert((block, base)) != &(block, base) {
+                return Err(format!(
+                    "diagnostic RAM patch {address:#010x}..{end:#010x} crosses mapped RAM regions"
+                ));
+            }
+        }
+        let (block, base) = target.expect("nonempty diagnostic patch has a mapped target");
+        let start = (address - base) as usize;
+        let finish = start + bytes.len();
+        let before = self.ram[block][start..finish].to_vec();
+        self.ram[block][start..finish].copy_from_slice(bytes);
+        Ok(before)
+    }
+
     fn raw_read8(&mut self, addr: u32) -> u8 {
         if addr >= ONCHIP_BASE {
             return self.dev_read8(DevSlot::OnChip, addr - ONCHIP_BASE);
@@ -1234,6 +1280,35 @@ impl Machine {
             .unwrap_or_default()
     }
 
+    /// Deliberately patch mapped guest RAM for a bounded diagnostic fixture.
+    ///
+    /// This is host-side test instrumentation, not emulated CPU or device
+    /// behavior. Diagnostics must be enabled so every patch remains visible
+    /// in the resulting evidence.
+    pub fn apply_diagnostic_ram_patch(&mut self, address: u32, bytes: &[u8]) -> Result<(), String> {
+        if self.diagnostic_events.is_none() {
+            return Err("diagnostic RAM patches require enabled diagnostics".to_owned());
+        }
+        let byte_count = u32::try_from(bytes.len())
+            .map_err(|_| "diagnostic RAM patch is too large".to_owned())?;
+        let before = self.bus.apply_diagnostic_ram_patch(address, bytes)?;
+        let changed_bytes = before
+            .iter()
+            .zip(bytes)
+            .filter(|(old, new)| old != new)
+            .count() as u32;
+        self.push_diagnostic_event(MachineDiagnosticEvent::DiagnosticRamPatch {
+            cycle: self.cpu.cycles,
+            memory_address: address,
+            bytes: byte_count,
+            changed_bytes,
+            before_hash: diagnostic_hash_bytes(&before),
+            after_hash: diagnostic_hash_bytes(bytes),
+        });
+        self.sample_diagnostics();
+        Ok(())
+    }
+
     fn diagnostic_probe(&self) -> DiagnosticProbe {
         let cdic = self.bus.cdic.diagnostic_snapshot();
         let dvc = self.dvc_stats().unwrap_or_default();
@@ -1261,6 +1336,9 @@ impl Machine {
                 cdic.z_buffer,
                 cdic.data_buffer,
             ],
+            cdic_selected_file: cdic.selected_file,
+            cdic_selected_channels: cdic.selected_channels,
+            cdic_audio_channel: cdic.audio_channel,
             cdic_interrupt: cdic.interrupt_asserted,
             dvc_errors: [
                 dvc.demux_errors,
@@ -1352,12 +1430,26 @@ impl Machine {
             });
         }
         if !self.milestone_only_diagnostics
-            && (current.cdic_state, current.cdic_interrupt)
-                != (previous.cdic_state, previous.cdic_interrupt)
+            && (
+                current.cdic_state,
+                current.cdic_selected_file,
+                current.cdic_selected_channels,
+                current.cdic_audio_channel,
+                current.cdic_interrupt,
+            ) != (
+                previous.cdic_state,
+                previous.cdic_selected_file,
+                previous.cdic_selected_channels,
+                previous.cdic_audio_channel,
+                previous.cdic_interrupt,
+            )
         {
             self.push_diagnostic_event(MachineDiagnosticEvent::CdicState {
                 cycle: self.cpu.cycles,
                 command: current.cdic_state[0],
+                selected_file: current.cdic_selected_file,
+                selected_channels: current.cdic_selected_channels,
+                audio_channel: current.cdic_audio_channel,
                 audio_buffer: current.cdic_state[1],
                 x_buffer: current.cdic_state[2],
                 z_buffer: current.cdic_state[3],
@@ -1516,8 +1608,12 @@ impl Machine {
             }
         }
         for event in &mut events {
-            if let MachineDiagnosticEvent::PclState { cpu_pc, .. } = event {
-                *cpu_pc = self.cpu.pc;
+            match event {
+                MachineDiagnosticEvent::PclState { cpu_pc, .. }
+                | MachineDiagnosticEvent::PcbState { cpu_pc, .. } => {
+                    *cpu_pc = self.cpu.pc;
+                }
+                _ => {}
             }
         }
         for event in events {
@@ -2106,6 +2202,69 @@ mod tests {
     }
 
     #[test]
+    fn cdic_diagnostics_record_routing_changes() {
+        let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
+        machine.enable_diagnostics(8);
+
+        for (address, value) in [
+            (0x0030_3C06, 0x00),
+            (0x0030_3C07, 0x01),
+            (0x0030_3C08, 0x00),
+            (0x0030_3C09, 0x01),
+            (0x0030_3C0A, 0x80),
+            (0x0030_3C0B, 0x01),
+            (0x0030_3C0C, 0x80),
+            (0x0030_3C0D, 0x00),
+        ] {
+            machine.bus.raw_write8(address, value);
+        }
+        machine.sample_diagnostics();
+
+        assert!(matches!(
+            machine.take_diagnostic_events().as_slice(),
+            [MachineDiagnosticEvent::CdicState {
+                selected_file: 1,
+                selected_channels: 0x0001_8001,
+                audio_channel: 0x8000,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn diagnostic_ram_patch_is_bounded_and_auditable() {
+        let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
+        assert!(machine.apply_diagnostic_ram_patch(0x100, &[0]).is_err());
+        machine.enable_diagnostics(8);
+        machine.bus.ram[0][0x100..0x104].copy_from_slice(&[1, 2, 3, 4]);
+
+        machine
+            .apply_diagnostic_ram_patch(0x100, &[0, 2, 0, 4])
+            .unwrap();
+
+        assert_eq!(&machine.bus.ram[0][0x100..0x104], &[0, 2, 0, 4]);
+        assert!(matches!(
+            machine.take_diagnostic_events().as_slice(),
+            [MachineDiagnosticEvent::DiagnosticRamPatch {
+                memory_address: 0x100,
+                bytes: 4,
+                changed_bytes: 2,
+                ..
+            }]
+        ));
+        assert!(machine
+            .apply_diagnostic_ram_patch(0x0010_0000, &[0])
+            .is_err());
+        assert!(machine
+            .apply_diagnostic_ram_patch(0x0007_ffff, &[0, 0])
+            .is_err());
+        assert!(machine.apply_diagnostic_ram_patch(0x100, &[]).is_err());
+        assert!(machine
+            .apply_diagnostic_ram_patch(0x100, &[0; MAX_DIAGNOSTIC_RAM_PATCH_BYTES + 1])
+            .is_err());
+    }
+
+    #[test]
     fn dvc_diagnostics_record_play_milestones_with_cumulative_counters() {
         let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
         machine
@@ -2199,10 +2358,16 @@ mod tests {
             .attach_dvc(DvcConfig::new(DvcKind::Vmpeg, vec![0; 128 * 1024]).unwrap())
             .unwrap();
         machine.enable_diagnostics(16);
+        let pcb = 0x100usize;
+        let cil = 0x200usize;
         let pcl = 0x300usize;
         let buffer = 0x1000u32;
         {
             let ram = &mut machine.bus.ram[0];
+            ram[pcb + 4..pcb + 8].copy_from_slice(&1u32.to_be_bytes());
+            ram[pcb + 8..pcb + 12].copy_from_slice(&1u32.to_be_bytes());
+            ram[pcb + 14..pcb + 18].copy_from_slice(&(cil as u32).to_be_bytes());
+            ram[cil..cil + 4].copy_from_slice(&(pcl as u32).to_be_bytes());
             ram[pcl + 2] = 0x62;
             ram[pcl + 3] = 0x0F;
             ram[pcl + 6..pcl + 10].copy_from_slice(&(pcl as u32).to_be_bytes());
@@ -2221,21 +2386,29 @@ mod tests {
 
         machine.bus.ram[0][pcl] = 1;
         machine.bus.ram[0][pcl + 24..pcl + 28].copy_from_slice(&2324u32.to_be_bytes());
+        machine.bus.ram[0][pcb + 4..pcb + 8].copy_from_slice(&0u32.to_be_bytes());
         machine.sample_diagnostics();
         let expected_pc = machine.cpu.pc;
 
-        assert!(machine
-            .take_diagnostic_events()
-            .iter()
-            .any(|event| matches!(
-                event,
-                MachineDiagnosticEvent::PclState {
-                    cpu_pc,
-                    transition: crate::diagnostics::PclTransition::BufferFull,
-                    pcl: snapshot,
-                    ..
-                } if *cpu_pc == expected_pc && snapshot.address == pcl as u32
-            )));
+        let events = machine.take_diagnostic_events();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::PclState {
+                cpu_pc,
+                transition: crate::diagnostics::PclTransition::BufferFull,
+                pcl: snapshot,
+                ..
+            } if *cpu_pc == expected_pc && snapshot.address == pcl as u32
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            MachineDiagnosticEvent::PcbState {
+                cpu_pc,
+                transition: crate::diagnostics::PcbTransition::RecordsReachedZero,
+                pcb: snapshot,
+                ..
+            } if *cpu_pc == expected_pc && snapshot.address == pcb as u32
+        )));
 
         let pointer_slot = 0x00D0_0200u32;
         for (offset, byte) in (pcl as u32).to_be_bytes().into_iter().enumerate() {

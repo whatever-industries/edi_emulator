@@ -21,6 +21,49 @@
       "known_gaps": []
     },
     {
+      "requirement": "MCD212 DCA and MCD251/MCD212 composition preserve native Video CD control-bar lower-edge state",
+      "subsystem": "mcd212",
+      "status": "disputed",
+      "specification": [
+        "MCD212 section 5.4.2 and tables 5-10 and 5-12",
+        "Philips Technical Note 063 printed pages 1 through 4",
+        "Philips Technical Note 069 printed page 8 section 3.3",
+        "MCD251 Technical Summary Rev. 0 printed pages 2-9 through 2-10",
+        "Video CD on CD-i Release 4.1 printed pages 5 through 7"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212::Mcd212::process_dca",
+        "cdi_core::dvc::Vmpeg"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "No same-engine real-hardware capture of the native control-bar lower edge",
+        "No register-and-composed-raster comparison before and after a clearing playback transition",
+        "MCD212 STOP semantics cannot be changed from the title's STOP-padded DCA program alone"
+      ]
+    },
+    {
+      "requirement": "MCD212 reports undefined LCT fetches and illegal DCP combinations without normalizing their raster",
+      "subsystem": "mcd212",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 085.1 printed pages 4 through 5"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212::Mcd212::process_dca"
+      ],
+      "tests": [
+        "mcd212::tests::dca_uses_green_book_display_parameter_fields"
+      ],
+      "known_gaps": [
+        "No diagnostic identifies the first missing or overwritten final LCT link",
+        "No diagnostic records an illegal transient opcode or image-coding and resolution combination",
+        "Undefined title programs must not be converted into a portable Philips 220 solid-gray rule"
+      ]
+    },
+    {
       "requirement": "Disc inventory maps Green Book and ISO/VCD files to real-time sector/channel coding",
       "subsystem": "disc-cdfm",
       "status": "partial",
@@ -42,6 +85,83 @@
         "Guest PCB/CIL/PCL destination tracing",
         "UCM drawmap provenance",
         "Contextual RL3/RL7/CLUT/DYUV preview"
+      ]
+    },
+    {
+      "requirement": "CDFM logical seeks and immediate physical seeks remain distinct operations",
+      "subsystem": "disc-cdfm",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 090 printed pages 1 through 2"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::cdic",
+        "cdi_core::slave"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "The image-backed drive does not model physical head position or distance-sensitive seek time",
+        "No test distinguishes an I$Seek implicit read seek from an overlapping SS_Seek followed by a read",
+        "Green Book one-to-three-second maximum seek timing must not be applied as a blanket host-read delay"
+      ]
+    },
+    {
+      "requirement": "CDFM preserves Form 1 and Form 2 error semantics, correction timing, and player-dependent PCL error resolution",
+      "subsystem": "disc-cdfm",
+      "status": "gap",
+      "specification": [
+        "Philips Technical Note 054 printed pages 2 through 5",
+        "Philips Technical Note 058 printed pages 1 through 2 and 4"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_disc::sector::SectorHeader",
+        "cdi_core::cdic::Cdic",
+        "cdi_core::PclDiagnosticSnapshot"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "No project-owned image fixture injects correctable or uncorrectable Form 1 or Form 2 sector errors",
+        "No software-ECC timing path can delay following real-time sectors",
+        "Guest PL_ERR population and byte-versus-word Err_Res behavior are not modeled",
+        "The archived TN 054 scan begins at printed page 2"
+      ]
+    },
+    {
+      "requirement": "A live PCB_Rec zero is recognized at a selected-sector boundary, with the TN 085.1 RAM-routing workaround remaining portable",
+      "subsystem": "disc-cdfm",
+      "status": "partial",
+      "specification": [
+        "Green Book Release 2 chapter VII.2",
+        "Philips master Disc Building Utility printed pages 3-64 through 3-65",
+        "Philips Technical Note 085.1 printed page 6"
+      ],
+      "firmware_evidence": [
+        "Philips FPD805 dev/basecase/bmp_nat/test/bumptest.c",
+        "Philips FPD805 dev/basecase/bmp_nat/code/src/bumpanim.c"
+      ],
+      "source_symbols": [
+        "cdi_core::PcbDiagnosticSnapshot",
+        "cdi_core::PcbTransition",
+        "cdi_core::MachineDiagnosticEvent::PcbState",
+        "cdi_core::MachineDiagnosticEvent::DiagnosticRamPatch",
+        "cdi_core::Machine::apply_diagnostic_ram_patch"
+      ],
+      "tests": [
+        "diagnostics::pcl_tests::pcb_trace_reports_record_count_and_routing_changes",
+        "diagnostics::pcl_tests::audio_pcl_context_uses_channel_mask_not_direct_audio_mask",
+        "machine::tests::diagnostics_sample_discovered_pcl_without_an_unrelated_bus_observation",
+        "machine::tests::cdic_diagnostics_record_routing_changes",
+        "machine::tests::diagnostic_ram_patch_is_bounded_and_auditable",
+        "cdi-cli::tests::memory_write_event_parses_bounded_hexadecimal_bytes",
+        "cdic::tests::stop_commands_finish_the_sector_under_the_head_then_stop",
+        "scripts/test-cdfm-play-termination-local.sh",
+        "scripts/test-cdfm-pcb-rec-local.sh"
+      ],
+      "known_gaps": [
+        "The current 220 ROM has the Green Book-permitted fast direct-audio result; no alternate native driver or player fixture reproduces TN 085.1's slower compatibility phenotype",
+        "The exact FPD805 PCB and CIL addresses are disc- and ROM-gated synthetic harness facts, not emulator compatibility constants"
       ]
     },
     {
@@ -71,6 +191,7 @@
       "specification": [
         "Philips CD-i 205 service manual PDF pages 66 and 96",
         "MCD212 Table 5-5",
+        "Philips Technical Note 085.1 printed page 2",
         "Philips Technical Note 094 printed pages 1 through 5"
       ],
       "firmware_evidence": [],
@@ -80,7 +201,8 @@
       "tests": [],
       "known_gaps": [
         "The scheduler uses one 30 MHz crystal for PAL and NTSC",
-        "CPU and device events are not yet reconciled on an event-interleaved three-clock timeline"
+        "CPU and device events are not yet reconciled on an event-interleaved three-clock timeline",
+        "The fixed system tick cannot be varied across the documented 99.8 through 100.2 Hz player range"
       ]
     },
     {
@@ -121,6 +243,26 @@
       "known_gaps": []
     },
     {
+      "requirement": "Player output aspect correction remains distinct from authored Video CD source-pixel aspect",
+      "subsystem": "mcd212",
+      "status": "disputed",
+      "specification": [
+        "Philips Technical Note 093 printed page 6",
+        "Philips Technical Note 104 printed pages 7 through 10"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212::DisplayGeometry",
+        "cdi_frontend::presentation"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "TN 093 reports measured player ratios 1.225 and 1.025 while later TN 104 reports 1.235 plus or minus 0.003 and 1.019 plus or minus 0.003",
+        "No physical Mono-I calibration capture fixes the final analog or digital output aperture",
+        "TN 104 says the DV decoder ignores MPEG aspect-ratio metadata, so Video CD source-pixel ratios cannot resolve the player-output dispute"
+      ]
+    },
+    {
       "requirement": "CDFM does not reuse a full PCL until the native consumer releases it",
       "subsystem": "disc-cdfm",
       "status": "partial",
@@ -141,9 +283,27 @@
         "machine::tests::vmpeg_dma_channel_one_transfers_memory_words"
       ],
       "known_gaps": [
-        "Bounded guest-write provenance between CDIC completion and VMPEG DMA is not yet recorded",
-        "The current Addams VCD trace has one audio payload mismatch without a recorded full-PCL overwrite",
-        "The user-visible dirty-disc symptom still needs current-build manual revalidation"
+        "A current title-visible transport failure still needs to be captured at its first divergent PCL ownership event",
+        "TN 105 seamless branches require compatible VBV and STD boundary states beyond ordinary circular-PCL reuse coverage"
+      ]
+    },
+    {
+      "requirement": "Base and DVC extension memory appear in the guest allocator with documented colors, priorities, and contiguous minima",
+      "subsystem": "memory",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 087 printed pages 1 through 3 and 6 through 9",
+        "Philips Technical Note 096 printed pages 9 through 10"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::Machine",
+        "cdi_core::dvc::Vmpeg"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "No boot trace asserts two 512 KiB colored base banks and the 480 KiB contiguous-per-bank application-entry minimum",
+        "No guest allocator trace asserts dynamic insertion of 1 MiB DVC system RAM and 0.5 MiB priority-zero MPEG RAM"
       ]
     },
     {
@@ -163,6 +323,29 @@
       "known_gaps": [
         "SERVO firmware A0 through A5 and AB command correlation",
         "Physical open, close, spin-up, and live-media state transitions"
+      ]
+    },
+    {
+      "requirement": "Player CSD discovery exposes model-specific device names, types, input ordering, and optional extensions",
+      "subsystem": "player-csd",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 076 printed pages 6 through 7",
+        "Philips Technical Note 085.1 printed page 4 and addendum"
+      ],
+      "firmware_evidence": [
+        "Native player firmware supplies the guest CSD"
+      ],
+      "source_symbols": [
+        "cdi_core::slave::SlaveHle",
+        "cdi_os9::rules"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "No post-boot parser asserts the live CSD for zero, one, or two pointing devices",
+        "The remote, front-port, and rear-port ordering for /ptr and /pt2 is not tested",
+        "Optional player-control and extension-device entries are not compared across player models",
+        "The archived TN 076 scan omits printed page 3"
       ]
     },
     {
@@ -192,7 +375,7 @@
     {
       "requirement": "VMPEG pause and continue preserve decoder state while CDFM resumes compressed-data delivery",
       "subsystem": "dvc",
-      "status": "gap",
+      "status": "implemented-tested",
       "specification": [
         "Philips Technical Note 088",
         "Philips Technical Note 098"
@@ -206,17 +389,18 @@
         "scripts/test-vmpeg-pause-continue-local.sh"
       ],
       "tests": [
-        "dvc::tests::pause_continue_retains_current_and_queued_video_pictures"
+        "dvc::tests::pause_continue_retains_current_and_queued_video_pictures",
+        "scripts/test-vmpeg-pause-continue-local.sh"
       ],
       "known_gaps": [
-        "The native title gate currently returns VMPEG to playing while CDIC stays idle on command $24 and DMA does not resume",
-        "The exact CDIC/CDFM command-$24 resume contract remains to be recovered"
+        "Philips Technical Note 088 documents intermittent E$NotRdy on native pause; this remains native behavior rather than an emulator retry workaround",
+        "A physical-cartridge command and buffer trace would still improve confidence in the measured CDIC DBUF and stop-transport contract"
       ]
     },
     {
       "requirement": "An in-place FMA audio-stream selection continues MPEG Layer-II playback without malformed frames",
       "subsystem": "dvc",
-      "status": "gap",
+      "status": "implemented-tested",
       "specification": [
         "Philips Technical Note 088"
       ],
@@ -235,6 +419,27 @@
       ],
       "known_gaps": [
         "A real-cartridge capture is still needed to compare whether its decoder also mutes the one newly selected partial Layer-II frame"
+      ]
+    },
+    {
+      "requirement": "Seamless MPEG branches retain running decoders and continuous timestamps, buffers, GOP entry, and complete audio-frame boundaries",
+      "subsystem": "dvc",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 105 printed pages 1 through 12 and 19 through 25"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::dvc::MpegSystemDemux",
+        "cdi_core::dvc::Vmpeg"
+      ],
+      "tests": [
+        "dvc::tests::repeated_same_geometry_sequence_headers_preserve_delayed_reference_frames"
+      ],
+      "known_gaps": [
+        "No project-owned introductory and body fixture proves matched VBV and STD boundary states across a branch",
+        "No fixture proves PTS-derived runtime timestamp patching while the PCL remains owned",
+        "No closed-GOP branch fixture checks program-end omission and complete Layer-II frame boundaries"
       ]
     }
   ]

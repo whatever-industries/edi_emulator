@@ -12,14 +12,14 @@ changes.
 
 | Subsystem | Primary documents | Implementation entry points | Current evidence/tests |
 |---|---|---|---|
-| Disc/filesystem/RTF | Green Book III.4, III.5, V.6, VII CDFM; `docs/cddiscgeneralrcdiexhIII.pdf` | `cdi-disc::inventory`, `cdi-core::cdic` | filesystem/sector inventory unit tests; CDIC channel/form tests |
+| Disc/filesystem/RTF | Green Book III.4, III.5, V.6, VII CDFM; `docs/cddiscgeneralrcdiexhIII.pdf`; TN 054/058 error recovery; TN 090 seek semantics | `cdi-disc::inventory`, `cdi-core::cdic` | filesystem/sector inventory unit tests; CDIC channel/form tests |
 | CPU/peripherals | SCC68070 User Manual and Philips section-6.2 timing notes | `cdi-scc68070`, `cdi-core::machine` | 118,187 Harte vectors; DMA/IRQ tests |
-| Base video | `docs/mcd212rev0.pdf`, Green Book V.2/V.4/V.6, TN-093 picture-quality notes | `cdi-core::mcd212` | table-driven geometry/DCA/interlace tests |
-| CDIC/audio | Green Book III/VII, CDIC technical data, CDFM documentation | `cdi-core::cdic` | XA/CDDA/sound-map/filter tests |
-| SLAVE/input | HC05 firmware, `docs/pointing_devices.pdf`, `docs/mc68hc05c8rg.pdf` | `cdi-core::slave` | `docs/slave-protocol.md` and protocol tests |
-| VMPEG/DVC | `svcmanuals/22er9141.pdf`, `docs/mcd251ts.pdf`, `docs/fmv_extension.pdf`, `docs/cdi_fmv_rec.pdf`, Green/White Book | `cdi-core::dvc`, `mpeg1_video` | `docs/mpeg-dvc-plan.md`; demux/register/timing tests |
+| Base video | `docs/mcd212rev0.pdf`, Green Book V.2/V.4/V.6, TN 042/085.1/089/093/104 display notes | `cdi-core::mcd212` | table-driven geometry/DCA/interlace tests |
+| CDIC/audio | Green Book III/VII, CDIC technical data, CDFM documentation, TN 092 audio delivery | `cdi-core::cdic` | XA/CDDA/sound-map/filter tests |
+| SLAVE/input | HC05 firmware, `docs/pointing_devices.pdf`, `docs/mc68hc05c8rg.pdf`, TN 076/085.1 CSD and player-model notes | `cdi-core::slave` | `docs/slave-protocol.md` and protocol tests |
+| VMPEG/DVC | `svcmanuals/22er9141.pdf`, `docs/mcd251ts.pdf`, `docs/fmv_extension.pdf`, `docs/cdi_fmv_rec.pdf`, Green/White Book, TN 097/103/105 | `cdi-core::dvc`, `mpeg1_video` | `docs/mpeg-dvc-plan.md`; demux/register/timing tests |
 | VCD | White Book plus `authoring/vcd_introduction.pdf`, `authoring/vcd_synopsis.pdf`, `docs_sw/vcd_on_cdi_*.pdf` | disc inventory, CDIC, DVC | planned VCD pilot incident |
-| CD-RTOS/CDFM | `microware/cdisys.pdf`, `authoring/cdi_standards.pdf`, Green Book VII | guest structure tracing (planned) | OS-9 module inventory; runtime PCL tracing gap |
+| CD-RTOS/CDFM | `microware/cdisys.pdf`, `authoring/cdi_standards.pdf`, `authoring/master.pdf`, Green Book VII, TN 049/054/058/062/085.1/087/090 | guest PCB/CIL/PCL structure tracing | OS-9 module inventory; runtime PCB/PCL state and ownership diagnostics |
 | UCM/drawmaps | Green Book V.6 and UCM manuals/technical notes | MCD212 and planned drawmap provenance | raster/aperture tests; buffer-to-drawmap tracing gap |
 | Keyboard | `docs/keyboards_1996.pdf`, `docs/keyboard_drivers.pdf` | planned serial input-device boundary | documented K/T packet fixtures pending |
 | Photo CD | `faq/cdifaq5.html`, `sw_app/photocd_on_cdi_32.zip` | `cdi-photocd`, disc inventory, frontend | host viewer implemented; Bridge/native-application classification pending |
@@ -43,6 +43,7 @@ Useful exact files include:
 - `svcmanuals/cdi205.pdf`
 - `microware/cdisys.pdf`
 - `authoring/cdi_standards.pdf`
+- `authoring/master.pdf`
 - `authoring/vcd_introduction.pdf`
 - `authoring/vcd_synopsis.pdf`
 - `docs_sw/vcd_on_cdi_41.pdf`

@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "id": "interlaced-progressive-presentation-combing",
+  "title": "Interlaced CD-i motion combs on progressive host output",
+  "symptom": "The 7th Guest hand animation, moving VMPEG scenes, and the Philips-logo fade can show alternating horizontal field structure. In the captured mansion animation this is easiest to see around the yellow lamp-post lights. The behavior also occurs in E-Di 0.1.0 and may affect other interlaced CD-i and VMPEG motion.",
+  "expected": "Preserve the authentic odd/even CD-i field signal while presenting it coherently on a progressive host display. Any deinterlacing policy must remain outside guest-visible MCD212 and VMPEG state and must not discard legitimate still-field detail without evidence.",
+  "status": "resolved-with-known-limitation",
+  "reported_revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
+  "last_reproduced_revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
+  "last_verified_revision": null,
+  "evidence_status": "current-and-historical",
+  "revalidation_reason": null,
+  "components": [
+    "mcd212",
+    "dvc",
+    "display-provenance",
+    "frontend"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": "vmpeg",
+    "instruction_limit": null,
+    "input_events": [
+      "capture the animated hand over the mansion staircase",
+      "capture a moving mansion scene with illuminated lamp posts"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "raw-field-weave-presented-progressively",
+      "hardware_explanation": "The core correctly retains alternating PAL fields, but the frontend presents every intermediate woven raster directly on a progressive monitor. When motion changes between fields, one host frame contains rows from two different motion instants and visibly combs; the following field completes a coherent pair.",
+      "supporting_evidence": [
+        "A bounded 30-field lamp-post capture alternates a visibly combed raster with a coherent raster.",
+        "The VMPEG picture generation changes only at VSYNC, remains fixed for two fields, and records zero mixed-generation fields within any single field.",
+        "The first field after each progressive MPEG picture change retains complementary rows from the prior picture; the next field replaces that parity and becomes coherent.",
+        "The capture reports zero demux, video, audio, underflow, and overflow errors.",
+        "The user reproduced the same visual behavior in E-Di 0.1.0, so it is not a recent regression."
+      ],
+      "contradicting_evidence": [
+        "A real-hardware digital field capture is not available to establish the intended progressive-host presentation policy.",
+        "A CRT naturally displays fields over time rather than as one retained progressive bitmap, so a coherent host representation may require bob, motion-adaptive deinterlacing, or another presentation-only policy."
+      ],
+      "falsifying_test": "Feed two synthetic moving progressive external pictures through consecutive interlaced fields and retain per-row source generations. If the visibly combed host raster does not coincide with complementary rows from adjacent motion instants, this explanation is false.",
+      "citations": [
+        "MCD212 Technical Specification section 5.2.2",
+        "docs/display-geometry.md",
+        "docs/debugging-workflow.md display-provenance stages"
+      ]
+    },
+    {
+      "id": "hardware-cursor-retention",
+      "hardware_explanation": "The animated hand might have been retained into alternating base fields like an incorrectly composed MCD212 hardware cursor.",
+      "supporting_evidence": [
+        "The hand visibly combs while animating."
+      ],
+      "contradicting_evidence": [
+        "The hand is present in decoded plane A and changes with guest plane content.",
+        "The base and composed raster hashes match during the hand capture, proving the live MCD212 hardware-cursor overlay is not the source."
+      ],
+      "falsifying_test": "Disable only the live hardware-cursor overlay in a diagnostic build. The hand must remain because it is guest-rendered plane artwork.",
+      "citations": [
+        "docs/mpeg-dvc-plan.md MCD212 cursor composition"
+      ]
+    }
+  ],
+  "experiments": [
+    {
+      "id": "thirty-field-hand-and-vmpeg-captures",
+      "base_revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
+      "dirty_diff_hash": null,
+      "component_state": {
+        "mcd212": "PAL interlaced retained odd/even rows; diagnostic plane capture enabled",
+        "dvc": "VSYNC-latched external pictures with generation provenance",
+        "frontend": "presents each completed core field raster"
+      },
+      "hypothesis": "raw-field-weave-presented-progressively",
+      "strategy": "Capture 30 consecutive fields at the animated hand and during an active VMPEG mansion scene, then compare parity, plane hashes, external-picture generations, decoder counters, and base/composed rasters.",
+      "symbols": [
+        "Mcd212::output_rows",
+        "Mcd212::compose_framebuffer",
+        "Vmpeg::latch_pending_video_frame"
+      ],
+      "assumptions": [
+        "The diagnostic raster is captured after MCD212 field retention and before any host scaling.",
+        "External picture-generation provenance changes only when VMPEG publishes a new picture to MCD212."
+      ],
+      "expected": "If progressive presentation of retained fields is the cause, moving VMPEG output will alternate a mixed-motion field pair and a coherent completed pair without decoder or mid-field generation errors.",
+      "actual": "The active-VMPEG capture spans fields 31215 through 31244. Each decoded picture is held for two fields. The first field after a generation change visibly combines retained rows from the preceding picture with rows from the new picture; the following field is coherent. All 30 fields use one immutable external generation per field and decoder/transport error counters remain zero. In the separate hand capture, plane A contains the animated hand, plane B contains the background, and the base and composed raster hashes match.",
+      "outcome": "confirmed",
+      "outcome_reason": "The first visible divergence is the progressive presentation of temporally different retained fields, not MPEG decoding, mid-raster VMPEG publication, frontend copying, or hardware-cursor composition.",
+      "implementation_reverted": false,
+      "evidence_quality": "high-diagnostic-medium-hardware",
+      "applicability": {
+        "conditions": "Interlaced PAL/NTSC base-plane or external-video motion presented as every retained woven field on a progressive host.",
+        "invalidated_by": [
+          "Replacing MCD212 field retention",
+          "Adding a presentation-only deinterlacing stage",
+          "Real-hardware evidence showing a different source-field cadence"
+        ],
+        "repeat_when": "A presentation-only deinterlacing strategy is implemented or comparable motion is captured from real hardware."
+      }
+    },
+    {
+      "id": "frontend-motion-adaptive-bob-weave",
+      "base_revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
+      "dirty_diff_hash": "e3f0a4c97088ff1f9c699365d461428d8ea60b6f343eb5956e23e17c59de06ae",
+      "component_state": {
+        "mcd212": "unchanged raw retained odd/even field framebuffer",
+        "dvc": "unchanged VSYNC-latched external-picture presentation",
+        "frontend": "default-enabled motion-adaptive bob/weave; optional raw weave"
+      },
+      "hypothesis": "raw-field-weave-presented-progressively",
+      "strategy": "Compare the just-completed field with its prior same-parity rows. Preserve the woven raster where that parity is unchanged; where motion is detected, retain one stable field phase and vertically reconstruct its complementary rows. Use a lower continuation threshold and four-field motion hold so fades and fine edges do not chatter between weave and reconstruction. Keep core diagnostics upstream of this host presentation stage.",
+      "symbols": [
+        "presentation::motion_adaptive_deinterlace",
+        "presentation::same_field_layout",
+        "emu_loop"
+      ],
+      "assumptions": [
+        "DisplayGeometry odd_field identifies the next field because MCD212 toggles PA after composing the completed field.",
+        "A per-channel delta of eight studio-range levels separates meaningful motion from small decoder or rounding noise for this first implementation."
+      ],
+      "expected": "Moving interlaced content no longer shows adjacent-field combing on a progressive host, static field detail remains sharp, disabling the setting restores the exact raw weave, and diagnostic captures remain byte-identical to the core framebuffer.",
+      "actual": "Table-driven tests prove unchanged progressive frames, unchanged static weaves, stable-phase reconstruction across consecutive moving fields, temporal motion persistence, lower-threshold continuation, parity-independent layout matching, and default-on preference migration. The first manual build removed The 7th Guest combing but its alternating source phase produced slight one-line vertical jitter; disabling the option restored raw weave. A stable-phase revision still showed some jitter on the animated hand and during the title fade, consistent with fine regions chattering between weave and reconstruction. The implementation now retains motion for four fields and uses a lower continuation threshold. Static Photo CD output was unaffected. Existing FMVDemo captures report non-interlaced MCD212 geometry, so that title bypassed the filter and remained visually unchanged.",
+      "outcome": "partial",
+      "outcome_reason": "Manual checks confirmed the diagnosis and removed combing, then exposed both alternating bob phase and motion-mask chatter as smaller presentation artifacts. Stable-phase reconstruction with temporal hysteresis is now tested synthetically and awaits another title check.",
+      "implementation_reverted": false,
+      "evidence_quality": "high-synthetic-pending-manual",
+      "applicability": {
+        "conditions": "Interlaced PAL/NTSC MCD212 output shown by the frontend or captured by its normal screenshot command.",
+        "invalidated_by": [
+          "Changing when MCD212 field parity toggles relative to framebuffer publication",
+          "Publishing something other than one completed raw field per frontend frame",
+          "Real-hardware evidence requiring a different host deinterlacing policy"
+        ],
+        "repeat_when": "Manual checks reveal residual combing, excessive bob softness, missed low-contrast motion, or treatment of static content that differs from the raw weave."
+      }
+    }
+  ],
+  "manual_verification": [
+    {
+      "result": "reproduced-current",
+      "revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
+      "notes": "The user observed combing on The 7th Guest hand, lamp-post lights in moving video, and the Philips-logo fade. Two local 30-field diagnostic captures preserve the evidence without tracking media payloads."
+    },
+    {
+      "result": "reproduced-historical",
+      "revision": "E-Di 0.1.0 release build",
+      "notes": "The user manually confirmed the same behavior in E-Di 0.1.0, establishing that this is a longstanding presentation issue rather than a recent regression."
+    },
+    {
+      "result": "partial-current",
+      "revision": "uncommitted frontend deinterlacing build",
+      "notes": "With deinterlacing enabled, The 7th Guest no longer combed but showed slight vertical jitter; disabling it restored the prior raw weave. Static Photo CD output remained correct. FMVDemo at NTSC/60 looked correct, but recorded MCD212 geometry is non-interlaced and therefore bypasses the filter."
+    },
+    {
+      "result": "partial-stable-phase",
+      "revision": "uncommitted stable-phase frontend build",
+      "notes": "PAL and NTSC The 7th Guest remained much improved but retained slight jitter on the animated hand and apparently during the title fade. This motivates bounded temporal hysteresis; no decoder or guest-timing change is proposed."
+    },
+    {
+      "result": "accepted-with-limitation",
+      "revision": "uncommitted stable-phase hysteresis frontend build",
+      "notes": "Temporal hysteresis made no clear additional visual improvement. The user accepted the default-enabled result as better than any prior presentation, with minor residual hand and fade jitter; raw weave remains selectable. Further work would require a substantially larger edge-directed or motion-compensated deinterlacer and is deferred."
+    }
+  ]
+}

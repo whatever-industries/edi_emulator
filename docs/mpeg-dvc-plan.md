@@ -1,6 +1,6 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-08-03
+Status date: 2026-08-04
 
 ## Current implementation status
 
@@ -19,11 +19,36 @@ Status date: 2026-08-03
 - [x] M3.13 full multi-play B-picture revalidation after shared-IN4 correction
 - [ ] M3.14 transition compliance and long-run regressions
 
-The current next title action remains the cake-puzzle gate, followed by a
-perceptual or presentation-overlap A/V drift oracle. The White Book 13.5 MHz
-path has meanwhile been assigned to the correct hardware boundary: a separate
-VMPEG output circuit downstream of MCD251. This ownership refactor preserves
-the accepted raster mapping and adds no title-specific presentation rule.
+The cake-puzzle gate passes. The first manual deinterlacing pass removed The
+7th Guest's combing but exposed slight alternating bob jitter. Moving regions
+now use one stable field phase plus dual-threshold, four-field motion
+persistence and were manually revalidated; static Photo CD output was
+unaffected, while FMVDemo reports non-interlaced MCD212 geometry and bypasses
+this filter. PAL and NTSC manual checks accepted the result as substantially
+better than raw weave despite minor residual hand/fade jitter; temporal
+hysteresis produced no obvious further visual improvement. The next action is
+a perceptual or presentation-overlap A/V drift oracle. The White Book 13.5 MHz path has
+meanwhile been assigned to the correct hardware boundary: a separate VMPEG
+output circuit downstream of MCD251. This ownership refactor preserves the
+accepted raster mapping and adds no title-specific presentation rule.
+
+The cake-puzzle gate now passes manually on The 7th Guest USA: entering the
+table and selecting the cake reaches playable puzzle interaction. Separate
+30-field PAL captures identify the longstanding motion-combing report as a
+progressive-host presentation problem. A new progressive MPEG picture is held
+for two fields; its first retained weave combines complementary rows from the
+previous picture and its second completes a coherent pair. No decoder,
+transport, underflow, or mid-field picture-generation error accompanies the
+artifact. The title's animated hand is guest-rendered plane-A artwork, not the
+live MCD212 hardware cursor. The frontend now provides a default-enabled
+motion-adaptive bob/weave: static regions retain both original field rows,
+while detected motion uses one stable field phase and reconstructs its
+complementary rows. This avoids alternating-phase one-line jitter while
+presenting moving regions at the completed-frame cadence. A lower continuation
+threshold and four-field hold keep fine edges and fades from chattering back
+to weave. It is optional, normal screenshots follow it, and raw core
+diagnostics remain upstream of it. Guest-visible field timing is unchanged;
+manual validation accepts minor residual jitter as a presentation limitation.
 
 The specification-driven diagnostic checkpoint adds bounded DVC error,
 underflow, CDIC transport, frame/plane/raster, and audio evidence without
@@ -339,9 +364,8 @@ earlier register-write experiments remain recorded as contextual failures.
 Manual GUI testing on 2026-08-02 confirmed that the authored language controls
 switch cleanly during uninterrupted playback.
 
-Next, run the cake-puzzle extended title gate and devise a perceptual or
-timestamp/presentation-overlap A/V drift oracle. Deterministic throughput
-counters alone do not establish lip sync.
+Next, devise a perceptual or timestamp/presentation-overlap A/V drift oracle.
+Deterministic throughput counters alone do not establish lip sync.
 
 The apparent v0.1.0-to-v0.2.0 regression in The 7th Guest's post-title video
 was isolated separately. Reverting v0.2.0's relative subcode-Q correction did

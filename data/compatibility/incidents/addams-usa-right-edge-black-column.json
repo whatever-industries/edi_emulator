@@ -331,6 +331,11 @@
       "result": "women-of-the-world-column-not-reproduced",
       "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
       "notes": "Women of the World - Brazilian Girls Europe has no current right-edge column or other placement issue. Its separate dotted bottom-edge pattern remains reproduced and is retained in kether-bottom-display-line-artifacts as a related external-video-path observation."
+    },
+    {
+      "result": "output-boundary-refactor-manually-verified",
+      "revision": "37a23384b88d96b13a88e3f7309c8f20b955474b+dirty:3b568b1378c9b613051a908264c18b9faa16bb1a71b26b714c7b9143bb143a03",
+      "notes": "RoboCop USA was manually re-tested after assigning the existing 13.5 MHz conversion to the separate VMPEG cartridge output-circuit boundary. Its MPEG picture and native interface remained centered and unchanged, confirming that the ownership refactor introduced no visible presentation regression."
     }
   ]
 }

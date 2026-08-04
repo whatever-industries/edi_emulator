@@ -221,7 +221,7 @@ impl SlaveHle {
 
     /// Set the drive-status disc type from the inserted medium's volume
     /// descriptor. VMPEG's native `vcd` module requires the XA Bridge type
-    /// before enabling its White Book 13.5 MHz sample-rate converter.
+    /// before enabling the cartridge's White Book 13.5 MHz output converter.
     pub fn set_cd_rom_xa_bridge(&mut self, bridge: bool) {
         self.disc_type_code = if bridge {
             DISC_TYPE_CD_ROM_XA_BRIDGE

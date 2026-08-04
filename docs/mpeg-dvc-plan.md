@@ -1,6 +1,6 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-08-02
+Status date: 2026-08-03
 
 ## Current implementation status
 
@@ -19,6 +19,12 @@ Status date: 2026-08-02
 - [x] M3.13 full multi-play B-picture revalidation after shared-IN4 correction
 - [ ] M3.14 transition compliance and long-run regressions
 
+The current next title action remains the cake-puzzle gate, followed by a
+perceptual or presentation-overlap A/V drift oracle. The White Book 13.5 MHz
+path has meanwhile been assigned to the correct hardware boundary: a separate
+VMPEG output circuit downstream of MCD251. This ownership refactor preserves
+the accepted raster mapping and adds no title-specific presentation rule.
+
 The specification-driven diagnostic checkpoint adds bounded DVC error,
 underflow, CDIC transport, frame/plane/raster, and audio evidence without
 changing device timing. Payload-free inventories were validated locally on
@@ -33,23 +39,18 @@ selection, play, and end lists; a local Video CD 2.0 validation records 156
 lists without retaining payload. This supplies authored control-flow evidence
 for future native-engine incidents and does not implement host-side playback.
 
-White Book media identification is implemented but its machine integration is
-deferred. `DiscImage` recognizes the LBA-16 Mode-2 Form-1 PVD combination
-`CD-RTOS CD-BRIDGE` plus `CD-XA001`, and the SLAVE can report disc type 4
-instead of native CD-i type 2. Native firmware then selects `$E01000`'s
-13.5 MHz sample-rate converter and applies its MCD251 origin adjustment.
-Philips Interactive Engineer 96/05 explicitly states that a 352-pixel Video CD
-does not fill the screen in Green Book mode and does fill it when a White Book
-cartridge switches the converter. A bounded Addams Family Values USA run
-confirmed that type 4 removes its one-sided right edge. Manual testing also
-confirmed the earlier counterexample: the same candidate shifts Addams Family
-Values UK right, while Accused Netherlands remains acceptable. The USA GUI
-screenshot's additional 720-pixel crop was the frontend's existing Typical
-CRT aperture, not a changed MCD212 raster. This is a regression-causing
-experiment, not an accepted fix. Machine disc insertion therefore retains type
-2 until the MCD251 `Xo`/`Xa` sample-origin semantics are implemented; the
-media classifier, SLAVE response, and new read-only register diagnostics
-remain covered prerequisites.
+White Book media identification and native machine integration are now
+implemented. `DiscImage` recognizes the LBA-16 Mode-2 Form-1 PVD combination
+`CD-RTOS CD-BRIDGE` plus `CD-XA001`, and the SLAVE reports disc type 4 instead
+of native CD-i type 2. The native `vcd` module then writes `$E01000 = 1`.
+Hardware review clarified that this control belongs to a separate output-clock
+converter on the VMPEG cartridge, downstream of the MCD251; it is not an
+MCD251 phase register. The converter expands the 13.5 MHz White Book samples
+by `15/13.5` (`10/9`) before the external-video signal reaches MCD212.
+Philips Interactive Engineer 96/05 independently says a 352-pixel Video CD
+does not fill the screen in Green Book mode and does fill it when this White
+Book converter is selected. The core owns that conversion at the cartridge
+output boundary while retaining the manually accepted native type-4 path.
 
 A second bounded type-4 comparison made that prerequisite concrete. Accused
 Netherlands and Addams Family Values UK both program `Xo=65`, `Yo=26`,
@@ -57,10 +58,11 @@ Netherlands and Addams Family Values UK both program `Xo=65`, `Yo=26`,
 They differ in guest-authored display/window commands: Accused uses `Xd=0`,
 `Xw=7`, `Ww=345`, while Addams UK uses `Xd=16`, `Xw=0`, `Ww=352`. The
 available MCD251 Technical Summary names the origin and active-area registers
-but does not provide the full timing/phase equation. No origin correction is
-therefore integrated from these values alone. Continue only from the complete
-MCD251 timing definition or a synchronized real-hardware register/output
-trace.
+but does not provide a full coordinate-to-output equation. The output clock
+conversion applies after MCD251, while source-window selection remains in
+decoder-sample space. Continue any visible-position correction only from a
+synchronized real-hardware register/output trace; do not invent a second
+MCD251 phase control.
 
 The Accused warning corruption is a separate transport issue. A direct disc
 reconstruction contains 21,268 bytes while a deterministic emulator capture
@@ -236,6 +238,15 @@ selected PES streams without accepting the old stream's payload or timestamp
 and map a six-hour SCR/PTS interval through the shared integer 90 kHz-to-45
 kHz clock without drift. All pass on the existing implementation, so no TN
 088 workaround or title-specific recovery was added.
+
+A later TN 099/Green Book matte checkpoint tightens the MCD212 side of the
+external-video composition boundary. Focused tests now cover false flag state
+at each scanline, persistent and ordered one-/two-set commands, STOP, and the
+Green Book V.5.10.3 rule that path A wins when both display paths load the same
+matte register in one control phase. The former sequential model let path B
+overwrite path A; paired ICA/DCA arbitration now ignores only the conflicting
+path-B load. This does not change the remaining M3 next action: the cake-puzzle
+gate and a perceptual or presentation-overlap A/V drift oracle.
 
 The MCD251 presentation boundary is now modeled explicitly. Due decoded
 pictures are staged without changing the video generator's source, then
@@ -441,7 +452,7 @@ CPU-visible map for the later VMPEG cartridge used by the CD-i 220:
 | Address | Function |
 |---|---|
 | `$D00000-$DFFFFF` | 1 MiB contiguous system extension RAM |
-| `$E01000` | VCD/pixel-clock control |
+| `$E01000` | VMPEG external output-clock converter control (downstream of MCD251) |
 | `$E03000` | FMA MPEG Layer-II/DSP-facing registers |
 | `$E04000` | MCD251 FMV registers |
 | `$E40000-$E7FFFF` | DVC OS-9 firmware ROM; a 128 KiB dump mirrors once |
@@ -569,9 +580,11 @@ The title's video stream is 368x176 and native firmware programs X=8, Y=52,
 W=368, H=176. The vertical letterbox is therefore authored. MCD251 C2PIX and
 Philips FPD805 centering source establish that X-display is a 15 MHz sample
 position: X=8 becomes framebuffer X=16, centering the 736-pixel output inside
-768 pixels. The previous x4 mapping created the observed one-sided 32-pixel
-pillar. Repeated same-geometry sequence headers now retain the delayed and
-reference frames. On a real 79-second elementary stream this changes the
+768 pixels. White Book's separate 13.5 MHz conversion occurs downstream at
+the VMPEG cartridge output and does not redefine this MCD251 register. The
+previous x4 mapping created the observed one-sided 32-pixel pillar. Repeated
+same-geometry sequence headers now retain the delayed and reference frames.
+On a real 79-second elementary stream this changes the
 decoder from 1,961 to all 1,982 pictures, exactly matching FFmpeg's frame count
 with zero decoder errors across 22 sequence headers and one sequence end.
 

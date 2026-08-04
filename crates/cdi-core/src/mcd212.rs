@@ -481,7 +481,22 @@ impl Mcd212 {
     }
 
     /// Register write from a control program (register numbers $80-$FF).
+    #[cfg(test)]
     fn set_register(&mut self, path: usize, reg: u8, value: u32) {
+        self.set_register_with_matte_priority(path, reg, value, 0);
+    }
+
+    /// Apply one control-program register write and return the matte-register
+    /// bit written by it. MCD212 section 5.4.4.12 and Green Book R2 V.5.10.3
+    /// give path 0 priority when both paths load the same matte register in
+    /// one line's display-control phase.
+    fn set_register_with_matte_priority(
+        &mut self,
+        path: usize,
+        reg: u8,
+        value: u32,
+        path_a_matte_writes: u8,
+    ) -> u8 {
         match reg {
             0x80..=0xBF => {
                 let index = usize::from(self.clut_bank[path]) * 0x40 + usize::from(reg - 0x80);
@@ -558,8 +573,14 @@ impl Mcd212 {
                 }
             }
             0xD0..=0xD7 => {
-                self.matte_control[usize::from(reg - 0xD0)] = value;
+                let index = usize::from(reg - 0xD0);
+                let register_bit = 1 << index;
+                if path == 1 && path_a_matte_writes & register_bit != 0 {
+                    return 0;
+                }
+                self.matte_control[index] = value;
                 self.update_matte_arrays();
+                return register_bit;
             }
             0xD8 => {
                 if path == 0 {
@@ -582,6 +603,7 @@ impl Mcd212 {
             }
             _ => log::trace!("mcd212: unhandled control register {reg:#04x} = {value:#08x}"),
         }
+        0
     }
 
     // --- Pixel pipeline ---------------------------------------------------
@@ -1165,7 +1187,17 @@ impl Mcd212 {
     }
 
     /// Run the Image Control Area program for `path`.
+    #[cfg(test)]
     fn process_ica(&mut self, path: usize, plane: &[u8]) {
+        self.process_ica_with_matte_priority(path, plane, 0);
+    }
+
+    fn process_ica_with_matte_priority(
+        &mut self,
+        path: usize,
+        plane: &[u8],
+        path_a_matte_writes: u8,
+    ) -> u8 {
         let (ica_height, _) = geometry(self.pal);
         let max = ica_height * 120;
         // MCD212 table 5-8: non-interlaced fields always start at byte
@@ -1174,33 +1206,53 @@ impl Mcd212 {
         // word address, hence $200/$202 here.
         let interlaced_even_field = self.dcr[0] & DCR_SM != 0 && self.csrr[0] & CSR1R_PA == 0;
         let mut addr: u32 = if interlaced_even_field { 0x202 } else { 0x200 };
+        let mut matte_writes = 0;
         for _ in 0..max {
             let cmd = (Self::plane_word(plane, addr) << 16) | Self::plane_word(plane, addr + 1);
             addr += 2;
             match cmd >> 24 {
-                0x00..=0x0F => return, // STOP
-                0x10..=0x1F => {}      // NOP
+                0x00..=0x0F => return matte_writes, // STOP
+                0x10..=0x1F => {}                   // NOP
                 0x20..=0x2F => self.set_dcp(path, cmd & 0x003F_FFFC),
                 0x30..=0x3F => {
                     self.set_dcp(path, cmd & 0x003F_FFFC);
-                    return;
+                    return matte_writes;
                 }
                 0x40..=0x4F => addr = (cmd & 0x0007_FFFF) / 2,
                 0x50..=0x5F => {
                     self.set_vsr(path, cmd & 0x003F_FFFF);
-                    return;
+                    return matte_writes;
                 }
                 0x60..=0x6F => self.raise_it(path),
                 0x78..=0x7F => self.set_display_parameters(path, cmd),
-                reg => self.set_register(path, reg as u8, cmd & 0x00FF_FFFF),
+                reg => {
+                    matte_writes |= self.set_register_with_matte_priority(
+                        path,
+                        reg as u8,
+                        cmd & 0x00FF_FFFF,
+                        path_a_matte_writes,
+                    );
+                }
             }
         }
+        matte_writes
     }
 
     /// Run the Dynamic Control Area program for `path` (one line's worth).
+    #[cfg(test)]
     fn process_dca(&mut self, path: usize, plane: &[u8]) {
+        self.process_dca_with_matte_priority(path, plane, 0);
+    }
+
+    fn process_dca_with_matte_priority(
+        &mut self,
+        path: usize,
+        plane: &[u8],
+        path_a_matte_writes: u8,
+    ) -> u8 {
         let mut addr = (self.dca[path] & 0x0007_FFFF) / 2;
         let mut count = 0u32;
+        let mut matte_writes = 0;
         // MCD212 table 5-10: the retrace-time fetch budget is 32 bytes when
         // CF is clear and 64 when set. Storage/stride remains 64 bytes in
         // either mode; exceeding the fetch budget performs an automatic stop.
@@ -1219,7 +1271,7 @@ impl Mcd212 {
                 0x30..=0x3F => {
                     self.set_dcp(path, cmd & 0x003F_FFFC);
                     self.dca[path] = cmd & 0x0007_FFFC;
-                    return;
+                    return matte_writes;
                 }
                 0x40..=0x4F => self.set_vsr(path, cmd & 0x003F_FFFF),
                 0x50..=0x5F => {
@@ -1228,11 +1280,19 @@ impl Mcd212 {
                 }
                 0x60..=0x6F => self.raise_it(path),
                 0x78..=0x7F => self.set_display_parameters(path, cmd),
-                reg => self.set_register(path, reg as u8, cmd & 0x00FF_FFFF),
+                reg => {
+                    matte_writes |= self.set_register_with_matte_priority(
+                        path,
+                        reg as u8,
+                        cmd & 0x00FF_FFFF,
+                        path_a_matte_writes,
+                    );
+                }
             }
         }
         addr += (64 - count) / 2;
         self.dca[path] = (addr * 2) & 0x0007_FFFC;
+        matte_writes
     }
 
     /// Advance by `cycles` CPU cycles; runs per-line and per-frame work.
@@ -1268,18 +1328,21 @@ impl Mcd212 {
                 self.frame_count += 1;
                 self.external_generation_this_field = None;
                 self.external_generation_mixed_this_field = false;
+                let mut path_a_ica_matte_writes = 0;
+                let mut path_a_dca_matte_writes = 0;
                 if self.ica_enabled(0) {
-                    self.process_ica(0, planea);
+                    path_a_ica_matte_writes = self.process_ica_with_matte_priority(0, planea, 0);
                     if self.dca_enabled(0) {
                         self.dca[0] = self.get_dcp(0);
-                        self.process_dca(0, planea);
+                        path_a_dca_matte_writes =
+                            self.process_dca_with_matte_priority(0, planea, 0);
                     }
                 }
                 if self.ica_enabled(1) {
-                    self.process_ica(1, planeb);
+                    self.process_ica_with_matte_priority(1, planeb, path_a_ica_matte_writes);
                     if self.dca_enabled(1) {
                         self.dca[1] = self.get_dcp(1);
-                        self.process_dca(1, planeb);
+                        self.process_dca_with_matte_priority(1, planeb, path_a_dca_matte_writes);
                     }
                 }
                 // Motorola MCD212 Technical Reference Manual, rev. 0, §7.6
@@ -1309,11 +1372,13 @@ impl Mcd212 {
                 // content lines.
                 let advance_dca =
                     self.display_file_line(self.line) && self.display_file_line(self.line + 1);
-                if advance_dca && self.dca_enabled(0) {
-                    self.process_dca(0, planea);
-                }
+                let path_a_matte_writes = if advance_dca && self.dca_enabled(0) {
+                    self.process_dca_with_matte_priority(0, planea, 0)
+                } else {
+                    0
+                };
                 if advance_dca && self.dca_enabled(1) {
-                    self.process_dca(1, planeb);
+                    self.process_dca_with_matte_priority(1, planeb, path_a_matte_writes);
                 }
             }
 
@@ -1432,7 +1497,7 @@ mod tests {
             window_y: 0,
             window_width: frame.width,
             window_height: frame.height,
-            vcd_clock: false,
+            output_clock: crate::dvc::VmpegExternalClock::GreenBook15Mhz,
             border: 0,
         }
     }
@@ -1443,6 +1508,15 @@ mod tests {
         for _ in 0..fields {
             mcd212.tick(field_cycles, &plane, &plane);
         }
+    }
+
+    fn matte_command(op: u32, flag: u32, weight: u32, x: u32) -> u32 {
+        (op << 20) | (flag << 16) | ((weight & 0x3F) << 10) | (x & 0x3FF)
+    }
+
+    fn write_dcp_command(plane: &mut [u8], offset: usize, register: u8, value: u32) {
+        plane[offset..offset + 4]
+            .copy_from_slice(&((u32::from(register) << 24) | (value & 0x00FF_FFFF)).to_be_bytes());
     }
 
     #[test]
@@ -1590,6 +1664,182 @@ mod tests {
             zero_following == different_following,
             "MCD212 section 7.1 repeats the final U/V component rather than peeking into the next line"
         );
+    }
+
+    #[test]
+    fn rgb555_combines_plane_a_high_byte_with_plane_b_low_byte() {
+        let mut m = Mcd212::new(false);
+        m.image_coding_method = u32::from(ICM_CLUT8_OR_RGB555) << 8;
+        m.transparency_control = 0x0900;
+        m.set_vsr(0, 0x1000);
+        m.set_vsr(1, 0x1000);
+
+        let mut plane_a = vec![0u8; 0x80000];
+        let mut plane_b = vec![0u8; 0x80000];
+        // Philips TN 022: RGB555 drawmap A supplies the upper pixel byte and
+        // drawmap B supplies the lower byte. $57AB decodes to $A8E858.
+        plane_a[0x1000] = 0x57;
+        plane_b[0x1000] = 0xAB;
+
+        let mut pixels = [0u32; FB_WIDTH];
+        let mut transparent = [false; FB_WIDTH];
+        m.process_vsr(1, &plane_b, &plane_a, &mut pixels, &mut transparent);
+
+        assert_eq!(pixels[0], 0x00A8_E858);
+        assert_eq!(pixels[1], 0x00A8_E858);
+    }
+
+    #[test]
+    fn dyuv_delta_addition_wraps_modulo_256() {
+        let mut m = Mcd212::new(false);
+        m.image_coding_method = u32::from(ICM_DYUV);
+        m.transparency_control = 0x09;
+        m.dyuv_abs_start[0] = 0xFA_8080;
+        m.set_vsr(0, 0x1000);
+
+        let mut plane = vec![0u8; 0x80000];
+        // Philips TN 086 table 1 maps code 3 to +9. 250 + 9 wraps to 3.
+        plane[0x1000] = 0x03;
+        let other_plane = vec![0u8; 0x80000];
+        let mut pixels = [0u32; FB_WIDTH];
+        let mut transparent = [false; FB_WIDTH];
+        m.process_vsr(0, &plane, &other_plane, &mut pixels, &mut transparent);
+
+        assert_eq!(pixels[0], 0x0003_0303);
+        assert_eq!(pixels[1], 0x0003_0303);
+    }
+
+    #[test]
+    fn dyuv_programmed_start_is_reapplied_on_every_scanline() {
+        let mut m = Mcd212::new(false);
+        m.image_coding_method = u32::from(ICM_DYUV);
+        m.transparency_control = 0x09;
+        m.dyuv_abs_start[0] = 0x10_8080;
+        m.set_vsr(0, 0x1000);
+
+        let mut plane = vec![0u8; 0x80000];
+        let encoded_line_bytes = m.screen_width() / 2;
+        // TN 034 and TN 086 require each line to restart from the programmed
+        // absolute value. This first line deliberately finishes elsewhere.
+        plane[0x1000..0x1000 + encoded_line_bytes].fill(0x01);
+        let other_plane = vec![0u8; 0x80000];
+        let mut pixels = [0u32; FB_WIDTH];
+        let mut transparent = [false; FB_WIDTH];
+
+        m.process_vsr(0, &plane, &other_plane, &mut pixels, &mut transparent);
+        assert_eq!(m.get_vsr(0), 0x1000 + encoded_line_bytes as u32);
+        assert_eq!(pixels[m.screen_width() - 1], 0x0078_7878);
+
+        m.process_vsr(0, &plane, &other_plane, &mut pixels, &mut transparent);
+
+        assert_eq!(m.get_vsr(0), 0x1000 + (encoded_line_bytes * 2) as u32);
+        assert_eq!(pixels[0], 0x0010_1010);
+        assert_eq!(pixels[1], 0x0010_1010);
+    }
+
+    #[test]
+    fn matte_line_template_restarts_flags_and_honors_ordered_stop() {
+        let mut m = Mcd212::new(false);
+        m.matte_control[0] = matte_command(9, 0, 0, 2); // Set MF0.
+        m.matte_control[1] = matte_command(8, 0, 0, 5); // Reset MF0.
+        m.matte_control[2] = matte_command(0, 0, 0, 7); // Stop this set.
+        m.matte_control[3] = matte_command(9, 0, 0, 9); // Must be ignored.
+
+        m.matte_flag[0].fill(true);
+        m.update_matte_arrays();
+
+        assert!(!m.matte_flag[0][0]);
+        assert!(!m.matte_flag[0][1]);
+        assert!(m.matte_flag[0][2]);
+        assert!(m.matte_flag[0][4]);
+        assert!(!m.matte_flag[0][5]);
+        assert!(!m.matte_flag[0][9], "STOP must suppress higher registers");
+
+        let commands = m.matte_control;
+        m.matte_flag[0].fill(true);
+        m.update_matte_arrays();
+        assert_eq!(m.matte_control, commands, "commands persist across lines");
+        assert!(!m.matte_flag[0][0], "each line starts outside the matte");
+        assert!(m.matte_flag[0][2]);
+        assert!(!m.matte_flag[0][5]);
+    }
+
+    #[test]
+    fn two_matte_sets_drive_independent_flags_in_register_order() {
+        let mut m = Mcd212::new(false);
+        m.image_coding_method |= 0x08_0000; // NM=1: two sets of four registers.
+        m.matte_control[0] = matte_command(9, 1, 0, 2); // MF bit ignored: set MF0.
+        m.matte_control[1] = matte_command(8, 1, 0, 6); // Reset MF0.
+        m.matte_control[2] = matte_command(0, 0, 0, 8);
+        m.matte_control[3] = matte_command(9, 0, 0, 10);
+        m.matte_control[4] = matte_command(9, 0, 0, 3); // Set MF1.
+        m.matte_control[5] = matte_command(8, 0, 0, 7); // Reset MF1.
+        m.matte_control[6] = matte_command(0, 0, 0, 9);
+        m.matte_control[7] = matte_command(9, 0, 0, 11);
+
+        m.update_matte_arrays();
+
+        assert!(!m.matte_flag[0][1]);
+        assert!(m.matte_flag[0][2]);
+        assert!(m.matte_flag[0][5]);
+        assert!(!m.matte_flag[0][6]);
+        assert!(!m.matte_flag[1][2]);
+        assert!(m.matte_flag[1][3]);
+        assert!(m.matte_flag[1][6]);
+        assert!(!m.matte_flag[1][7]);
+        assert!(!m.matte_flag[0][10]);
+        assert!(!m.matte_flag[1][11]);
+    }
+
+    #[test]
+    fn simultaneous_matte_loads_prefer_path_a() {
+        let path_a_value = matte_command(9, 0, 0, 2);
+        let path_b_value = matte_command(8, 0, 0, 6);
+        let path_b_other_register = matte_command(8, 0, 0, 7);
+        let mut plane_a = vec![0u8; 0x80000];
+        let mut plane_b = vec![0u8; 0x80000];
+        write_dcp_command(&mut plane_a, 0, 0x10, 0); // NOP: slot positions need not match.
+        write_dcp_command(&mut plane_a, 4, 0xD0, path_a_value);
+        write_dcp_command(&mut plane_b, 0, 0xD0, path_b_value);
+        write_dcp_command(&mut plane_b, 4, 0xD1, path_b_other_register);
+
+        let mut m = Mcd212::new(true);
+        m.dcr[0] = DCR_DE | DCR_ICA | DCR_DCA;
+        m.dcr[1] = DCR_ICA | DCR_DCA;
+        m.line = geometry(true).0 - 1;
+        m.tick(cycles_per_line(true), &plane_a, &plane_b);
+
+        assert_eq!(
+            m.matte_control[0], path_a_value,
+            "same-line path-A access has priority over path B even from a different command slot"
+        );
+        assert_eq!(
+            m.matte_control[1], path_b_other_register,
+            "path A only suppresses path B when both access the same register"
+        );
+        assert!(m.matte_flag[0][2]);
+        assert!(m.matte_flag[0][6]);
+        assert!(!m.matte_flag[0][7]);
+    }
+
+    #[test]
+    fn simultaneous_ica_matte_loads_prefer_path_a() {
+        let path_a_value = matte_command(9, 0, 0, 3);
+        let path_b_value = matte_command(8, 0, 0, 5);
+        let mut plane_a = vec![0u8; 0x80000];
+        let mut plane_b = vec![0u8; 0x80000];
+        write_dcp_command(&mut plane_a, 0x400, 0xD0, path_a_value);
+        write_dcp_command(&mut plane_b, 0x400, 0xD0, path_b_value);
+
+        let mut m = Mcd212::new(true);
+        m.dcr[0] = DCR_DE | DCR_ICA;
+        m.dcr[1] = DCR_ICA;
+        m.line = geometry(true).1 - 1;
+        m.tick(cycles_per_line(true), &plane_a, &plane_b);
+
+        assert_eq!(m.matte_control[0], path_a_value);
+        assert!(!m.matte_flag[0][2]);
+        assert!(m.matte_flag[0][3]);
     }
 
     #[test]

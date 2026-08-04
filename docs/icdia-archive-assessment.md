@@ -10,10 +10,10 @@
 The local research mirror is referred to as `$CDI_REFERENCE_ROOT` throughout
 this document. It is not redistributed with the repository.
 
-The mirror contains 342 files, including 187 PDFs, 123 HTML files and 29 ZIP
+The mirror contains 410 files, including 185 PDFs, 123 HTML files and 15 ZIP
 archives. This index records what has actually been assessed so later work can
 distinguish a checked source from an unchecked lead. It is not a claim that all
-187 PDFs have been read cover to cover.
+185 PDFs have been read cover to cover.
 
 The local mirror is incomplete in at least one useful place: `docs/GRNBK/`
 contains the HTML index but not the linked extensionless chapters or
@@ -32,7 +32,7 @@ None of these copyrighted source documents belong in the repository.
 | `authoring/` | 17 | Disc layout, real-time files, media and FMV authoring |
 | `svcmanuals/` | 14 | Board schematics, signal names and service procedures |
 | `microware/` | 12 | CD-RTOS/OS-9 calls, drivers and ABI behavior |
-| remaining directories | 38 | Technical training, newsletters, software and proceedings |
+| remaining directories | 37 | Technical training, newsletters, software and proceedings |
 
 `notes/techindex.pdf` has been extracted and reviewed as the routing index
 for all technical notes. Notes are selected from their documented subjects,
@@ -67,6 +67,14 @@ not only from filenames.
 | TN 063, 089, 100 | Display synchronization, scan timing and CLUT-screen techniques relevant to MCD212 compatibility. |
 | TN 079 | Sound-map completion reports the transfer into a manufacturer-dependent audio-processor buffer, not the instant the last sample becomes audible. Status describes the next sector to transfer and is unsuitable for A/V synchronization. |
 | TN 085.1 | Cross-player base-case requirements: fixed-but-not-exact system tick, 1–3 second seek tolerance, PAL/NTSC, multiple input devices, initialized settings, and defined/legal DCP programs. |
+| TN 022 | RGB555 IFF files store upper-byte and lower-byte banks separately, while `dm_write()` accepts interleaved pixels and splits them into the two drawmaps. This is an authoring/API boundary, not a second device pixel format. |
+| TN 034, 086 | DYUV uses the fixed nonlinear delta table with modulo-256 arithmetic and restarts from programmed Y/U/V values on every line. Horizontal panning and edge-fitted blits require authored line-specific data rather than hidden MCD212 state. |
+| TN 053 | UVLO is a title-supplied base-case software codec rather than an MCD212 or VMPEG format. Its sample receives sector-sized frames through four circular PCLs, decodes into alternating DYUV drawmaps, changes the plane-A address through the LCT, and reveals the window with plane-B mattes. All 23 PDF pages were rendered and visually reviewed. |
+| TN 068 | The early base-case NVRAM description says approximately 8 KiB and documents native NVRUI rounding, deletion ordering, sorting, and protection. Its UI policy remains separate from the timekeeper/SRAM device and from larger service-manual configurations. |
+| TN 039 | Narrow detail can acquire false hue and brightness variation through analog NTSC composite encoding at the 7.5 MHz CD-i dot rate. This is an output-presentation artifact across all coding methods, not a digital MCD212 pixel-decoding rule. |
+| TN 048 | International authoring requires CSD-driven compatibility state. A 240-line 525 title may author 20 neutral scanlines above and below for acceptable 625 playback, while the compatible 384x280 format fills the aperture. These are title policies rather than an emulator crop. |
+| TN 099 | Balboa maps 525/625 images in a shared UCM coordinate space, consumes asynchronous real-time data in whole 2324-byte sectors, cycles per-channel/type buffer lists, and separately selects RAM channels, one direct-audio channel, and an EOR record count. Its matte summary is subordinate to the later Green Book where wording differs. |
+| TN 100 | Display-control changes become visible when the display reads them, not when the CPU writes them. Active 32-bit LCT writes can theoretically be observed as old/new 16-bit halves; field interrupts, double buffering, and separate 50/60 Hz motion rates are the safe application model. |
 
 The PDF pages behind the current SLAVE/input conclusions were also rendered
 and visually checked; text extraction was not treated as sufficient evidence.
@@ -167,6 +175,12 @@ begin immediately after the final FCT instruction, and differing plane-A/B FCT
 lengths can shift the two DCP streams. Plane B's image coding method is governed
 by plane A. These are higher-value compatibility targets than emulating obsolete
 18x color/matte defects globally.
+
+TN 022, TN 034, and TN 086 close several lower-level image assumptions. The
+current RGB555 plane order, DYUV delta table, wrapping addition, and per-line
+start reset agree with the notes. IFF byte-bank layout, horizontal-pan start
+recalculation, and fitted blit edges are authoring responsibilities; they
+should inform fixtures and drawmap provenance, not new renderer heuristics.
 
 One data-sheet cleanup remains deliberately deferred. Table 5-8 says
 non-interlaced ICA always starts at byte `$400`, while interlaced odd/even fields
@@ -308,3 +322,8 @@ The next compatibility investigations should route through these sources:
    switching and seamless-branch edge cases.
 5. `techdocs/cdi605_techdoc.pdf` and `cdi615_techdoc.pdf` when adding later
    boards, keeping Mono-I assumptions out of common device code.
+6. The lower-priority TN 039/048/099/100 batch is now claim-reviewed and
+   visually verified. Route its follow-up through the Green Book and MCD212
+   manual: optional composite presentation remains separate from the digital
+   raster, while live-LCT races need a bounded display-fetch timeline before
+   any scheduling change.

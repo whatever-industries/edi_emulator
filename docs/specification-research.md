@@ -9,13 +9,14 @@ changing a device. It is not a collection of title-specific workarounds.
 
 ## Source corpus and reproducible OCR
 
-Set `$CDI_REFERENCE_ROOT` to the location of the local source archive:
+The OCR script defaults to the current local source archive. Set
+`$CDI_REFERENCE_ROOT` only when the mirror has moved or on another checkout:
 
 ```sh
 export CDI_REFERENCE_ROOT=/path/to/icdia-site-documents
 ```
 
-It currently contains 187 PDF files among 422 files (about 2.1 GiB). Original
+The current mirror contains 185 PDF files (about 2.1 GiB). Original
 documents are external references and are not committed. Searchable text and a
 SHA-256 manifest are generated under ignored `references/spec-text/`:
 
@@ -60,17 +61,24 @@ These hashes pin the exact local editions used for the first priority pass:
 | `svcmanuals/cdi450.pdf` | `b35a82eb22d49daea571773c6f557bb6bd8a493affd4ff4e1e8c4d3e88d8acdb` |
 | `svcmanuals/22er9141.pdf` | `d1e23fd7b28413644f9c09c23cde2197763e337d5989ed8149ea621c3700bb41` |
 | `notes/techindex.pdf` | `dcd73dfb2e413d06f376dc60f47ee2e7142477e3f7dabc3a795baea4984cdaf3` |
+| `notes/technote022.pdf` | `6dfa381841df7abd70c0c54c680c7650d905abcbcace8eb02e35b3a8b2a83d38` |
+| `notes/technote034.pdf` | `269c02c60b03b43d5e72622f67f629db22cd3f0d293fe5c0ce0e137ec46e207c` |
+| `notes/technote039.pdf` | `e8dc3c142ae8f7fa8350e0ace070ef1c58e0bba09ee743a6124d38a9b7d0d503` |
 | `notes/technote042.pdf` | `56f21ea860e18c5660857c0072e1d95ccc87736af7350be86f4349d505612277` |
 | `notes/technote046.pdf` | `d3033bcfe0bdfa9ae0415ebe7cbdaa6533cec0fb55d601a76dbaa96ca9ab4c16` |
+| `notes/technote048.pdf` | `fce7ee3f550fec0ea75dc192535f073418dbdb4836348d99d2dcf9312a3ec3a7` |
 | `notes/technote049.pdf` | `4c6cf66dde11b64fcfa1cb0c8924b753cae55322b03d6454138ce4dc11fc8cef` |
+| `notes/technote053.pdf` | `21ddae134d5531fc50b385d00f05bbc7a2b4dbfcda4bc63c010d5121a422a31f` |
 | `notes/technote054.pdf` | `a95ef94ba5f95d0da803a126e6c85af6b4c2558d7682b1fbe0fb9bea4abf3231` |
 | `notes/technote058.pdf` | `ee982800044a7ed2edb8dcd7cb5a2f2ba199099350c472e119ee5bc2e0fb11ac` |
 | `notes/technote062.pdf` | `68c1dff4137cb88a4c5fa8c9bda741c4dce3393b394378bed0a0d8ec2eb96067` |
 | `notes/technote063.pdf` | `3a2054a47f1faa4de9f7f7fb926023eb2a8dc7f3c66fd33c8267a4061f58e547` |
+| `notes/technote068.pdf` | `45cd9e7e57159d153ae2d379acd965479b937f72d2a4dbb73fe43d17a353d694` |
 | `notes/technote069.pdf` | `3a779194ad787c094766589d4d4810fe45191660621745b207977822a69e5ef4` |
 | `notes/technote073.2.pdf` | `578d9434841abda7cc399cdbfdf27236a813e298ef30572cdb1f70bf9912b7ea` |
 | `notes/technote076.pdf` | `421ce068a95362f516c6d9f0d6271d8460dbf4938b45f4c6ae2ca43526ecdc47` |
 | `notes/technote085.1.pdf` | `69a1a8ab5d0d427c6ec64b58e6a875ef121a7c00d908dd5a52be178f15c15c84` |
+| `notes/technote086.pdf` | `9b7201b5a2f232f86097d0296139b741a0b51088d39844ed690af8ca40c5bb6e` |
 | `notes/technote087.pdf` | `acebbae0208769d6b11904682cb1005b692294aeac3e498af9d24ec109d0311a` |
 | `notes/technote088.pdf` | `1c3d3c2b60612215bb309dcfcdbc07e385197de60a710c4c8540c5ddfb30dae1` |
 | `notes/technote089.pdf` | `60280e2240efdbd6e0e8a268edb08a1d5c4c1e19cd648a02a5962cdf5740ff37` |
@@ -81,6 +89,8 @@ These hashes pin the exact local editions used for the first priority pass:
 | `notes/technote096.pdf` | `885f43a76405aefa5916136cb29ffced4989714cc48f791835dda4deed08fe20` |
 | `notes/technote097.pdf` | `005245d22b22ec25b0a3d4b9508f3cd5fd2ebb90f9c2a6cc32d20a564b11f53b` |
 | `notes/technote098.pdf` | `6c36811e5064c792287987b04cb0c15065445c03012f6694118f609ea9218df9` |
+| `notes/technote099.pdf` | `ffce18f16cbf18458ae352cf807d9218c80e20cdbd0fa86b1a30323b9e80cdd8` |
+| `notes/technote100.pdf` | `27397f2d9b264d78f872dd0793af1e2ac3918e337e9b328b0c8b0e659eed384f` |
 | `notes/technote102.pdf` | `f6b87a3cfb904a74e92cdc2af64bf51c4fc662553f6494c879cbef40f01e91d6` |
 | `notes/technote103.pdf` | `6d919a4e47927307a8ef979675d80bb68c6951597c89eeccb5c988f033b6d6bc` |
 | `notes/technote104.pdf` | `90916431822b7205b97c2a46b221f8a4ae3085aeed9f456c45082f4175409ab3` |
@@ -94,18 +104,24 @@ These hashes pin the exact local editions used for the first priority pass:
 
 | Subsystem | Documented behavior | Primary evidence | Current assessment | Next device-level evidence |
 |---|---|---|---|---|
-| Global timing | Disc/audio, video field, and 10 ms system tick are asynchronous; continuous A/V normally follows the disc/audio clock. The tick may be fixed anywhere from 99.8 to 100.2 Hz on a given player; it does not fluctuate inside that range. | `notes/technote085.1.pdf`, printed p. 2; `notes/technote094.pdf`, printed pp. 1-5 | The nominal 75-sector CDIC cadence, exact 100 Hz tick, and SCC68070 section-6.2 instruction/bus timing are implemented. The first accurate-timing divergence proved to be the CDIC/VMPEG interrupt-chain contract rather than sector cadence or DMA0 completion. The allowed off-nominal tick is not modeled. | Preserve the bounded multi-device timeline when changing scheduler granularity; add a synthetic within-instruction deadline test and fixed 99.8/100.2 Hz tick variants before event slicing. |
+| Global timing | Disc/audio, video field, and 10 ms system tick are asynchronous; continuous A/V normally follows the disc/audio clock. The tick may be fixed anywhere from 99.8 to 100.2 Hz on a given player; it does not fluctuate inside that range. | `notes/technote085.1.pdf`, printed p. 2; `notes/technote094.pdf`, printed pp. 1-5; `notes/technote100.pdf`, printed p. 7 | The nominal 75-sector CDIC cadence, exact 100 Hz tick, and SCC68070 section-6.2 instruction/bus timing are implemented. The first accurate-timing divergence proved to be the CDIC/VMPEG interrupt-chain contract rather than sector cadence or DMA0 completion. The allowed off-nominal tick is not modeled. | Preserve the bounded multi-device timeline when changing scheduler granularity; add a synthetic within-instruction deadline test and fixed 99.8/100.2 Hz tick variants before event slicing. |
 | SCC68070 bus errors | External `BERRN` enters vector 2 and saves a 17-word format-F frame. SSW identifies function code, read/write and transfer attributes; setting SSW.RR suppresses rerunning the failed cycle on long-frame `RTE` | `docs/scc68070.zip` → `scc68070_apr93.pdf`, printed pp. 18 and 21-22, §§5.9-5.10, Figures 14-16; Table 22 for RTE timing | Implemented for the two independently verified Mono-I absent-memory ranges, with exact frame/RR tests. Unknown board holes remain open bus. This removes most of the firmware's bytewise RAM-search cost without a blanket unmapped-page rule. | Complete a physical Mono-I address-response matrix across holes, widths, directions and function codes before expanding fault coverage. |
 | Player clocks | PAL system/CPU clocks are 30/15 MHz; NTSC system clock is 30.2098 MHz, consistent with the MCD212's 30.2097 MHz timing tables | `svcmanuals/cdi205.pdf`, PDF pp. 66 and 96; `svcmanuals/cdi350.pdf`, video specifications; `docs/mcd212rev0.pdf`, Table 5-5 | The scheduler and devices currently use a global 30/15 MHz constant, while MCD212 derives integer line periods from exact 50/60 Hz. This is a confirmed model limitation, but changing it before event-interleaved scheduling could regress verified titles. | Add board-clock values and line/field-period tests, then reconstruct scheduling so CPU and devices share the selected crystal without instruction-boundary lumping. |
-| CDFM/PCL | CIL advances to `PCL_Nxt`; a full buffer cannot be reused; PCL signal precedes PCB signal; MPEG uses circular one-sector PCL chains | Green Book R2 `docs/cdi_may94_r2.pdf`, VII.4.4.2-VII.4.4.3 and IX.3.3.3; `notes/technote098.pdf`, “PCL Handling by the MPEG Drivers” | DMA-boundary ownership tracing, bounded guest-write provenance, and a synthetic reuse test are implemented. Current The 7th Guest and Addams runs show no full-PCL overwrite. The lone Addams hash difference is an intentional guest SCR retime, not payload corruption. | Retain these diagnostics when investigating a current visible transport failure; do not alter the nominal 75-sector cadence without a new first-divergence trace. |
+| CDFM/PCL | CIL advances to `PCL_Nxt`; a full buffer cannot be reused; PCL signal precedes PCB signal; MPEG uses circular one-sector PCL chains. Balboa independently demonstrates circular per-channel/type buffer lists filled asynchronously in whole 2324-byte Form 2 sectors. | Green Book R2 `docs/cdi_may94_r2.pdf`, VII.4.4.2-VII.4.4.3 and IX.3.3.3; `notes/technote098.pdf`, “PCL Handling by the MPEG Drivers”; `notes/technote099.pdf`, printed pp. 18 and 67-69 | DMA-boundary ownership tracing, bounded guest-write provenance, and a synthetic reuse test are implemented. Current The 7th Guest and Addams runs show no full-PCL overwrite. The lone Addams hash difference is an intentional guest SCR retime, not payload corruption. | Retain these diagnostics when investigating a current visible transport failure; do not alter the nominal 75-sector cadence without a new first-divergence trace. |
 | CDFM error reporting and correction | Non-real-time Form 1 sectors may legally occur inside a real-time file and be delivered asynchronously with ECC, but software correction can interrupt subsequent real-time delivery. Form 2 may carry EDC without ECC. PCL `PL_ERR.Err_Res` can report byte or word resolution, requiring worst-case application buffers of 294 bytes for Form 2 and 256 for Form 1. | `notes/technote054.pdf`, printed pp. 2-5; `notes/technote058.pdf`, printed pp. 1-2 and 4 | Clean image-backed sectors preserve form/real-time/EDC metadata but expose no injected read-error path, correction latency, or guest `PL_ERR` population. Native dirty-disc dialogs therefore cannot yet be tied to a physical-error resolution. | Add project-owned correctable and uncorrectable Form 1/Form 2 sector fixtures, byte/word `PL_ERR` variants, and a timeline proving that software ECC can delay a real-time stream without changing the nominal clean-sector cadence. |
 | CDFM seek contract | `I$Seek` changes only the logical file-position pointer. Disc-reading calls perform an implicit physical seek; `SS_Seek` additionally repositions the head immediately and is useful only when that movement can overlap other presentation. A normal `SS_Seek` followed by a read can therefore move the head twice. | `notes/technote090.pdf`, printed pp. 1-2 | The image-backed drive has logical position and command latency, but does not model a physical head or distance-dependent implicit seek. This is a compatibility timing gap, not a reason to delay every host read. | Add a synthetic SLAVE/CDIC timeline for logical seek, pre-positioned asynchronous seek, near implicit seek, and cross-disc seek before modeling head position or Green Book 1-to-3-second limits. |
 | CDIC reset state | CDIC register 2 at base + `$3FFA` is nonzero after reset. The service manuals consistently say `$C7FE` in the PCB test and `$D7FE` in the terminal test | `svcmanuals/cdi205.pdf`, `svcmanuals/cdi220.pdf`, `svcmanuals/cdi350.pdf`, and `svcmanuals/cdi360.pdf`, PCB test step 9 and terminal test step 09 | `Cdic::new` currently initializes the corresponding Z/audio-control register to zero, so a reset mismatch is confirmed. The repeated bit-12 difference strongly suggests test-path state rather than a one-off typo; its cause must not be guessed. | Trace each BIOS's first accesses, identify what the terminal test initializes before reading register 2, and map `$C7FE`/`$D7FE` fields against CDIC documentation before correcting the reset state. |
 | CDIC disc audio | Direct real-time audio delivery is autonomous and does not consume the CPU bus. Its file-position pointer advances only when an ADPCM sector passes the selection mask, whereas any trigger can signal even from a non-selected channel. On Mono-I, the first selected XA sector reports DBUF low nibble 4 and places a complete post-sync image in `$2800`; the second uses `$3200`/5. CDDA and CD-fed XA still require guest `AUDCTL $0800` before audible playback. | `notes/technote092.pdf`, printed pp. 1-2; independent Mono-I hardware captures in `Slamy/CDIC_BlackBoxAnalyzer` revision `e861f76`, `doc/cdic_manual.md`, `src/test_xa_play.c`, `src/test_cdda_play.c`, and `src/test_audiomap.c` | Implemented as dual header/audio routing plus separate receipt and playback state. Focused tests cover ordinary-header visibility, first/second ADPCM placement, no PCM before `$0800`, CDDA gating, and the one-shot stop latch. Selected-sector file-position and cross-channel trigger semantics are not yet represented explicitly. | Preserve the hardware-verified buffer route. Add device tests for selected-sector file-position updates and non-selected-channel triggers before extending CDIC/CDFM synchronization behavior. Model SLAVE `$82/$83` plus AD7528 output gating separately. |
-| CDFM play termination | `PCB_Rec` counts EOR-delimited real-time records. `ss_abort` is the reliable termination path. Green Book permits a live zero to be recognized on the next selected sector, but TN 085.1 warns that some players wait for a sector selected for RAM delivery; its portable workaround clears `PCB_AChan` immediately before `PCB_Rec`, with the selected audio CIL entry either valid or zero. `PCB_Chan` selects processed channels while `PCB_AChan` separately routes selected audio directly to the audio processor. | Green Book R2 VII.2; `authoring/master.pdf`, printed pp. 3-64--3-65; `notes/technote085.1.pdf`, printed p. 6; Philips FPD805 `dev/basecase/bmp_nat/test/bumptest.c` and `dev/basecase/bmp_nat/code/src/bumpanim.c` | Read-only diagnostics snapshot PCB record/routing changes, and bounded harness patches now make deliberate guest-RAM changes auditable. The exact-FPD805 local gates cover natural three-record exhaustion, its native abort path, a live direct-audio `PCB_Rec = 0`, and TN 085.1's workaround with null and valid one-sector audio CIL entries. On the current 220 ROM all three live-clear cases wait for the same next selected audio-sector interrupt; the workaround cases have cycle-identical `PCB_Rec`, selected-sector, and route-clear milestones. FPD805 source also shows that its abort handler clears `PCB_AChan` before the later `ss_abort`, correcting the earlier attribution. No emulation behavior changed. | Retain this 220 gate. Do not generalize its permitted fast direct-audio result to other player models; add an alternate native driver/player fixture before modeling TN 085.1's slower compatibility phenotype. |
-| MCD212 geometry and interlace | Compatibility mode masks fixed samples/lines; 525 monitor and 525 TV have different `ST` meanings. Base-case CD-i can display true interlaced odd/even drawmaps; high-contrast horizontal detail then exhibits authentic interline flicker, while line repetition is not equivalent to filtered interlace. | Green Book R2 V.4.8; `docs/mcd212rev0.pdf`, Tables 5-4 through 5-7 and §5.8; `notes/technote042.pdf`, printed pp. 1-4 | CD-i 220 TV and 625 behavior are modeled, and the core retains odd/even field rows. The core has no distinct 525-monitor player type. The live cursor is composited after the weave, but title-authored high-frequency detail can still comb or flicker. | Retain parity/field-weave tests. Add a project-owned interlaced high-contrast fixture before changing presentation filtering; do not turn an authoring-side vertical filter into an MCD212 device filter. |
-| MCD212 DCA control | DCA fetches occur during horizontal retrace, allocate 64 bytes per line, and use a DCP-linked line sequence; Table 5-10 specifies the 32/64-byte per-line fetch budget and Table 5-12 documents STOP and reload operations. On the 910, the actual first linked LCT executes immediately after its FCT, a documented difference from the Green Book model. | `docs/mcd212rev0.pdf`, §5.4.2 and Tables 5-10/5-12; `notes/technote069.pdf`, printed p. 8, §3.3 | The core advances the 64-byte DCA slot between unmasked display lines. A plausible field-wide STOP latch was tested against Addams Family Values USA native controls, but it immediately destroyed the valid control bar and was reverted. The specification wording, the documented first-LCT timing difference, and the title’s per-line STOP-padded program require a hardware trace before changing this lifecycle. | Capture a real MCD212 DCA program containing STOP followed by a successor slot across consecutive horizontal retraces, together with output/state evidence. Do not infer a field-wide latch or hide the final display row from title behavior alone. |
+| SLAVE analog audio output | The SLAVE serially programs two AD7528 devices for mute/unmute and the four-path stereo attenuation matrix. An external Hotel Mario score-screen SPI trace contains 55 four-byte-equal writes: ordinary updates are about 0.775-0.825 ms apart, a 0-to-255 ramp lasts 27.132 ms, and a 252-to-0 ramp lasts 24.031 ms; occasional 2.2-2.9 ms gaps are consistent with SLAVE workload. | Firmware command forms `$82`/`$83` and `$C0..$CF`; local external Saleae text export SHA-256 `0cd157158a3dd637fa3661e1840a04f799491b1da58cc82c3477335709ea2830` | The HLE parses the attenuation packet and applies a digital CDIC matrix, but does not model the serial DAC cadence, analog transfer function, mute latch, or a shared final boundary for VMPEG audio. The trace constrains timing only; repeated bytes do not prove the general command mapping. | Capture ch2 commands, SPI words, analog output, and source identity on one synchronized timeline. Establish code polarity and gain before changing audible output; then test whether CDIC and DVC both pass through the same boundary. |
+| CDFM play termination | `PCB_Rec` counts EOR-delimited real-time records. `ss_abort` is the reliable termination path. Green Book permits a live zero to be recognized on the next selected sector, but TN 085.1 warns that some players wait for a sector selected for RAM delivery; its portable workaround clears `PCB_AChan` immediately before `PCB_Rec`, with the selected audio CIL entry either valid or zero. `PCB_Chan` selects processed channels while `PCB_AChan` separately routes selected audio directly to the audio processor. | Green Book R2 VII.2; `authoring/master.pdf`, printed pp. 3-64--3-65; `notes/technote085.1.pdf`, printed p. 6; `notes/technote099.pdf`, printed p. 69; Philips FPD805 `dev/basecase/bmp_nat/test/bumptest.c` and `dev/basecase/bmp_nat/code/src/bumpanim.c` | Read-only diagnostics snapshot PCB record/routing changes, and bounded harness patches now make deliberate guest-RAM changes auditable. The exact-FPD805 local gates cover natural three-record exhaustion, its native abort path, a live direct-audio `PCB_Rec = 0`, and TN 085.1's workaround with null and valid one-sector audio CIL entries. On the current 220 ROM all three live-clear cases wait for the same next selected audio-sector interrupt; the workaround cases have cycle-identical `PCB_Rec`, selected-sector, and route-clear milestones. FPD805 source also shows that its abort handler clears `PCB_AChan` before the later `ss_abort`, correcting the earlier attribution. No emulation behavior changed. | Retain this 220 gate. Do not generalize its permitted fast direct-audio result to other player models; add an alternate native driver/player fixture before modeling TN 085.1's slower compatibility phenotype. |
+| MCD212 geometry and interlace | Compatibility mode masks fixed samples/lines; 525 monitor and 525 TV have different `ST` meanings. For cross-standard playback, authoring can center a 240-line 525 picture in the 280-line 625 aperture by adding 20 neutral scanlines above and below; the compatible 280-line format can fill the aperture. Base-case CD-i can display true interlaced odd/even drawmaps; high-contrast horizontal detail then exhibits authentic interline flicker. | Green Book R2 V.4.8; `docs/mcd212rev0.pdf`, Tables 5-4 through 5-7 and §5.8; `notes/technote042.pdf`, printed pp. 1-4; `notes/technote048.pdf`, printed pp. 1-2; `notes/technote099.pdf`, printed p. 17 | CD-i 220 TV and 625 behavior are modeled, and the core retains odd/even field rows. The core has no distinct 525-monitor player type. The live cursor is composited after the weave, but title-authored high-frequency detail can still comb or flicker. The border notes describe authored/manager policy, not permission to crop a title's final row. | Retain parity/field-weave tests. Add a project-owned interlaced high-contrast fixture before changing presentation filtering; do not turn authoring-side filtering or borders into an MCD212 device filter. |
+| Composite-output boundary | At the 7.5 MHz normal-resolution dot rate, one- and two-pixel detail can acquire false hue and brightness variation after analog NTSC composite encoding even though the same digital RGB pixels remain correct. The effect applies to every CD-i coding method and is strongest in narrow high-contrast detail. | `notes/technote039.pdf`, printed pp. 4-5 | The core and raw presentation expose the digital raster, not a guessed manufacturer-specific composite encoder/decoder. This can make emulator output look cleaner than a consumer CRT without implying a device-decoder error. | Add an explicitly optional, separately tested composite-display simulation only if requested; never use this note to alter decoded pixels, crop an edge, or excuse a digital-raster mismatch. |
+| MCD212 DCA control | DCA fetches occur during horizontal retrace, allocate 64 bytes per line, and use a DCP-linked line sequence; Table 5-10 specifies the 32/64-byte per-line fetch budget and Table 5-12 documents STOP and reload operations. On the 910, the actual first linked LCT executes immediately after its FCT, unlike the Green Book model. A changed LCT instruction becomes effective only when the display reads it, potentially up to one field later; a live 32-bit instruction can theoretically be observed as old/new 16-bit halves. | `docs/mcd212rev0.pdf`, §5.4.2 and Tables 5-10/5-12; `notes/technote069.pdf`, printed p. 8, §3.3; `notes/technote100.pdf`, printed pp. 4-9 and 28-31 | The core advances the 64-byte DCA slot between unmasked display lines and raises display interrupts when the corresponding ICA/DCA command is processed. It does not yet prove the exact visible-line phase of a DCA interrupt or a CPU-write/display-fetch collision inside one 32-bit instruction. A plausible field-wide STOP latch was tested against Addams Family Values USA native controls, immediately destroyed the valid control bar, and was reverted. | Add a bounded line timeline that writes the two 16-bit halves around a DCA fetch and records the interrupt edge, active slot, and raster. Do not infer a field-wide STOP latch or hide the final display row. |
+| MCD212 mattes | Matte flags reset to false at the start of every scanline, while the eight matte-control registers retain their commands from line to line until the DCP reloads them. Registers operate as one ordered set of eight or two ordered sets of four. If both paths load the same register during one line's control phase, path A wins and path B is ignored. | `docs/mcd212rev0.pdf`, §5.4.4.12; Green Book R2 V.5.10.1-V.5.10.3; `notes/technote099.pdf`, printed pp. 70-72 | Tests prove the false line start, persistent register template, ordered one-/two-set comparisons, STOP, and shared-register path-A priority even when the two loads occupy different command slots in the same line. The old sequential model applied path A first and then incorrectly let path B overwrite it; paired ICA/DCA execution now suppresses only the conflicting path-B load. TN 099's loose end-of-field wording remains subordinate to the later Green Book. | Retain these tests. Add a focused raster only if combined matte-flag/image-contribution-factor opcodes become compatibility-relevant. |
 | MCD212 DCP integrity | Every display line must remain controlled by a defined linked LCT. Missing or overwritten links let hardware consume undefined memory. Illegal opcode/mode combinations have undefined results; on a Philips 220, masked DYUV with four-bit resolution can turn both planes solid gray. | `notes/technote085.1.pdf`, printed pp. 4-5 | Legal DCP decoding and linked LCT traversal are tested. There is no explicit diagnostic for a missing final LCT link or illegal transient state, and undefined combinations must not be normalized into a portable title behavior. | Add diagnostics that identify the first undefined LCT fetch and illegal DCP combination without prescribing its raster. Preserve the title's two-write order and scan phase before attributing a transient to the device. |
+| MCD212 RGB555 | CD-i IFF stores RGB555 as an upper-byte plane followed by a lower-byte plane, while `dm_write()` accepts interleaved 16-bit pixels and splits them into the two drawmap banks. Rectangular IFF lines are longword-padded; real-time files place each bank on a sector boundary. | `notes/technote022.pdf`, printed pp. 1-3 | The device renderer reads plane B as the low byte and plane A as the high byte; a focused asymmetric-byte raster test now protects that order. The note constrains authored storage and UCM input layout, not a second display-device conversion path. | Retain the raster test and keep planar on-disc IFF distinct from interleaved `dm_write()` buffers in future inventory/drawmap provenance. |
+| MCD212 DYUV scanlines | DYUV uses the fixed 16-value delta table with modulo-256 addition. Programmed Y/U/V start values are reapplied at every scanline, making lines independent. Horizontal panning has a two-pixel minimum and requires an authored, line-specific recomputed start value; prepared DYUV blits must meet both background edges. | `notes/technote034.pdf`, printed pp. 1-2; `notes/technote086.pdf`, printed pp. 1-10 | The renderer uses the documented table and wrapping addition, and initializes Y/U/V from the programmed start for each `process_vsr()` line. Focused tests now force a 250+9 wrap and prove that a changed first-line accumulator cannot leak into the second line. Panning and fitted blits remain authoring operations. | Retain the device regressions; add an authored two-pixel-offset fixture only if horizontal DYUV panning becomes compatibility-relevant. |
+| Base-case UVLO motion video | UVLO is a title-supplied software codec, not an MCD212 image mode or DVC format. A base-case title receives sector-sized frames through a circular PCL chain, decodes them on the 680x0 into ordinary DYUV drawmaps, alternates drawmaps, and reveals the decoded window with a matte. The sample treats a producer/consumer queue collision as a dropped frame. | `notes/technote053.pdf`, printed pp. 1-7 and sample program pp. 9-17 | E-Di supplies the documented CDIC/CDFM delivery, DYUV drawmap, DCA/matte, compatibility-mode, and CPU primitives, but has no project-owned UVLO real-time-file fixture proving the complete native software path or its timing. UVLO must not be routed through VMPEG or decoded as a new host-side image format. | Build or locate a redistributable UVLO sample and assert circular PCL ownership, frame-drop behavior under deliberate decoder pressure, drawmap alternation, matte bounds, and 384-pixel TV compatibility mode. Use the Engineering 6.0 disc only as optional local evidence if it contains a UVLO case. |
 | Pixel aspect | TN 093 reports measured Philips output at 1.225 for 525 and 1.025 for 625. The later TN 104 instead calculates 1.230/1.017 and reports empirical 1.235 ± 0.003/1.019 ± 0.003; it separately gives White Book Video CD source-pixel ratios of 1.1069/0.9157 and says the DV decoder does not act on the MPEG aspect-ratio field. | `notes/technote093.pdf`, printed p. 6; `notes/technote104.pdf`, printed pp. 7-10 | The frontend uses 49/40 and 41/40 from TN 093. The later source creates a genuine calibration dispute of about one percent, while also confirming that asset preparation, decoder window geometry, and player-output correction are separate. | Measure a known geometry on physical Mono-I NTSC and PAL output, including the final analog/digital capture aperture, before changing presentation ratios. Keep Video CD source-pixel ratios out of the player-output correction. |
 | MCD212 cursor | Blink on/off units are 12 TV fields: 200 ms at 60 Hz and 240 ms at 50 Hz | `docs/mcd212rev0.pdf`, §7.6 and cursor-control register description | Implemented with explicit field counting. PAL and NTSC register-level tests prove the state changes on the twelfth field in both standards. | Retain the field-count test when changing display scheduling; do not derive blink from CPU-cycle or nominal-frame accumulators. |
 | Pointer devices | Relative devices report changes; maneuvering devices report continuously while deflected and support at least 16 directions; X/Y coexist in one packet | `docs/pointing_devices.pdf`, protocol sections “Relative” and “Maneuvering” | Relative mouse and simultaneous X/Y are conceptually correct. A fixed 60 Hz HLE polling cadence is not yet justified by this document alone. | Trace SLAVE firmware packet timing before changing `POLL_INTERVAL`; test diagonal and simultaneous-button packets. |
@@ -123,7 +139,7 @@ These hashes pin the exact local editions used for the first priority pass:
 | CDIC sound maps | `SM_Done` means the last sector reached the audio processor buffer, not that it became inaudible; buffered audio may continue. Sound maps take audible priority over a continuing direct real-time play, and the amount of queued audio is player-dependent. Mono-I captures additionally establish `$ff`/AUDCTL completion behavior. | `notes/technote079.pdf`, printed pp. 1-2; `notes/technote092.pdf`, printed pp. 2-3; `Slamy/CDIC_BlackBoxAnalyzer` `src/test_audiomap.c` | Per-half refill, transfer completion, `$ff` completion, interrupt-masked abort, replacement, direct-audio suppression, and preservation of the queued PCM tail have device-level coverage. The exact physical queue depth remains intentionally abstract. | Investigate exact hardware audio-processor queue depth only if synchronization requires it. Preserve separate transfer-done and audible-done state and do not derive queue depth from one player family. |
 | Initialization | Application entry does not guarantee configurable player state; titles must initialize scan, compatibility, cursor, pointer origin, attenuation, and relevant DCP state | `notes/technote057.1.pdf`, printed pp. 1-2 | Different title screens may legitimately retain or program different state. The emulator must not cosmetically normalize it. | Capture reset/entry register state and first title writes in display incidents. |
 | Base and extension memory | Base CD-i provides two 512 KiB colored banks. At application entry, OS structures may consume at most 32 KiB in either bank, leaving at least 480 KiB contiguous per plane. The Philips DVC dynamically inserts 1 MiB system RAM and 0.5 MiB priority-zero MPEG RAM into the live memory list rather than the static init-module list. | `notes/technote087.pdf`, printed pp. 1-3 and 6-9; `notes/technote096.pdf`, printed pp. 9-10 | The physical base/DVC RAM maps exist. Guest-visible CD-RTOS memory-list insertion, priorities, colors, and entry-time contiguity have not been asserted from a boot trace. | Capture the post-DVC `D_FreeMem` list and application-entry free-block map; verify two base colors, dynamic extension nodes, priority-zero decoder RAM, and 480 KiB base-case minima. |
-| NVRAM/timekeeper | The MK48T08B is memory-mapped; the player stores game results, shell settings, FTS data, and CSD in NVRAM; maximum usable space is 31 KiB | `svcmanuals/cdi205.pdf`, PDF pp. 20 and 96 | The Mono-I model exposes a 32 KiB MK48T08-style device with eight clock registers and persists it by board. On `019fb59`, the PAL/VMPEG player shell retained three entries sized 13.3%, 2.4%, and 2.0%; their rounded 17.7% sum agrees with the displayed 18% total, leaving approximately 82% free. This confirms plausible shell accounting for the observed state but does not independently measure the byte-capacity reservation. | Preserve the current physical model; add a synthetic near-capacity filesystem test if exact reservation behavior becomes compatibility-relevant. |
+| NVRAM/timekeeper | The MK48T08B is memory-mapped; TN 068 describes a base-case player as having approximately 8 KiB and documents the native NVRUI deletion/protection policy and deliberately rounded percentage display. The service manual also describes a 32 KiB CPU window and says one configuration permits 31 KiB, so capacity must remain a board/configuration property rather than a universal shell constant. | `notes/technote068.pdf`, printed pp. 1-4; `svcmanuals/cdi205.pdf`, PDF pp. 20 and 96 | The Mono-I core stores 8 KiB of MK48T08 SRAM, maps it on the upper byte lane through the configured 32 KiB window, reserves the final eight device offsets for clock registers, and persists it by board. On `019fb59`, the shell's three rounded entry percentages sum plausibly to its rounded total, but this does not identify the exact filesystem reservation or reconcile every service-manual configuration. | Preserve the current 8 KiB device until a model-specific address probe proves otherwise. Add a native near-capacity filesystem test for percentage rounding, protection, and deletion ordering if shell storage becomes compatibility-relevant. |
 | Disc addressing | Logical block address differs from Q absolute time by 150 frames; physical calibration can add a small disc-specific constant | `notes/technote066.pdf`, printed pp. 1-3 | The 150-frame relationship is implemented. Physical calibration offset is unnecessary for ordinary image-file reads unless hardware evidence requires it. | Add only if a subcode-sensitive title diverges from a hardware trace. |
 | Player control keys | `/pck` Play/Stop/Pause/Next/Previous/Search keys are an optional extension, separate from the base two-button pointer; Pause is code `$82` with distinct key-down/key-up events | `notes/technote073.2.pdf`, printed pp. 1-3 | Start defaults to the configurable host-level E-Di menu because `/pck` is not yet emulated; Guide/Home, L1+R1, and right-stick alternatives are available. The overlay pauses emulation only while visible. Start is never emitted as a third base-pointer button, and Select is unassigned. | Implement `/pck` as an optional advertised device with `KB_Read`/`KB_Rdy`/`KB_SSig` behavior and `ss_enable` gating. Then expose an explicit choice between native Start-to-Pause down/up and host-menu use; titles that do not open `/pck` naturally ignore the native events. |
 | Video CD engine | The engine requires DVC, starts the first PSD item, owns its control bars, and shows the multilingual dirty-disc message on disc errors. Release 4.1 says the control bar initially appears at the bottom, but the application is configurable. | `docs_sw/vcd_on_cdi_41.pdf`, Release 4.1, printed pp. 5-7 | A native dirty-disc screen is affirmative evidence of a CD-i engine transport/play failure, not proof that the image is bad. The documented configurability means a clean, flush bar on one title does not establish a different Video CD standard or a universal compositor boundary. | Correlate the dialog with the first PCL/decoder error and the exact PSD/entry point. Fingerprint the native engine/application and configuration before treating control-bar geometry as a cross-title invariant. |
@@ -259,6 +275,22 @@ the live memory list, rather than through the static init module. These are
 guest-visible allocation properties still requiring a boot trace, even though
 the physical address ranges already exist.
 
+TN 068 separates the NVRAM device from the native storage-manager policy. It
+describes the base-case capacity as approximately 8 KiB and recommends an
+adviser that first offers old files from the current application, then unknown
+formats, then old files from other applications, before manual deletion. The
+manual view supports sorting and file protection. Its displayed capacities are
+percentages: a new file is rounded up, an existing file is rounded down, and a
+small amount may deliberately be left unusable to avoid two unequal files both
+appearing as the same percentage. This explains plausible shell presentation;
+it is not hardware behavior to reproduce in the host frontend.
+
+The 8 KiB statement agrees with the MK48T08 device held by the current core,
+but the service manual also documents a larger address window and a
+31-KiB-maximum configuration. That discrepancy is retained as a model/profile
+question. It does not justify enlarging the current device, and the native
+shell remains responsible for its filesystem, deletion policy, and UI.
+
 TN 062 is a broad CD-RTOS 1.1 bug list dated February 1991. It is retained as
 historical errata for named old player/software versions, not promoted to a
 universal hardware contract.
@@ -359,6 +391,80 @@ TN 076 was OCRed from its scan, but this archive copy jumps from printed page 2
 to printed page 4. Findings from the available pages are indexed; printed page
 3 remains a replacement-source task rather than being reconstructed by guess.
 
+### Composite output and international authoring
+
+TN 039 explains a presentation effect rather than a digital decoder rule. At
+CD-i's 7.5 MHz normal-resolution dot rate, narrow white or colored features can
+become falsely colored or vary in brightness after composite NTSC encoding and
+decoding. Single-pixel verticals and diagonals are the worst case; even
+two-pixel detail may acquire a pale hue. The note explicitly applies this to all
+CD-i image-coding methods. Large color areas are comparatively stable. E-Di's
+raw framebuffer should therefore remain the clean digital raster. A future CRT
+or composite simulation would be an optional presentation effect whose encoder
+model must be stated, not a correction inside MCD212 decoding.
+
+TN 048's three authoring levels keep another boundary clear. Every title must
+program the display compatibility state from the type-3 CSD entry. A 240-line
+525 title intended to remain acceptable on a 280-line 625 display can author 20
+neutral scanlines above and below its image; the full compatible format is
+384x280. The later Balboa mapping in TN 099 describes the same centering in
+UCM coordinates. Those are title/manager policies. They corroborate the
+current 240-in-280 aperture but do not authorize the emulator to crop a final
+line or synthesize borders for a title that programmed something else.
+
+TN 048 also recommends table-driven presentation timing for translated audio
+and reserving real-time bandwidth when multilingual tracks are planned. Each
+additional mono C-channel reservation costs about six percent of usable
+bandwidth. This is authoring corroboration for independent channel selection,
+not a reason for the emulator to change sector cadence.
+
+### Balboa video-manager evidence
+
+TN 099 is primarily an application-library note, but its examples expose useful
+native contracts. Real-time-file input is asynchronous and arrives in whole
+2324-byte Form 2 sectors. Balboa cycles through buffer lists independently for
+each channel/type, while `pml_play()` separately selects RAM-delivery channels,
+one direct-audio channel, and an EOR-delimited record count. This independently
+corroborates the current `PCB_Chan`/`PCB_AChan`/`PCB_Rec` interpretation and
+the need to keep buffer ownership visible until native cleanup.
+
+The same note shows why partial-screen DYUV movies are authoring operations:
+three rotating picture buffers receive sector-aligned frames, the unused pixels
+to the left of a partial are initialized to zero, and mattes reveal the selected
+buffer through the other plane. It also documents the eight ordered matte
+registers. The later Green Book resolves one imprecise sentence in TN 099:
+matte *flags* reset at each scanline, while matte-control registers persist from
+line to line until the DCP reloads them. No end-of-field register clear should
+be added from the application note alone.
+
+The Green Book also gives path A priority when both control programs load the
+same matte register simultaneously. MCD212 §5.4.4.12 confirms that channel 1
+has first priority and channel 2 is ignored; the manual's control-loading
+discussion defines simultaneous as occurring in the same line. The previous
+line-level scheduler executed path A and then allowed path B to overwrite the
+shared register. A failing paired-DCA fixture exposed that inversion. ICA and
+DCA phases now retain the set of matte registers written by path A and ignore
+only matching path-B loads; non-conflicting path-B loads still execute. The
+fixture deliberately puts the conflicting loads in different command slots to
+protect the line-wide scope. Companion tests cover the false line start,
+persistent command template, one-/two-set order, and STOP.
+
+TN 100 supplies the stronger scan-timing constraints. An interrupt command
+notifies software when the display actually reads that LCT/FCT instruction;
+editing an LCT does not make it visible immediately and may take up to one
+field. Double-buffered LCT/FCT programs are the normal safe route. When an
+application writes the active LCT, the 16-bit video-memory path can let the
+display fetch old and new halves of one 32-bit command, producing a possible
+one-field flash. The current line-level DCA execution is directionally correct,
+but a within-line CPU-write/display-fetch fixture is required before using this
+note to change scheduling or explain the Video CD lower-edge incident.
+
+TN 100 also independently identifies audio/CD, video, and the 100 Hz system
+timer as three drifting clocks. Its scrolling example derives motion from field
+interrupts and explicitly adjusts 50 Hz versus 60 Hz increments. This supports
+the existing separate-clock research boundary; it does not make one clock the
+universal emulator time base.
+
 ### Cross-player compatibility boundaries
 
 TN 085.1 treats the Green Book as a minimum player contract rather than a
@@ -427,6 +533,58 @@ route-clear, audio-frame, framebuffer, and final-PC timelines. That is a
 permitted fast player result, not proof that every CD-i driver behaves this
 way; TN 085.1 explicitly documents slower players for which the workaround is
 necessary.
+
+### RGB555 and DYUV storage/scanline boundaries
+
+TN 022 resolves an important format-boundary ambiguity. RGB555 pixels in a
+CD-i IFF file are planar: all upper bytes for plane A precede all lower bytes
+for plane B. In contrast, the UCM `dm_write()` API accepts interleaved 16-bit
+pixels and splits them between drawmap banks. Rectangular IFF scanlines include
+longword padding, and real-time storage aligns both byte banks independently to
+sector boundaries. These are authoring/storage rules. The MCD212 still sees
+two drawmap planes, and the current renderer already combines plane B as the
+low byte with plane A as the high byte.
+
+TN 034 and TN 086 independently pin DYUV decoding to the same fixed 16-entry
+delta table and modulo-256 arithmetic. More importantly, programmed Y/U/V
+start values are reapplied at the beginning of every scanline; decoder state
+must never leak from one line into the next. Horizontal panning is therefore
+an authored transformation: it advances in two-pixel units and recomputes a
+start value for every affected line. Likewise, the eight-pixel transition zone
+used by older DYUV blitting tools, and the later fitted-edge search, prepare
+media to meet the decoded background at both edges. They are not display-chip
+effects for the emulator to synthesize.
+
+Code review found the exact table, wrapping addition, per-line start reset, and
+RGB555 byte-plane order already present. Focused device regressions now force
+all three contracts and pass without an emulation behavior change.
+
+### UVLO is a native software pipeline
+
+TN 053 describes UVLO as a non-Green-Book, title-supplied compression method
+for base-case motion video. It reduces chroma resolution beyond ordinary DYUV,
+but the player does not expose a UVLO image-coding mode. Guest 680x0 code
+decodes each UVLO frame into a normal DYUV drawmap. Specialized FMV hardware
+uses a different coding scheme, so UVLO media must not enter E-Di's VMPEG path
+or become a new host-side MCD212 decoder.
+
+The sample application is useful cross-subsystem evidence. It receives one
+frame per fixed number of Form 2 sectors through four circular PCLs, resets
+`PCL_Cnt`, `PCL_Ctrl`, and `PCL_BufSz` after each buffer-full signal, decodes
+into two alternating DYUV drawmaps, and changes the active plane-A display
+address through the LCT. Plane B supplies the background, and three matte
+instructions reveal the UVLO rectangle. When producer and consumer meet, the
+application counts a missed frame and advances its decode queue. Its 384-pixel
+display helper reads the CSD and selects
+Compatibility Mode 0 for TV output or Mode 1 for monitor output.
+
+This independently corroborates existing PCL ownership, drawmap, matte, and
+TV/monitor boundaries but does not by itself require a behavior change. The
+document's throughput tables are explicitly planning estimates: at higher
+frame rates the 75-sector stream limits screen area, while UVLO decoding can
+consume nearly all available CPU throughput. A native or redistributable UVLO
+fixture would therefore be a useful combined CPU/CDIC/MCD212 timing gate; the
+theoretical screen-utilization percentages are not emulator timing constants.
 
 ### Display and region observations
 
@@ -731,8 +889,28 @@ the corresponding corrections:
     the slower compatibility phenotype documented by TN 085.1.
 16. **Undefined DCP diagnostics:** identify missing final LCT links and illegal
     transient mode combinations while leaving their raster unspecified.
+17. **RGB555/DYUV raster contracts (complete):** asymmetric plane bytes prove
+    plane-A/high plus plane-B/low RGB555 assembly; separate fixtures force
+    modulo-256 DYUV wrap and fresh programmed Y/U/V starts on consecutive
+    scanlines. IFF/UCM conversion remains outside the device.
+18. **NVRAM capacity/profile:** only if a title or shell diverges, probe the
+    native address window and near-capacity filesystem behavior to distinguish
+    8 KiB MK48T08 storage from the service manual's larger configuration and
+    to verify NVRUI rounding/protection/deletion policy.
+19. **DCP live-update timeline:** place an interrupt command and a deliberately
+    split 32-bit LCT write around one display fetch. Record the active DCA slot,
+    IT edge, both 16-bit halves, and affected raster line. The separate matte
+    fixture is complete: flags restart false, commands persist and execute in
+    order, STOP terminates a set, and a simultaneous shared-register load gives
+    path A priority. Do not use the remaining synthetic race as a title
+    workaround.
+20. **Native UVLO pipeline:** use a redistributable fixture, or an optional
+    local Engineering 6.0 case if present, to verify circular PCL ownership,
+    deliberate frame dropping under decoder pressure, alternating DYUV
+    drawmaps, matte bounds, and CSD-selected 384-pixel TV compatibility mode.
+    Keep UVLO in guest software rather than adding a VMPEG or host codec path.
 
-Research remains open while the full archive OCR and lower-priority
-player/service-manual scan continue. New findings should extend the compliance
-matrix with a source and a falsifying test; they should not directly become
-compatibility constants.
+The full 185-PDF archive now has a validated searchable-text manifest. Research
+remains open while lower-priority player/service-manual claims are reviewed.
+New findings should extend the compliance matrix with a source and a falsifying
+test; they should not directly become compatibility constants.

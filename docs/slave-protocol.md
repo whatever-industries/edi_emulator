@@ -152,27 +152,28 @@ The low three bits of B0 byte 2 are the disc-type code later returned by
 `cdapdriv` GetStat `$55`. Native CD-i is type `2`; CD-ROM XA Bridge/White
 Book VCD is type `4`. Bit 6 is independent retained-disc state, so a retained
 bridge disc is reported as `B0 00 44 15`. The VMPEG `vcd` module tests
-GetStat `$55` for bit `0x400`, writes `1` to `$E01000`, and adjusts the
-MCD251 horizontal origin when type 4 is present.
+GetStat `$55` for bit `0x400` and writes `1` to `$E01000` when type 4 is
+present. Hardware review identifies this register as the control for a
+separate 13.5 MHz output-clock converter on the VMPEG cartridge, downstream
+of MCD251. It is not an MCD251 phase register.
 
 `DiscImage` derives type 4 from the disc itself rather than its filename: the
 Mode-2 Form-1 primary volume descriptor at LBA 16 must have the ISO header
 `01 CD001 01`, system identifier `CD-RTOS CD-BRIDGE`, and CD-XA application
 signature `CD-XA001`. Accused and Addams Family Values VCD traces confirmed
-that type 4 makes both select the White Book 13.5 MHz sample-rate-converter
-path. Automatic exposure on insertion remains disabled, however, because the
-MCD251 sample-origin semantics are not implemented yet: exposing the native
-path removes the USA VCD right edge and centers Accused but shifts Addams UK.
-The repeated experiment therefore remains regression-causing. The classifier
-and SLAVE response are retained as tested prerequisites, not used as a
-presentation workaround.
+that type 4 makes both select the White Book 13.5 MHz output-converter path.
+Automatic type-4 exposure on insertion is enabled and covered by a synthetic
+XA-Bridge test. The accepted converter model expands horizontal output by
+`15/13.5` (`10/9`) at the cartridge boundary. Remaining title-specific
+position differences are evidence about guest-programmed MCD251 coordinates,
+not evidence for another hidden phase register or a host crop.
 
 Read-only type-4 traces further show that Accused Netherlands and Addams
 Family Values UK program the same MCD251 origin/active tuple
 `Xo=65, Yo=26, Xa=384, Ya=280`; their `Xd`, `Xw`, and `Ww` display/window
 commands differ. This rules out treating `Xo` as a per-title decoded-image
-crop. The full MCD251 phase/timing definition or a synchronized real-hardware
-trace is required before repeating the exposure experiment.
+crop. A synchronized real-hardware register/output trace is still required
+before changing the accepted coordinate mapping.
 
 This exchange was verified with CD Shoot: after the reset, the BIOS consumes
 the retained `B0`, sends `B1`, loads the disc modules, starts Mode-2 streaming,
@@ -192,7 +193,7 @@ in the material assessed so far, document this private SLAVE/CDAP byte
 protocol; the values above come from firmware and BIOS disassembly plus the
 runtime trace.
 
-The archive contains 187 PDFs. The historical source map is
+The current archive contains 185 PDFs. The historical source map is
 `docs/icdia-archive-assessment.md`; current requirements and evidence status
 are tracked in `docs/specification-research.md` and
 `data/compatibility/compliance-matrix.json`. In particular,
@@ -268,6 +269,28 @@ open/close/spin-up timing directly in the frontend.
   `$5D.5`.
 - When command `0x90` has armed `$59.0`, the handler instead receives two
   bytes; its second byte is stored in `$D8` unless it is `0xFF`.
+
+### AD7528 output trace: Hotel Mario score screen
+
+An external Mono-I Saleae SPI decode captures 55 writes to the two AD7528
+devices while Hotel Mario fades its score-screen audio. The local text export
+has SHA-256
+`0cd157158a3dd637fa3661e1840a04f799491b1da58cc82c3477335709ea2830` and is
+diagnostic-only; it is not stored in this repository.
+
+- Each 32-bit MOSI word repeats one value four times, for example
+  `A1 A1 A1 A1`. In this scene all four matrix inputs therefore move together.
+- The rising ramp has 29 writes from 0 to 255 over 27.132 ms. The falling
+  ramp has 26 writes from 252 to 0 over 24.031 ms.
+- Ordinary write spacing clusters around 0.775-0.825 ms. A few 2.2-2.9 ms
+  gaps account for the workload-dependent fade duration and support the
+  reported approximately 791 microsecond SLAVE scheduling step.
+
+This trace is a timing oracle, not yet an audible-gain implementation. It does
+not by itself establish command-byte polarity, the AD7528 analog transfer
+curve, mute behavior, or whether CDIC and VMPEG audio share the same final
+analog boundary. Those must be tied to simultaneous ch2 command and audio
+measurements before replacing the current digital attenuation model.
 
 ### ch3 commands (`0x03DA`, matches MAME's known set)
 

@@ -18,6 +18,17 @@ for tool in pdftotext pdfinfo shasum; do
     }
 done
 
+if [ ! -d "$source_root" ]; then
+    echo "CD-i reference root is not a directory: $source_root" >&2
+    exit 2
+fi
+
+pdf_count=$(find "$source_root" -type f -iname '*.pdf' -print | awk 'END { print NR + 0 }')
+if [ "$pdf_count" -eq 0 ]; then
+    echo "CD-i reference root contains no PDF files: $source_root" >&2
+    exit 2
+fi
+
 mkdir -p "$output_root"
 manifest="$output_root/manifest.tsv"
 tmp_manifest="$output_root/manifest.tsv.new"

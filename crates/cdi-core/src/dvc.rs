@@ -38,9 +38,42 @@ const FMA_IVEC: usize = 0x0C;
 const FMA_ISR: usize = 0x1A;
 const FMA_IER: usize = 0x1C;
 
-/// A latched MCD251 output view. VMPEG emits 384 active samples at the
-/// Green Book 15 MHz rate, or stretches 352 VCD samples to that span when
-/// its 13.5 MHz sample-rate converter is selected.
+/// Pixel clock selected by the output converter on the VMPEG cartridge.
+///
+/// The converter is downstream of the MCD251.  Its `$E01000` control is not
+/// an MCD251 register: the decoder continues to produce the same samples and
+/// the cartridge changes how those samples occupy the MCD212 raster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VmpegExternalClock {
+    GreenBook15Mhz,
+    WhiteBook13_5Mhz,
+}
+
+impl VmpegExternalClock {
+    fn from_vcd_control(enabled: bool) -> Self {
+        if enabled {
+            Self::WhiteBook13_5Mhz
+        } else {
+            Self::GreenBook15Mhz
+        }
+    }
+
+    /// Convert a 30 MHz MCD212-relative raster position to the MCD251 sample
+    /// selected by the cartridge output circuit.
+    fn source_sample(self, raster_x: usize) -> usize {
+        match self {
+            Self::GreenBook15Mhz => raster_x / 2,
+            // 30 MHz raster / 13.5 MHz source = 20/9 raster pixels per
+            // source sample.  Keep this integer mapping at the external
+            // cartridge boundary rather than changing MCD251 coordinates.
+            Self::WhiteBook13_5Mhz => raster_x.saturating_mul(9) / 20,
+        }
+    }
+}
+
+/// A latched VMPEG external-video output view. The MCD251 emits decoded
+/// samples; the separate cartridge output converter can stretch the White
+/// Book 13.5 MHz stream before it reaches the MCD212 external-video input.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ExternalVideo<'a> {
     pub(crate) frame: &'a DecodedVideoFrame,
@@ -53,7 +86,7 @@ pub(crate) struct ExternalVideo<'a> {
     pub(crate) window_y: usize,
     pub(crate) window_width: usize,
     pub(crate) window_height: usize,
-    pub(crate) vcd_clock: bool,
+    pub(crate) output_clock: VmpegExternalClock,
     pub(crate) border: u32,
 }
 
@@ -70,22 +103,17 @@ impl ExternalVideo<'_> {
             return self.border;
         }
 
-        // X-display is expressed in 15 MHz output-sample positions. The
-        // MCD212 framebuffer follows C2PIX at twice that rate, so each
-        // position occupies two 30 MHz raster pixels. The White Book sample
-        // rate converter changes the MPEG output from 15 MHz to 13.5 MHz
-        // (Philips Interactive Engineer 96/05), hence 9 source samples per
-        // 20 framebuffer pixels.
+        // X-display is an MCD251 sample position. The MCD212 framebuffer
+        // follows C2PIX at twice the Green Book rate, so each position starts
+        // on a pair of 30 MHz raster pixels. The downstream VMPEG output
+        // circuit then selects which source sample occupies each relative
+        // raster position.
         let display_x = self.display_x.saturating_mul(2);
         if raster_x < display_x {
             return self.border;
         }
         let relative_x = raster_x - display_x;
-        let source_relative_x = if self.vcd_clock {
-            relative_x.saturating_mul(9) / 20
-        } else {
-            relative_x / 2
-        };
+        let source_relative_x = self.output_clock.source_sample(relative_x);
         if source_relative_x >= self.window_width {
             return self.border;
         }
@@ -1674,7 +1702,7 @@ impl Vmpeg {
             window_y: external.window_y,
             window_width: external.window_width,
             window_height: external.window_height,
-            vcd_clock: external.vcd_clock,
+            vcd_clock: external.output_clock == VmpegExternalClock::WhiteBook13_5Mhz,
         })
     }
 
@@ -1708,7 +1736,7 @@ impl Vmpeg {
             window_y,
             window_width,
             window_height,
-            vcd_clock: self.vcd_pixel_clock_13_5,
+            output_clock: VmpegExternalClock::from_vcd_control(self.vcd_pixel_clock_13_5),
             border,
         })
     }
@@ -2261,7 +2289,7 @@ mod tests {
             window_y: 0,
             window_width: 2,
             window_height: 1,
-            vcd_clock: false,
+            output_clock: VmpegExternalClock::GreenBook15Mhz,
             border: 0,
         };
 
@@ -2274,7 +2302,7 @@ mod tests {
     }
 
     #[test]
-    fn white_book_clock_expands_345_samples_across_the_active_raster() {
+    fn vmpeg_output_converter_expands_345_white_book_samples_across_the_raster() {
         let frame = DecodedVideoFrame {
             width: 352,
             height: 1,
@@ -2292,13 +2320,27 @@ mod tests {
             window_y: 0,
             window_width: 345,
             window_height: 1,
-            vcd_clock: true,
+            output_clock: VmpegExternalClock::WhiteBook13_5Mhz,
             border: 0,
         };
 
         assert_eq!(video.pixel(0, 0), 8);
         assert_eq!(video.pixel(766, 0), 352);
         assert_eq!(video.pixel(767, 0), 0);
+    }
+
+    #[test]
+    fn vmpeg_output_converter_uses_the_selected_cartridge_clock_ratio() {
+        let green_book = VmpegExternalClock::GreenBook15Mhz;
+        let white_book = VmpegExternalClock::WhiteBook13_5Mhz;
+
+        assert_eq!(green_book.source_sample(18), 9);
+        assert_eq!(green_book.source_sample(20), 10);
+
+        // 30 MHz / 13.5 MHz = 20/9 raster samples per source sample.
+        assert_eq!(white_book.source_sample(19), 8);
+        assert_eq!(white_book.source_sample(20), 9);
+        assert_eq!(white_book.source_sample(200), 90);
     }
 
     #[test]

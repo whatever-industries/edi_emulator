@@ -7,7 +7,9 @@
       "status": "implemented-tested",
       "specification": [
         "MCD212 section 5.8 and tables 5-1 through 5-7",
-        "Green Book V.2.2, V.2.3, V.4.8"
+        "Green Book V.2.2, V.2.3, V.4.8",
+        "Philips Technical Note 048 printed pages 1 through 2",
+        "Philips Technical Note 099 printed page 17"
       ],
       "firmware_evidence": [],
       "source_symbols": [
@@ -19,6 +21,184 @@
         "mcd212::tests::pal_compatibility_masks_do_not_consume_dca_slots_in_either_scan_mode"
       ],
       "known_gaps": []
+    },
+    {
+      "requirement": "Analog NTSC composite artifacts remain separate from the raw digital MCD212 raster",
+      "subsystem": "presentation",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 039 printed pages 4 through 5"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212::Mcd212",
+        "cdi_frontend::presentation"
+      ],
+      "tests": [
+        "cdi-frontend::tests::raw_presentation_preserves_active_pixel_geometry"
+      ],
+      "known_gaps": [
+        "No optional manufacturer-profiled composite encoder and decoder simulation exists",
+        "Composite coloration cannot justify altering decoded pixels or cropping a digital-raster edge"
+      ]
+    },
+    {
+      "requirement": "MCD212 display-control changes and interrupts become observable when the display fetches the instruction",
+      "subsystem": "mcd212",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 100 printed pages 4 through 9 and 28 through 31"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212::Mcd212::process_ica",
+        "cdi_core::mcd212::Mcd212::process_dca"
+      ],
+      "tests": [
+        "mcd212::tests::ica_interrupt_and_csr2_clear",
+        "mcd212::tests::first_dca_slot_runs_after_ica_and_slot_count_matches_visible_lines"
+      ],
+      "known_gaps": [
+        "No bounded timeline fixes the visible-line phase of a DCA interrupt edge",
+        "No fixture places the two 16-bit halves of a live 32-bit LCT write around one display fetch",
+        "Instruction-boundary scheduling may hide a CPU and display collision inside one write"
+      ]
+    },
+    {
+      "requirement": "MCD212 matte flags restart false on every scanline, registers persist until reloaded, and simultaneous shared-register loads favor path A",
+      "subsystem": "mcd212",
+      "status": "implemented-tested",
+      "specification": [
+        "MCD212 section 5.4.4.12",
+        "Green Book Release 2 V.5.10.1 through V.5.10.3",
+        "Philips Technical Note 099 printed pages 70 through 72"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212::Mcd212::update_matte_arrays",
+        "cdi_core::mcd212::Mcd212::set_register_with_matte_priority"
+      ],
+      "tests": [
+        "mcd212::tests::matte_line_template_restarts_flags_and_honors_ordered_stop",
+        "mcd212::tests::two_matte_sets_drive_independent_flags_in_register_order",
+        "mcd212::tests::simultaneous_matte_loads_prefer_path_a",
+        "mcd212::tests::simultaneous_ica_matte_loads_prefer_path_a"
+      ],
+      "known_gaps": [
+        "Combined matte-flag and image-contribution-factor opcodes lack a focused raster test",
+        "TN 099's loose end-of-field wording must not override the later Green Book register-persistence rule"
+      ]
+    },
+    {
+      "requirement": "MCD212 RGB555 combines the authored upper-byte and lower-byte drawmap planes without confusing IFF storage with UCM input layout",
+      "subsystem": "mcd212",
+      "status": "implemented-tested",
+      "specification": [
+        "Philips Technical Note 022 printed pages 1 through 3"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212::Mcd212::process_vsr"
+      ],
+      "tests": [
+        "mcd212::tests::rgb555_combines_plane_a_high_byte_with_plane_b_low_byte"
+      ],
+      "known_gaps": [
+        "Future disc inventory must keep planar CD-i IFF storage distinct from interleaved dm_write input buffers"
+      ]
+    },
+    {
+      "requirement": "MCD212 DYUV applies the fixed delta table modulo 256 and restarts from programmed Y U V values on every scanline",
+      "subsystem": "mcd212",
+      "status": "implemented-tested",
+      "specification": [
+        "Philips Technical Note 034 printed pages 1 through 2",
+        "Philips Technical Note 086 printed pages 1 through 10"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::mcd212::Mcd212::process_vsr",
+        "cdi_core::mcd212::dyuv_luts"
+      ],
+      "tests": [
+        "mcd212::tests::dyuv_last_chroma_repeats_instead_of_reading_past_the_line",
+        "mcd212::tests::dyuv_delta_addition_wraps_modulo_256",
+        "mcd212::tests::dyuv_programmed_start_is_reapplied_on_every_scanline"
+      ],
+      "known_gaps": [
+        "Horizontal panning start-value recomputation and fitted DYUV blits are authoring operations, not device behavior"
+      ]
+    },
+    {
+      "requirement": "White Book 13.5 MHz horizontal conversion is owned by the VMPEG cartridge output circuit downstream of MCD251",
+      "subsystem": "vmpeg-output",
+      "status": "implemented-tested",
+      "specification": [
+        "Philips Interactive Engineer 96/05",
+        "MCD251 Technical Summary Rev. 0"
+      ],
+      "firmware_evidence": [
+        "Native vcd module writes 1 to 0xE01000 after SLAVE disc type 4 detection",
+        "External hardware review identifies the converter as a separate VMPEG circuit and the horizontal ratio as 15/13.5"
+      ],
+      "source_symbols": [
+        "cdi_core::dvc::VmpegExternalClock",
+        "cdi_core::dvc::ExternalVideo::pixel"
+      ],
+      "tests": [
+        "dvc::tests::vmpeg_output_converter_uses_the_selected_cartridge_clock_ratio",
+        "dvc::tests::vmpeg_output_converter_expands_345_white_book_samples_across_the_raster",
+        "machine::tests::disc_insertion_reports_bridge_media_as_type_four_only"
+      ],
+      "known_gaps": [
+        "No synchronized real-hardware register and output capture yet resolves the remaining title-specific MCD251 coordinate differences",
+        "The 13.5 MHz converter must not be reclassified as an MCD251 phase register"
+      ]
+    },
+    {
+      "requirement": "SLAVE mute and attenuation drive the Mono-I analog output through two AD7528 devices",
+      "subsystem": "slave-audio-output",
+      "status": "partial",
+      "specification": [],
+      "firmware_evidence": [
+        "SLAVE ch2 command forms 0x82, 0x83, and 0xC0 through 0xCF",
+        "Hotel Mario score-screen Saleae text export SHA-256 0cd157158a3dd637fa3661e1840a04f799491b1da58cc82c3477335709ea2830"
+      ],
+      "source_symbols": [
+        "cdi_core::slave::SlaveHle::take_attenuation",
+        "cdi_core::cdic::Cdic::set_attenuation"
+      ],
+      "tests": [],
+      "known_gaps": [
+        "The capture constrains an approximately 0.8 ms update cadence and 24 to 27 ms ramps but not code polarity or analog gain",
+        "Mute and unmute commands are logged but do not control the final audio boundary",
+        "VMPEG audio bypasses the current CDIC-only digital attenuation matrix",
+        "No synchronized ch2, SPI, analog-output, and source-identity trace proves whether both CDIC and VMPEG share the same final boundary"
+      ]
+    },
+    {
+      "requirement": "Mono-I NVRAM capacity and native storage-manager policy remain model-specific",
+      "subsystem": "nvram-timekeeper",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 068 printed pages 1 through 4",
+        "CD-i 205 service manual PDF pages 20 and 96"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::machine::MachineBus",
+        "cdi_frontend::storage"
+      ],
+      "tests": [
+        "machine::tests::nvram_read_write",
+        "machine::tests::power_cycle_clears_volatile_memory_but_preserves_nvram",
+        "cdi-frontend::tests::nvram_write_is_replaceable_and_wrong_sizes_start_clean"
+      ],
+      "known_gaps": [
+        "TN 068 describes approximately 8 KiB while the service manual also describes a larger window and 31 KiB maximum configuration",
+        "No model-specific native address probe distinguishes mirrored 8 KiB MK48T08 storage from larger configurations",
+        "No near-capacity native fixture verifies NVRUI percentage rounding, protection, and deletion ordering"
+      ]
     },
     {
       "requirement": "MCD212 DCA and MCD251/MCD212 composition preserve native Video CD control-bar lower-edge state",
@@ -135,7 +315,8 @@
       "specification": [
         "Green Book Release 2 chapter VII.2",
         "Philips master Disc Building Utility printed pages 3-64 through 3-65",
-        "Philips Technical Note 085.1 printed page 6"
+        "Philips Technical Note 085.1 printed page 6",
+        "Philips Technical Note 099 printed page 69"
       ],
       "firmware_evidence": [
         "Philips FPD805 dev/basecase/bmp_nat/test/bumptest.c",
@@ -192,7 +373,8 @@
         "Philips CD-i 205 service manual PDF pages 66 and 96",
         "MCD212 Table 5-5",
         "Philips Technical Note 085.1 printed page 2",
-        "Philips Technical Note 094 printed pages 1 through 5"
+        "Philips Technical Note 094 printed pages 1 through 5",
+        "Philips Technical Note 100 printed page 7"
       ],
       "firmware_evidence": [],
       "source_symbols": [
@@ -440,6 +622,30 @@
         "No project-owned introductory and body fixture proves matched VBV and STD boundary states across a branch",
         "No fixture proves PTS-derived runtime timestamp patching while the PCL remains owned",
         "No closed-GOP branch fixture checks program-end omission and complete Layer-II frame boundaries"
+      ]
+    },
+    {
+      "requirement": "UVLO motion video remains a title-supplied base-case software pipeline over CDFM, DYUV drawmaps, and MCD212 mattes",
+      "subsystem": "base-video",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 053 printed pages 1 through 7 and sample program pages 9 through 17"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::cdic::Cdic",
+        "cdi_core::mcd212::Mcd212::process_vsr",
+        "cdi_core::mcd212::Mcd212::update_matte_arrays"
+      ],
+      "tests": [
+        "mcd212::tests::dyuv_programmed_start_is_reapplied_on_every_scanline",
+        "mcd212::tests::matte_line_template_restarts_flags_and_honors_ordered_stop",
+        "diagnostics::tests::circular_pcl_trace_detects_reuse_before_release"
+      ],
+      "known_gaps": [
+        "No project-owned UVLO real-time-file fixture proves the complete native 680x0 decode path",
+        "No optional local title checkpoint yet proves frame dropping under decoder pressure, alternating drawmaps, matte bounds, and 384-pixel TV compatibility mode",
+        "UVLO is not a VMPEG format or an MCD212 image-coding mode and must not gain a host-side decoder shortcut"
       ]
     }
   ]

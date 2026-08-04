@@ -19,6 +19,18 @@ optional raw-square-pixel diagnostic changes only pixel shape; it never crops
 or repositions the core aperture. Real television overscan varied by set and is
 outside the emulated player boundary.
 
+Interlaced output is motion-adaptively deinterlaced for progressive host
+displays by default. Unchanged regions retain both original MCD212 field rows;
+moving regions retain one stable field phase and vertically reconstruct its
+complementary rows at the 25/30 Hz completed-frame cadence. The stable phase
+avoids alternating bob's one-line vertical jitter. Dual start/continuation
+thresholds and a four-field motion hold prevent fades and fine moving edges
+from repeatedly switching between weave and reconstruction. This is strictly
+a frontend presentation option and may be disabled to inspect the exact raw
+weave. Guest timing, MCD212 state, and opt-in display-provenance captures remain
+raw. Normal screenshots follow the selected presentation so they match the
+player window.
+
 Green Book V.4.8 distinguishes 525-line **monitor** and **TV** outputs.
 Compatibility mode is a centered 360-pixel picture on the 525 TV output but a
 384-pixel picture on the 525 monitor output; the mode-zero meanings are

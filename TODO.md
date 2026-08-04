@@ -408,6 +408,21 @@ asset dimensions are supporting evidence rather than ground truth.
 
 ## MPEG/DVC and Video CD
 
+- [x] Revalidate the default-enabled motion-adaptive deinterlacing option on
+  The 7th Guest after changing moving areas from alternating-phase bob to a
+  stable field phase with dual-threshold, four-field motion persistence. The
+  first manual pass removed combing but retained slight jitter on the animated
+  hand and title fade because fine regions could chatter between weave and
+  reconstruction; raw weave remained available when disabled. Static Photo CD
+  output was unaffected. Existing FMVDemo diagnostics report non-interlaced
+  MCD212 geometry, so that title bypasses the filter and remains a progressive
+  regression check rather than a deinterlacing oracle. Core timing and
+  diagnostic captures remain raw. See
+  `data/compatibility/incidents/interlaced-progressive-presentation-combing.json`.
+  PAL and NTSC manual checks found the result substantially better than raw
+  weave, with minor residual hand/fade jitter. Temporal hysteresis did not make
+  a clearly visible further improvement; accept that limitation for now rather
+  than expanding this into an edge-directed or motion-compensated decoder.
 - [x] Diagnose transient horizontal tearing across VMPEG pictures. First
   distinguish mid-raster picture publication, mismatched retained fields, and
   a frontend frame-copy race by tagging scanlines/fields with immutable frame

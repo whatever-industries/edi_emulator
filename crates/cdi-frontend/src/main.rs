@@ -29,7 +29,8 @@ use library::{
     OPEN_FOCUS as LIBRARY_OPEN_FOCUS, SLOTS as LIBRARY_SLOTS,
 };
 use presentation::{
-    display_aperture, fit_aspect, pointer_mapping, presentation_aspect, screenshot_image,
+    display_aperture, fit_aspect, motion_adaptive_deinterlace, pointer_mapping,
+    presentation_aspect, same_field_layout, screenshot_image,
 };
 use storage::{backup_nvram, configured_nvram_path, load_nvram, write_nvram};
 
@@ -344,6 +345,8 @@ struct Prefs {
     smooth_scaling: bool,
     #[serde(default = "default_true")]
     crt_aspect: bool,
+    #[serde(default = "default_true")]
+    deinterlace: bool,
     capture_mouse_enabled: bool,
     #[serde(default = "default_true")]
     auto_region: bool,
@@ -378,6 +381,7 @@ impl Default for Prefs {
             show_fps: true,
             smooth_scaling: false,
             crt_aspect: true,
+            deinterlace: true,
             capture_mouse_enabled: true,
             auto_region: true,
             disc_overrides: BTreeMap::new(),
@@ -793,6 +797,8 @@ struct Shared {
     dvc_path: Mutex<Option<PathBuf>>,
     dvc_inserted: AtomicBool,
     pal: AtomicBool,
+    /// Convert raw interlaced field weave to progressive host presentation.
+    deinterlace: AtomicBool,
     /// Match the player's video standard to the disc's region tag on load.
     auto_region: AtomicBool,
     /// Host-side turbo: run the emulation unthrottled while held.
@@ -1094,6 +1100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dvc_path: Mutex::new(dvc_path),
         dvc_inserted: AtomicBool::new(dvc_inserted),
         pal: AtomicBool::new(model.video == cdi_core::VideoStandard::Pal),
+        deinterlace: AtomicBool::new(true),
         auto_region: AtomicBool::new(true),
         fast_forward: AtomicBool::new(false),
         quick_menu_paused: AtomicBool::new(false),
@@ -1449,6 +1456,12 @@ fn emu_loop(
     let mut next_dvc_frame_trace = 30;
     let mut awaiting_first_dvc_frame = false;
     let mut pending_display_capture: Option<PendingDisplayCapture> = None;
+    // Previous raw weave is retained separately from the presented frame so
+    // motion can be measured between matching field parities. Diagnostic
+    // captures continue reading the core's untouched framebuffer directly.
+    let mut previous_raw_frame = vec![0; FB_WIDTH * FB_HEIGHT];
+    let mut previous_raw_geometry: Option<DisplayGeometry> = None;
+    let mut deinterlace_motion = vec![0; FB_WIDTH * FB_HEIGHT];
 
     while shared.running.load(Ordering::Relaxed) {
         if let Some(command) = shared.command.lock().unwrap().take() {
@@ -1845,14 +1858,9 @@ fn emu_loop(
         }
         if display_capture_finished {
             machine.bus.mcd212.set_diagnostic_plane_capture(false);
-            if let Some(capture) = pending_display_capture.take() {
+            if pending_display_capture.take().is_some() {
                 let message = display_capture_error.map_or_else(
-                    || {
-                        format!(
-                            "Display diagnostics saved — {}",
-                            capture.directory.display()
-                        )
-                    },
+                    || "Display diagnostics saved".to_owned(),
                     |error| format!("Display diagnostic capture failed: {error}"),
                 );
                 *shared.status.lock().unwrap() = message;
@@ -1942,10 +1950,28 @@ fn emu_loop(
             let mut frame = shared.frame.lock().unwrap();
             let geometry = machine.bus.mcd212.display_geometry();
             let (w, h) = (geometry.raster_width, geometry.raster_height);
+            let raw = &machine.bus.mcd212.framebuffer()[..w * h];
+            let previous = previous_raw_geometry
+                .filter(|previous_geometry| same_field_layout(*previous_geometry, geometry))
+                .map(|_| &previous_raw_frame[..w * h]);
             frame.width = w;
             frame.height = h;
             frame.geometry = geometry;
-            frame.pixels[..w * h].copy_from_slice(&machine.bus.mcd212.framebuffer()[..w * h]);
+            if shared.deinterlace.load(Ordering::Relaxed) {
+                motion_adaptive_deinterlace(
+                    raw,
+                    previous,
+                    &mut frame.pixels[..w * h],
+                    &mut deinterlace_motion[..w * h],
+                    w,
+                    h,
+                    geometry,
+                );
+            } else {
+                frame.pixels[..w * h].copy_from_slice(raw);
+            }
+            previous_raw_frame[..w * h].copy_from_slice(raw);
+            previous_raw_geometry = Some(geometry);
             frame.frame_no += 1;
         }
 
@@ -2212,6 +2238,9 @@ impl App {
         app.shared
             .auto_region
             .store(prefs.auto_region, Ordering::Relaxed);
+        app.shared
+            .deinterlace
+            .store(prefs.deinterlace, Ordering::Relaxed);
         *app.shared.disc_standard_overrides.lock().unwrap() = app
             .disc_overrides
             .iter()
@@ -3046,6 +3075,18 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut self.crt_aspect, "Correct pixel aspect")
                 .on_hover_text("Use the measured Philips PAL/NTSC pixel shape");
+            let mut deinterlace = self.shared.deinterlace.load(Ordering::Relaxed);
+            if ui
+                .checkbox(&mut deinterlace, "Deinterlace interlaced output")
+                .on_hover_text(
+                    "Preserve static field detail and interpolate moving regions; disable to show the raw field weave",
+                )
+                .changed()
+            {
+                self.shared
+                    .deinterlace
+                    .store(deinterlace, Ordering::Relaxed);
+            }
             ui.checkbox(&mut self.smooth_scaling, "Smooth scaling");
             ui.checkbox(&mut self.show_fps, "Show FPS");
         });
@@ -3623,6 +3664,7 @@ impl eframe::App for App {
             show_fps: self.show_fps,
             smooth_scaling: self.smooth_scaling,
             crt_aspect: self.crt_aspect,
+            deinterlace: self.shared.deinterlace.load(Ordering::Relaxed),
             capture_mouse_enabled: self.capture_mouse_enabled,
             auto_region: self.shared.auto_region.load(Ordering::Relaxed),
             disc_overrides: self.disc_overrides.clone(),
@@ -4367,7 +4409,7 @@ mod tests {
         load_nvram, parental_passcode, pointer_mapping, presentation_aspect,
         quick_menu_chord_pressed, quick_menu_consumes_controller_poll, region_is_pal,
         screenshot_image, signed_pcm_to_u8, suppress_guest_buttons_until_release, write_nvram,
-        DiscLoadAction, DiscOverride, HostMenuBinding, LibraryPadAction, SharedFrame,
+        DiscLoadAction, DiscOverride, HostMenuBinding, LibraryPadAction, Prefs, SharedFrame,
         MAX_DISPLAY_DIAGNOSTIC_FIELDS, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
@@ -4916,5 +4958,14 @@ mod tests {
         let legacy: DiscOverride =
             serde_json::from_str(r#"{"fill_compatibility_frame":true}"#).unwrap();
         assert_eq!(legacy, DiscOverride::default());
+    }
+
+    #[test]
+    fn legacy_preferences_enable_deinterlacing_by_default() {
+        let legacy: Prefs = serde_json::from_str("{}").unwrap();
+        assert!(legacy.deinterlace);
+
+        let raw_weave: Prefs = serde_json::from_str(r#"{"deinterlace":false}"#).unwrap();
+        assert!(!raw_weave.deinterlace);
     }
 }

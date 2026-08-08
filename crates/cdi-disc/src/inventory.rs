@@ -21,6 +21,9 @@ const DESCRIPTOR_LBA: u32 = 16;
 const MAX_DIRECTORY_DEPTH: usize = 64;
 const MAX_DIRECTORY_BYTES: u32 = 16 * 1024 * 1024;
 const MAX_MODULE_SCAN_BYTES: u32 = 32 * 1024 * 1024;
+const BRIDGE_SYSTEM_ID: &[u8; 17] = b"CD-RTOS CD-BRIDGE";
+const BRIDGE_SYSTEM_ID_FIELD: &[u8; 32] = b"CD-RTOS CD-BRIDGE               ";
+const CD_XA_SIGNATURE: &[u8; 8] = b"CD-XA001";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscFingerprint {
@@ -105,7 +108,27 @@ pub struct IsoVolumeInventory {
     pub volume_id: String,
     #[serde(default)]
     pub application_id: String,
+    /// CD-I Bridge-specific PVD evidence. This is diagnostic only: session
+    /// PSEC is not available from an ordinary flat CUE image.
+    #[serde(default)]
+    pub bridge: Option<BridgeVolumeInventory>,
     pub files: Vec<CdiFileEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BridgeVolumeInventory {
+    /// Whether the complete 32-byte field is the specified identifier plus
+    /// fifteen spaces, rather than merely sharing its prefix.
+    pub system_id_exact: bool,
+    /// Whether the Application Identifier has the specified root-CDI,
+    /// ISO 8.3, version-1 application path form.
+    pub application_path_valid: bool,
+    /// Whether that normalized application path names a file in the parsed
+    /// ISO filesystem.
+    pub application_resolves: bool,
+    /// Separate CD-ROM XA label-record evidence retained because BRIDGE10's
+    /// startup discriminators and XA conformance are not the same question.
+    pub xa_label_signature_present: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,7 +365,7 @@ impl DiscImage {
             .then(|| self.inspect_vcd_navigation(lba_base, filesystem_files, &mut warnings))
             .flatten();
         Ok(DiscInventory {
-            schema_version: 3,
+            schema_version: 4,
             fingerprint,
             leadout_frame: self.leadout(),
             lba_base,
@@ -420,9 +443,9 @@ impl DiscImage {
         }
         let system_id = text_field(user.get(8..40).unwrap_or_default());
         let volume_id = text_field(user.get(40..72).unwrap_or_default());
-        // ISO 9660 PVD application identifier. Philips Bridge applications
-        // use this metadata as an entry-point hint; preserve it verbatim for
-        // diagnostics instead of interpreting it as a host launch command.
+        // CD-I Bridge Specification 1.0, printed p. 9: this is the native
+        // CD-I executable path. Preserve it as guest metadata; never treat it
+        // as a host command.
         let application_id = text_field(user.get(574..702).unwrap_or_default());
         let root = user
             .get(156..)
@@ -430,11 +453,13 @@ impl DiscImage {
             .ok_or("invalid ISO 9660 root directory record")?;
         let mut files = Vec::new();
         self.walk_iso_directories(lba_base, root.lba, root.bytes, &mut files, warnings)?;
+        let bridge = bridge_volume_inventory(user, &application_id, &files);
         Ok(Some(IsoVolumeInventory {
             descriptor_abs_frame: abs,
             system_id,
             volume_id,
             application_id,
+            bridge,
             files,
         }))
     }
@@ -929,6 +954,61 @@ fn enabled_list_offset(offset: u16) -> Option<u16> {
     (offset != 0xffff).then_some(offset)
 }
 
+// CD-I Bridge Specification 1.0, printed pp. 9 and 23-24. This deliberately
+// evaluates PVD evidence only. Session PSEC=$20 must be modeled separately
+// once the image source exposes multisession TOC data.
+fn bridge_volume_inventory(
+    pvd: &[u8],
+    application_id: &str,
+    files: &[CdiFileEntry],
+) -> Option<BridgeVolumeInventory> {
+    let system_id = pvd.get(8..40)?;
+    if !system_id.starts_with(BRIDGE_SYSTEM_ID) {
+        return None;
+    }
+
+    let normalized_application = normalize_bridge_application_path(application_id);
+    let application_resolves = normalized_application.as_ref().is_some_and(|wanted| {
+        files.iter().any(|file| {
+            !file.directory && file.path.replace('\\', "/").eq_ignore_ascii_case(wanted)
+        })
+    });
+    Some(BridgeVolumeInventory {
+        system_id_exact: system_id == BRIDGE_SYSTEM_ID_FIELD,
+        application_path_valid: normalized_application.is_some(),
+        application_resolves,
+        xa_label_signature_present: pvd.get(1024..1032) == Some(CD_XA_SIGNATURE.as_slice()),
+    })
+}
+
+fn normalize_bridge_application_path(application_id: &str) -> Option<String> {
+    let mut parts = application_id.split('/');
+    if parts.next()? != "CDI" {
+        return None;
+    }
+    let filename = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let (name_and_extension, version) = filename.rsplit_once(';')?;
+    if version != "1" {
+        return None;
+    }
+    let (name, extension) = name_and_extension.rsplit_once('.')?;
+    if !(1..=8).contains(&name.len())
+        || !(1..=3).contains(&extension.len())
+        || extension != "APP"
+        || !name.bytes().all(is_iso_d_character)
+    {
+        return None;
+    }
+    Some(format!("CDI/{name}.{extension}"))
+}
+
+fn is_iso_d_character(byte: u8) -> bool {
+    byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+}
+
 fn decode_bcd(byte: u8) -> Option<u8> {
     let high = byte >> 4;
     let low = byte & 0x0f;
@@ -1302,10 +1382,38 @@ mod tests {
     }
 
     #[test]
+    fn bridge_pvd_evidence_requires_exact_padding_and_a_resolved_version_one_app() {
+        let mut pvd = [0u8; 2048];
+        pvd[8..40].copy_from_slice(BRIDGE_SYSTEM_ID_FIELD);
+        pvd[1024..1032].copy_from_slice(CD_XA_SIGNATURE);
+        let files = [file("CDI/PLAYER.APP", false)];
+
+        let valid = bridge_volume_inventory(&pvd, "CDI/PLAYER.APP;1", &files).unwrap();
+        assert!(valid.system_id_exact);
+        assert!(valid.application_path_valid);
+        assert!(valid.application_resolves);
+        assert!(valid.xa_label_signature_present);
+
+        pvd[39] = b'X';
+        let bad_padding = bridge_volume_inventory(&pvd, "CDI/PLAYER.APP;1", &files).unwrap();
+        assert!(!bad_padding.system_id_exact);
+        assert!(bad_padding.application_resolves);
+
+        let bad_version = bridge_volume_inventory(&pvd, "CDI/PLAYER.APP;2", &files).unwrap();
+        assert!(!bad_version.application_path_valid);
+        assert!(!bad_version.application_resolves);
+
+        let missing = bridge_volume_inventory(&pvd, "CDI/MISSING.APP;1", &files).unwrap();
+        assert!(missing.application_path_valid);
+        assert!(!missing.application_resolves);
+    }
+
+    #[test]
     fn synthetic_bridge_pvd_and_cdi_application_classify_photo_cd() {
         const ROOT_LBA: u32 = 20;
         const PHOTO_CD_LBA: u32 = 21;
         const IMAGES_LBA: u32 = 22;
+        const CDI_LBA: u32 = 23;
 
         let directory =
             std::env::temp_dir().join(format!("cdi-inventory-photo-bridge-{}", std::process::id()));
@@ -1317,7 +1425,7 @@ mod tests {
             .collect::<Vec<_>>();
         let pvd = &mut sectors[DESCRIPTOR_LBA as usize][24..24 + 2048];
         pvd[..8].copy_from_slice(b"\x01CD001\x01\x00");
-        pvd[8..8 + 17].copy_from_slice(b"CD-RTOS CD-BRIDGE");
+        pvd[8..40].copy_from_slice(BRIDGE_SYSTEM_ID_FIELD);
         pvd[40..48].copy_from_slice(b"SYNTHETC");
         pvd[574..592].copy_from_slice(b"CDI/PHOTO_CD.APP;1");
         let root_record = iso_record(&[0], ROOT_LBA, 2048, true);
@@ -1331,7 +1439,7 @@ mod tests {
                 iso_record(&[0], ROOT_LBA, 2048, true),
                 iso_record(&[1], ROOT_LBA, 2048, true),
                 iso_record(b"PHOTO_CD", PHOTO_CD_LBA, 2048, true),
-                iso_record(b"CDI", 23, 2048, true),
+                iso_record(b"CDI", CDI_LBA, 2048, true),
             ],
         );
         let photo_cd = &mut sectors[PHOTO_CD_LBA as usize][24..24 + 2048];
@@ -1352,12 +1460,13 @@ mod tests {
                 iso_record(&[1], PHOTO_CD_LBA, 2048, true),
             ],
         );
-        let cdi = &mut sectors[23][24..24 + 2048];
+        let cdi = &mut sectors[CDI_LBA as usize][24..24 + 2048];
         append_records(
             cdi,
             &[
-                iso_record(&[0], 23, 2048, true),
+                iso_record(&[0], CDI_LBA, 2048, true),
                 iso_record(&[1], ROOT_LBA, 2048, true),
+                iso_record(b"PHOTO_CD.APP;1", 0, 0, false),
             ],
         );
 
@@ -1372,12 +1481,18 @@ mod tests {
         .unwrap();
 
         let inventory = inspect_cue(&directory.join("photo.cue")).unwrap();
-        assert_eq!(inventory.schema_version, 3);
+        assert_eq!(inventory.schema_version, 4);
         assert!(inventory.cd_rom_xa_bridge);
         assert!(inventory.has_cdi_application);
         assert_eq!(inventory.content_kind, DiscContentKind::PhotoCd);
         assert!(inventory.iso_volume.as_ref().is_some_and(|volume| {
             volume.application_id == "CDI/PHOTO_CD.APP;1"
+                && volume.bridge.as_ref().is_some_and(|bridge| {
+                    bridge.system_id_exact
+                        && bridge.application_path_valid
+                        && bridge.application_resolves
+                        && bridge.xa_label_signature_present
+                })
                 && volume
                     .files
                     .iter()
@@ -1408,7 +1523,7 @@ mod tests {
             .collect::<Vec<_>>();
         let pvd = &mut sectors[DESCRIPTOR_LBA as usize][24..24 + 2048];
         pvd[..8].copy_from_slice(b"\x01CD001\x01\x00");
-        pvd[8..8 + 17].copy_from_slice(b"CD-RTOS CD-BRIDGE");
+        pvd[8..40].copy_from_slice(BRIDGE_SYSTEM_ID_FIELD);
         pvd[40..48].copy_from_slice(b"SYNTHVCD");
         pvd[574..591].copy_from_slice(b"CDI/CDI_VCD.APP;1");
         let root_record = iso_record(&[0], ROOT_LBA, 2048, true);
@@ -1528,6 +1643,12 @@ mod tests {
         assert_eq!(navigation.lists[2].kind, "end");
         assert!(inventory.iso_volume.as_ref().is_some_and(|volume| {
             volume.application_id == "CDI/CDI_VCD.APP;1"
+                && volume.bridge.as_ref().is_some_and(|bridge| {
+                    bridge.system_id_exact
+                        && bridge.application_path_valid
+                        && bridge.application_resolves
+                        && bridge.xa_label_signature_present
+                })
                 && volume
                     .files
                     .iter()

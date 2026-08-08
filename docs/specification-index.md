@@ -10,6 +10,12 @@ ledger, evidence interpretations, and prioritized falsifying tests.
 implementation-status statements are not authoritative after later code
 changes.
 
+External emulator reviews are tracked separately in
+`data/external-project-reviews.json`; use
+`scripts/check-external-project-updates.py` to detect upstream movement and
+`docs/external-project-reviews.md` for the update procedure. An observed HEAD
+does not count as a reviewed source revision.
+
 | Subsystem | Primary documents | Implementation entry points | Current evidence/tests |
 |---|---|---|---|
 | Disc/filesystem/RTF | Green Book III.4, III.5, V.6, VII CDFM; `docs/cddiscgeneralrcdiexhIII.pdf`; TN 054/058 error recovery; TN 090 seek semantics | `cdi-disc::inventory`, `cdi-core::cdic` | filesystem/sector inventory unit tests; CDIC channel/form tests |
@@ -19,7 +25,7 @@ changes.
 | SLAVE/input | HC05 firmware, `docs/pointing_devices.pdf`, `docs/mc68hc05c8rg.pdf`, TN 076/085.1 CSD and player-model notes | `cdi-core::slave` | `docs/slave-protocol.md` and protocol tests |
 | VMPEG/DVC | `svcmanuals/22er9141.pdf`, `docs/mcd251ts.pdf`, `docs/fmv_extension.pdf`, `docs/cdi_fmv_rec.pdf`, Green/White Book, TN 097/103/105 | `cdi-core::dvc`, `mpeg1_video` | `docs/mpeg-dvc-plan.md`; demux/register/timing tests |
 | VCD | White Book plus `authoring/vcd_introduction.pdf`, `authoring/vcd_synopsis.pdf`, `docs_sw/vcd_on_cdi_*.pdf` | disc inventory, CDIC, DVC | planned VCD pilot incident |
-| CD-RTOS/CDFM | `microware/cdisys.pdf`, `authoring/cdi_standards.pdf`, `authoring/master.pdf`, Green Book VII, TN 049/053/054/058/062/085.1/087/090/099 | guest PCB/CIL/PCL structure tracing | OS-9 module inventory; runtime PCB/PCL state and ownership diagnostics |
+| CD-RTOS/CDFM | `microware/cdisys.pdf`, `authoring/cdi_standards.pdf`, `authoring/master.pdf`, `books_os9/os9insights_ed2.pdf`, `books_os9/os9insights_ed3.pdf`, *The OS-9 Guru, Vol. 1*, Green Book VII, TN 049/053/054/058/062/072/085.1/087/090/099 | guest PCB/CIL/PCL structure tracing | OS-9 module inventory; System Globals/process/scheduler, inherited-path, and `SS_Opt` decoding pending |
 | UCM/drawmaps | Green Book V.6, TN 022 RGB555 storage, TN 034 DYUV panning, TN 086 DYUV encoding/blitting | MCD212 and planned drawmap provenance | raster/aperture tests; IFF/API layout and buffer-to-drawmap tracing gaps |
 | NVRAM/timekeeper | MK48T08 data/device evidence, service-manual memory maps, TN 068 NVRUI policy | `cdi-core::machine`, frontend storage | 8 KiB device mapping/persistence tests; native capacity/profile fixture pending |
 | Keyboard | `docs/keyboards_1996.pdf`, `docs/keyboard_drivers.pdf` | planned serial input-device boundary | documented K/T packet fixtures pending |

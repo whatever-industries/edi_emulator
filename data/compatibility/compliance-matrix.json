@@ -555,6 +555,34 @@
       ]
     },
     {
+      "requirement": "CD-I Bridge identity, application launch metadata, and multisession mapping follow the Bridge 1.0 contract",
+      "subsystem": "disc-image",
+      "status": "partial",
+      "specification": [
+        "CD-I Bridge Specification 1.0 printed pages 7, 9, 15 through 17, 19 through 20, and 23 through 24"
+      ],
+      "firmware_evidence": [
+        "CD-I startup software may recognize a Bridge disc from TOC PSEC 0x20 and/or the exact padded PVD System Identifier"
+      ],
+      "source_symbols": [
+        "cdi_disc::DiscImage::is_cd_rom_xa_bridge",
+        "cdi_disc::DiscImage::inspect",
+        "cdi_disc::BridgeVolumeInventory"
+      ],
+      "tests": [
+        "cdi_disc::image::tests::identifies_cd_rom_xa_bridge_from_volume_descriptor",
+        "cdi_disc::inventory::tests::bridge_pvd_evidence_requires_exact_padding_and_a_resolved_version_one_app",
+        "cdi_disc::inventory::tests::synthetic_bridge_pvd_and_cdi_entry_point_classify_video_cd",
+        "cdi_disc::inventory::tests::synthetic_bridge_pvd_and_cdi_application_classify_photo_cd",
+        "cdi_disc::inventory::tests::classifies_bridge_profiles_from_standardized_filesystem_evidence"
+      ],
+      "known_gaps": [
+        "Boot classification still accepts a System Identifier prefix while diagnostics separately report exact padding and application resolution",
+        "The current CD-XA001 gate is a conservative XA-conformance proxy rather than a BRIDGE10 startup discriminator",
+        "Flat CUE images expose neither session PSEC nor last-session SVD remapping for multisession Bridge discs"
+      ]
+    },
+    {
       "requirement": "VMPEG pause and continue preserve decoder state while CDFM resumes compressed-data delivery",
       "subsystem": "dvc",
       "status": "implemented-tested",
@@ -646,6 +674,42 @@
         "No project-owned UVLO real-time-file fixture proves the complete native 680x0 decode path",
         "No optional local title checkpoint yet proves frame dropping under decoder pressure, alternating drawmaps, matte bounds, and 384-pixel TV compatibility mode",
         "UVLO is not a VMPEG format or an MCD212 image-coding mode and must not gain a host-side decoder shortcut"
+      ]
+    },
+    {
+      "requirement": "Runtime diagnostics validate the OS-9 System Globals root, live module/process/scheduler state, inherited path numbering, and actual SS_Opt option bytes without replacing guest execution",
+      "subsystem": "cd-rtos-diagnostics",
+      "status": "partial",
+      "specification": [
+        "Philips Technical Note 072 printed pages 1 and 3",
+        "Green Book Release 2 chapter VII SS_Opt and Figures VII.33 and VII.40, printed pages VII-19, VII-231, and VII-247",
+        "The OS-9 Guru volume 1 chapter 10.7 printed page 229",
+        "OS-9 Insights third edition printed pages 16, 127 through 128, and 509"
+      ],
+      "firmware_evidence": [],
+      "source_symbols": [
+        "cdi_core::Machine::diagnostic_snapshot",
+        "cdi_core::Os9DiagnosticSnapshot",
+        "cdi_disc::DiscImage::inspect",
+        "cdi_os9::classify_ss_opt",
+        "cdi_os9::inherited_path_numbers"
+      ],
+      "tests": [
+        "cdi_core::diagnostics::os9_tests::system_globals_candidate_must_be_aligned_and_mapped",
+        "cdi_core::diagnostics::os9_tests::live_module_scan_reports_only_crc_valid_modules",
+        "cdi_os9::runtime::tests::classifies_cdfm_cd_and_audio_packets",
+        "cdi_os9::runtime::tests::classifies_ucm_capability_bits",
+        "cdi_os9::runtime::tests::rejects_partial_packets",
+        "cdi_os9::runtime::tests::inherited_paths_are_a_contiguous_prefix"
+      ],
+      "known_gaps": [
+        "Runtime diagnostics expose address-zero's mapped and aligned state, but do not validate the candidate as System Globals for each supported ROM revision",
+        "Runtime diagnostics do not reconcile the live kernel module directory with the independent OS-9 module scan",
+        "Runtime diagnostics do not decode the current process or bounded active, sleep, and wait queues",
+        "Runtime diagnostics do not yet discover OS-9 process path tables or capture a real forkc or chainc handoff",
+        "The SS_Opt classifier is implemented, but runtime diagnostics do not yet capture the guest's actual I$GetStat SS_Opt result buffers",
+        "The archived Technical Note 072 PDF omits printed page 2; its documented constants and relative offsets were cross-checked against the complete Green Book Release 2 option tables",
+        "Process-local path-table structures still require ROM-specific kernel evidence"
       ]
     }
   ]

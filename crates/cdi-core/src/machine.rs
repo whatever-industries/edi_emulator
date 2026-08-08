@@ -15,7 +15,7 @@ use cdi_disc::DiscImage;
 use crate::board::{DeviceKind, ModelDef, VideoStandard};
 use crate::cdic::Cdic;
 use crate::diagnostics::{
-    CpuDiagnosticSnapshot, DiagnosticProbe, DisplayProvenanceSnapshot,
+    os9_diagnostic_snapshot, CpuDiagnosticSnapshot, DiagnosticProbe, DisplayProvenanceSnapshot,
     DmaChannelDiagnosticSnapshot, DmaDiagnosticSnapshot, InterruptDiagnosticSnapshot,
     MachineDiagnosticEvent, MachineDiagnosticSnapshot, Mcd212DiagnosticSnapshot,
     PclOwnershipTracker, RamDiagnosticRegion,
@@ -1191,6 +1191,7 @@ impl Machine {
     pub fn diagnostic_snapshot(&self) -> MachineDiagnosticSnapshot {
         let geometry = self.bus.mcd212.display_geometry();
         let pixel_count = geometry.raster_width * geometry.raster_height;
+        let ram_regions = self.bus.diagnostic_ram_regions();
         MachineDiagnosticSnapshot {
             cpu: CpuDiagnosticSnapshot {
                 d: self.cpu.d,
@@ -1269,6 +1270,7 @@ impl Machine {
             dvc: self.dvc_stats(),
             dvc_registers: self.bus.dvc.as_ref().map(Vmpeg::register_snapshot),
             disc_inserted: self.bus.disc.is_some(),
+            os9: os9_diagnostic_snapshot(&ram_regions, &self.bus.rom),
         }
     }
 

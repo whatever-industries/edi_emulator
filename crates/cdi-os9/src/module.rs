@@ -145,42 +145,75 @@ pub fn crc24(data: &[u8]) -> u32 {
     acc
 }
 
+fn parse_module_at(image: &[u8], off: usize) -> Option<Module> {
+    if off + HEADER_LEN > image.len()
+        || be16(image, off) != SYNC
+        || !header_parity_ok(&image[off..off + HEADER_LEN])
+    {
+        return None;
+    }
+    let size = be32(image, off + 0x04);
+    let name_off = be32(image, off + 0x0C) as usize;
+    let end = off.checked_add(size as usize)?;
+    if size < HEADER_LEN as u32 || end > image.len() || name_off >= size as usize {
+        return None;
+    }
+    let name = read_cstr(&image[off..end], name_off);
+    let type_lang = be16(image, off + 0x12);
+    let attr_rev = be16(image, off + 0x14);
+    Some(Module {
+        offset: off as u32,
+        size,
+        name,
+        mod_type: ModuleType::from((type_lang >> 8) as u8),
+        language: (type_lang & 0xFF) as u8,
+        attributes: (attr_rev >> 8) as u8,
+        revision: (attr_rev & 0xFF) as u8,
+        edition: be16(image, off + 0x16),
+        crc_ok: crc24(&image[off..end]) == CRC24_MAGIC,
+    })
+}
+
 /// Scan an image for OS-9 module headers at even offsets.
 ///
-/// Candidate headers must have valid parity; module bounds are clamped to the
-/// image. Scanning resumes after each module so overlapping garbage is not
-/// reported twice.
+/// Candidate headers must have valid parity and valid in-image bounds.
+/// Scanning resumes after each structurally valid module, including one with
+/// a bad CRC, because ROM module sets are laid out without overlap.
 pub fn scan_modules(image: &[u8]) -> Vec<Module> {
     let mut modules = Vec::new();
     let mut off = 0usize;
     while off + HEADER_LEN <= image.len() {
-        if be16(image, off) != SYNC || !header_parity_ok(&image[off..off + HEADER_LEN]) {
+        let Some(module) = parse_module_at(image, off) else {
             off += 2;
             continue;
-        }
-        let size = be32(image, off + 0x04);
-        let name_off = be32(image, off + 0x0C) as usize;
-        let end = off.saturating_add(size as usize);
-        if size < HEADER_LEN as u32 || end > image.len() || name_off >= size as usize {
-            off += 2;
-            continue;
-        }
-        let name = read_cstr(&image[off..end], name_off);
-        let type_lang = be16(image, off + 0x12);
-        let attr_rev = be16(image, off + 0x14);
-        modules.push(Module {
-            offset: off as u32,
-            size,
-            name,
-            mod_type: ModuleType::from((type_lang >> 8) as u8),
-            language: (type_lang & 0xFF) as u8,
-            attributes: (attr_rev >> 8) as u8,
-            revision: (attr_rev & 0xFF) as u8,
-            edition: be16(image, off + 0x16),
-            crc_ok: crc24(&image[off..end]) == CRC24_MAGIC,
-        });
-        // Modules are contiguous in practice; skip past this one.
+        };
+        let end = off + module.size as usize;
+        modules.push(module);
         off = end.next_multiple_of(2).max(off + 2);
+    }
+    modules
+}
+
+/// Find independently CRC-valid modules in arbitrary live memory.
+///
+/// Unlike [`scan_modules`], a parity-valid but CRC-invalid false header does
+/// not skip over later candidates. The returned collection is capped at
+/// `limit`, keeping diagnostic output and allocation bounded.
+pub fn scan_valid_modules(image: &[u8], limit: usize) -> Vec<Module> {
+    let mut modules = Vec::with_capacity(limit.min(64));
+    let mut off = 0usize;
+    while off + HEADER_LEN <= image.len() && modules.len() < limit {
+        let Some(module) = parse_module_at(image, off) else {
+            off += 2;
+            continue;
+        };
+        if module.crc_ok {
+            let end = off + module.size as usize;
+            modules.push(module);
+            off = end.next_multiple_of(2).max(off + 2);
+        } else {
+            off += 2;
+        }
     }
     modules
 }
@@ -257,5 +290,32 @@ mod tests {
         let mut m = synth_module("kernel", 12, 1, 0x60);
         m[0x16] ^= 0xFF; // corrupt edition without fixing parity
         assert!(scan_modules(&m).is_empty());
+    }
+
+    #[test]
+    fn live_scan_does_not_let_a_bad_crc_header_hide_a_valid_module() {
+        let mut image = vec![0u8; 0x200];
+        let false_header = synth_module("false", 12, 1, 0x180);
+        image[..false_header.len()].copy_from_slice(&false_header);
+        image[0x17f] ^= 1;
+
+        let valid = synth_module("runtime", 12, 1, 0x60);
+        image[0x80..0x80 + valid.len()].copy_from_slice(&valid);
+
+        let modules = scan_valid_modules(&image, 64);
+        assert_eq!(modules.len(), 1);
+        assert_eq!(modules[0].offset, 0x80);
+        assert_eq!(modules[0].name, "runtime");
+    }
+
+    #[test]
+    fn live_scan_obeys_its_output_limit() {
+        let module = synth_module("runtime", 12, 1, 0x60);
+        let mut image = Vec::new();
+        image.extend_from_slice(&module);
+        image.extend_from_slice(&module);
+
+        assert!(scan_valid_modules(&image, 0).is_empty());
+        assert_eq!(scan_valid_modules(&image, 1).len(), 1);
     }
 }

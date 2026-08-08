@@ -7,9 +7,11 @@ from the firmware; see NOTICE.md for the copyright basis.
 
 Status: PARTIAL — the MAME-ch2 immediate-command dispatch, including the
 disc-play `0x8A` host reset, is decoded, and the BIOS-side post-reset
-`B0`/`B1` conversation is sufficient to launch a real title. The remaining
-work is naming the lower-level SERVO/transport flags and replacing HLE drive
-status with the complete SERVO-derived state machine.
+`B0`/`B1` conversation is sufficient to launch a real title. The four shared
+SLAVE flag bytes are now cross-referenced and the matching SERVO 2.1 firmware
+has an address-stable disassembly and packet map. The remaining work is
+tracing physical drive transitions into the retained-mode bit and replacing
+HLE drive status with the complete SERVO-derived state machine.
 
 ## Hardware interface (pin/port map)
 
@@ -227,6 +229,66 @@ retained PLAY launch still adds bit 6 (`B0 00 42 15`). The lower-level
 open/close/spin-up phases observed on real SERVO links remain future
 transport-state work.
 
+### SLAVE shared-flag cross-reference
+
+These bytes are bitfields shared by the host-command IRQ, SCI interrupt and
+main loop. A set bit is not necessarily a persistent device state. In
+particular, `$5D` is mostly a one-shot response-request byte. The tables below
+name only behavior demonstrated by reachable firmware paths.
+
+#### `$55` — host-selected modes and SCI work state
+
+| Bit | Producers | Consumers and observable result |
+|---:|---|---|
+| 0 | Power-on handshake at `$019A` | Included as bit 0 of the ch3 `F4` reply at `$0F4E`; no SCI traffic. |
+| 1 | ch0 `87/88` at `$065F/$0662` | Included as bit 1 of `F4`; gates the host-reset paths at `$0EB3` and `$10AC`. It arms reset but emits no reply by itself. |
+| 2 | ch0 `85` at `$0655` | Makes the main loop sample Port C status at `$0287`; changes can enqueue `2A`, `2C`, or `3B` through `$0E7B`. Also marks matching SERVO `B0` status at `$0C95`. |
+| 3 | ch0 `86` at `$065A` | Selects the alternate incoming-position path at `$0830`; together with `$5A.4`, runs the timing/state routine `$0FDE`. |
+| 4 | ch0 `80..82` at `$0640..$064C` | Selects the first signed lookup transform at `$0FB0`; no SCI or host response. |
+| 5 | ch0 `80..82` at `$0640..$064C` | Selects the second signed lookup transform at `$0FC7`; no SCI or host response. |
+| 6 | SCI ISR error/completion paths at `$074C/$0758` | Cleared by the main loop at `$0257`, which acknowledges/re-arms the SCI registers. It is an internal SCI work latch, not a host response. |
+| 7 | ch2 `8F` at `$0619`, plus incoming-position paths `$083E..$0884` | Alternates/schedules the six-bit position update through `$54.2`; it may lead to later SERVO work but has no direct host packet. |
+
+#### `$5A` — serial routing, reset gates and drive-packet state
+
+| Bit | Producers | Consumers and observable result |
+|---:|---|---|
+| 0 | ch0 `89` at `$0665` | Enables ch3 `F6` to sample Port D bit 7 at `$0460`; mutually exclusive with bit 1. |
+| 1 | ch0 `8A` at `$066C` | Selects Port C bit 7 output behavior in ch2 `83/84` at `$0569/$057D`; mutually exclusive with bit 0. |
+| 2 | ch3 `F6` at `$0460` | Encoded as reply value 1 or 2 at `$0F9E`; this is the complete direct host-visible lifetime of the bit. |
+| 3 | Matching incoming SERVO `B0` at `$0C95` | Alters Port C change filtering at `$028E/$0E85`, can enqueue `3B`, and participates in reset/transition paths. No direct response byte. |
+| 4 | Buffered ch3 packet `81` at `$0419` | With `$55.3`, makes the main loop call `$0FDE`; also calls `$112D` from that routine. No direct reply. |
+| 5 | Incoming SERVO `B0` state machine at `$0CA8/$0CCB/$0CE4` | Tracks the firmware's intermediate drive-state range and gates reset decisions. It is cleared when the low status nibble reaches 5. |
+| 6 | ch0 `8B/8C` at `$0673/$0676` | Host-reset gate consumed at `$0EB6`, `$0CBC` and `$10AF`; clear permits the armed reset paths. |
+| 7 | Set before outgoing SERVO `A6/A8` at `$0D4C/$0D70`; cleared by incoming `B0` at `$0CBF` | Internal command/drive-state latch used to suppress repeated transition handling. |
+
+#### `$5D` — one-shot host-response requests
+
+| Bit | Reachable producer | Consumer/result |
+|---:|---|---|
+| 0 | ch3 `F0` at `$044E` | `$0F19` builds `F0 20 $52 FF`. |
+| 1 | None. `$0451` sets it, but no dispatch entry reaches `$0451`. | No consumer in `$0F19`; retained as unreachable firmware code. |
+| 2 | None found | No consumer found. |
+| 3 | ch3 `F3` at `$0457` | Builds `F3 $B6 FF`. |
+| 4 | ch3 `F4` at `$045A` | Builds `F4 (($55.1 << 1) | $55.0) FF`. |
+| 5 | ch3 `F5` at `$045D`, ch2 `87` and payload/position paths | Builds `F5 ($D6 & $3F) FF FF`. |
+| 6 | ch3 `F6` at `$046C` | Builds `F6 (($5A.2 >> 2) + 1) FF FF`. |
+| 7 | No normal producer found | `$0F60` would copy `$66..$69` into the host response staging area. Normal raw SERVO forwarding instead uses `$63.7`; this path is unreachable in the decoded revision. |
+
+#### `$63` — host delivery gates
+
+| Bit | Producers | Consumer/result |
+|---:|---|---|
+| 4 | ch0 `83/84` at `$064F/$0652` | Enables the alternate four-byte coordinate/position decoder at `$08AD`, which schedules the existing input update path. |
+| 5 | ch2 `8D/8E` at `$060D/$0616` | Enables response-ring notification. `$0EE8` sets `$54.5` when a byte is queued. |
+| 6 | ch3 `F8/F9` at `$0475/$0478` | Gates host-ready assertion for staged ch3 replies: the main loop combines `$63.6` with `$54.6` at `$0248`. |
+| 7 | ch3 `FA/FB` at `$046F/$0472` | Enables transparent four-byte SERVO delivery. `$0C36` copies `$66..$69` to `$99..$9C` and sets `$54.7` for host channel 3. |
+
+Bits 0-3 of `$63` have no decoded reads or writes. This completes the
+reachable read/set/clear audit for `$55`, `$5A`, `$5D`, and `$63`; recovery
+routine `$10D1` bulk-restores the bytes from its reset table and does not add
+a separate operational producer.
+
 ### Service-manual drive/SERVO contract
 
 The CD-i 205 service manual independently documents the lower-level topology
@@ -256,6 +318,57 @@ transport state machine should preserve the four-byte forwarding boundary,
 model the second drive MCU's status transitions, and let the SLAVE transform
 or expose them exactly as its firmware does. It should not synthesize
 open/close/spin-up timing directly in the frontend.
+
+### SERVO 2.1 firmware packet map
+
+`docs/servo-zx405037p.disasm.asm` is the complete linear disassembly of the
+matching ZX405037P SERVO 2.1 image. Its source firmware SHA-256 is
+`b467fb3e9bb9e38d195c55116aecd6bc4c8023cdfe4b4d50fd9699139f221b9b`; the
+generated assembly SHA-256 is
+`ef389e98800957584a3811403a454f55d93984f1dd3a355a2e61f3a4f7fdc03c`.
+The image begins with a test-ROM prefix, so the linear decode overlaps the
+real reset entry at `$0100` by one zero-byte instruction. Interpret routines
+from their vector and call targets, not by treating the prefix as one
+continuous control-flow graph.
+
+The vectors establish these entry points:
+
+| Vector | Target | Role |
+|---:|---:|---|
+| `$1FFE` | `$0100` | Reset |
+| `$1FFC` | `$0100` | SWI/fallback |
+| `$1FFA` | `$18CA` | External/front-panel IRQ |
+| `$1FF8` | `$0F8B` | Timer |
+| `$1FF6` | `$0100` | Unused/fallback |
+| `$1FF4` | `$159B` | SPI packet transport |
+
+The SPI ISR stores four receive bytes in `$CA..$CD`, uses `$D3` as its byte
+index, and transmits from `$CE..$D1`. A packet is accepted only when its first
+byte has bit 7 set; exactly three following bytes complete it. No checksum is
+performed. Completion dispatches through `$1698`. `$76.1` means a response is
+ready, `$76.5` means transmission is active, `$1686` begins transmission, and
+`$1634` serializes the reply.
+
+The decoded command behavior is:
+
+| Request | Firmware behavior | Reply/source |
+|---|---|---|
+| `A0` | No direct comparison is present. The operational scheduler builds status at `$178B`. | Periodic/request-independent `B0`; bytes come from current drive/status fields. |
+| `A1` | Explicit dispatch at `$16B9`. | Time response from the current address/time state. |
+| `A2` | Sets `$78.6`. | No scheduler consumer or reply builder was found in this revision. Do not synthesize one. |
+| `A3` | Sets `$78.7`. | `$1833` emits `A3 20 00 00` (software version 2.0). |
+| `A4` | Sets `$79.0`. | `$1863` echoes the three received data bytes `$CB..$CD`. |
+| `A5` | Sets `$79.1`; internal error paths can set it too. | No scheduler consumer or reply builder was found in this revision. Do not synthesize one. |
+| `AB 55 xx xx` | Enters service mode. | Service-mode state change. |
+| `AB 77 xx xx` | Exits service mode. | This firmware uses `77`, while the older service-manual text says `AA`. |
+
+The scheduler at `$175B` emits operational `B0`, `B1`, `A3`, `A4`, and
+service response `AA`; it does not consume the `A2` or `A5` request latches.
+`$181E` builds the `B1` echo. Service subcommands `$DD=1..3` produce
+`AA 01 00 00`, `AA 02 00 00`, and `AA 03 00 00` at `$1878`. This is a
+revision-specific firmware result: the service manual still supplies the
+physical meaning of the command families, but is not evidence that every
+documented reply is implemented by this exact ROM.
 
 ### ch2 payload forms (`0x048D..0x0511`)
 
@@ -315,10 +428,67 @@ measurements before replacing the current digital attenuation model.
 
 ## Next steps
 
-1. Trace main-loop consumers of `$55/$5A/$5D/$63` (search the disasm) to
-   map flag → behavior (motor via SCI to SERVO, status byte enqueue).
-2. Disassemble the matching SERVO firmware and correlate its four-byte
-   `A0..A5`/`AB` traffic with the service-manual definitions.
-3. Decode the lower-level SERVO transition that produces B0 bit 6, then
-   replace the retained-mode HLE shortcut with the complete transport state
-   machine.
+The remaining work is deliberately split into research checkpoints. The
+working retained-mode HLE must not change during checkpoints 1-4: those steps
+produce names, call graphs, and trace points, not guessed transport behavior.
+
+1. **Completed: name the remaining SLAVE flag consumers.**
+   Search `slave-zx405042p.disasm.asm` for every read, clear, and set of
+   `$55`, `$5A`, `$5D`, and `$63`, then follow each reachable main-loop path.
+   Record, for every bit, its producer command, consumer routine, whether it
+   sends SCI traffic, and whether it enqueues a host response. Treat unknown
+   bits as unknown rather than naming them from one call site. Completion
+   means the document contains a flag table with firmware addresses and no
+   unexamined main-loop consumer for those four bytes.
+
+2. **Completed: generate and annotate the matching SERVO disassembly.** Use
+   the same firmware generation as the decoded SLAVE:
+
+   ```sh
+   python3 scripts/hc05dis.py \
+     firmware/mcu/zx405037p__cdi_servo_2.1__b43t__llek9215.mc68hc705c8a_withtestrom.7201 \
+     0x0000 0x2000 > docs/servo-zx405037p.disasm.asm
+   ```
+
+   Verify reset/IRQ/timer/serial vectors first, then identify the four-byte
+   receive/transmit buffers, packet-valid flag, checksum or framing checks,
+   and command dispatch. Keep generated assembly separate from interpretive
+   notes so it can be reproduced byte-for-byte.
+
+3. **Completed: correlate the `A0..A5`/`AB` command families.** For
+   each request and reply, identify the SERVO dispatch target and the source of
+   all three data bytes. Cross-reference the service-manual meanings above:
+   CD status, absolute time, track/index, version, echo, drive error, and
+   service mode. Note BCD conversion, error/status latches, and any periodic
+   versus request-driven packets. Completion means a packet table links each
+   byte to both a firmware address and a documented physical meaning.
+
+4. **Trace the retained-disc bit end-to-end (medium-high difficulty).** Start
+   at the SERVO state change for tray/medium/spin-up, follow its four-byte
+   packet into the SLAVE SCI receive routine, and follow the SLAVE state into
+   the channel-3 `B0` reply. The goal is to identify the exact source and
+   clearing conditions of B0 byte-2 bit 6—not merely another flag correlated
+   with a successful boot. Add read-only diagnostic points for the raw SERVO
+   packet, derived SLAVE flags, and resulting `B0` packet before changing HLE.
+
+5. **Capture a bounded transition matrix (high evidence requirement).** Trace
+   at least power-on empty, insertion, PLAY/reset/retained boot, removal,
+   replacement, and failed/not-ready media. For each transition, record packet
+   order, state duration, reset boundary, and the first BIOS-visible `B0`/`B1`
+   result. A real-hardware or independently validated firmware trace is
+   required for timing and ambiguous status bits; a successful title boot
+   alone is insufficient.
+
+6. **Replace the shortcut only after checkpoints 1-5 (high implementation and
+   regression risk).** Implement the smallest device-level SLAVE/SERVO
+   transport state machine supported by the collected evidence. Preserve the
+   four-byte forwarding boundary and the SLAVE-survives-host-reset topology.
+   Remove `disc_boot_mode` only when the new state machine reproduces its
+   proven `B0 00 42/44 15` behavior naturally. Add device tests for every
+   captured transition, then re-test native CD-i, VCD, Photo CD, first
+   insertion, replacement, and the PLAY-triggered host reset.
+
+Checkpoint rule: a failed implementation does not invalidate a firmware
+hypothesis unless the experiment exercised the same decoded prerequisites.
+Record the base revision, flag/packet evidence, and changed dependency before
+repeating an earlier transport approach.

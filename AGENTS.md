@@ -100,6 +100,12 @@ Update that document's status and next action whenever a checkpoint is reached.
 
 ## Git and build workflow
 
+- Before relying on an external emulator comparison, run
+  `python3 scripts/check-external-project-updates.py`. After a substantive
+  review, record its exact revision, date, scope, findings, and resulting tests
+  in `data/external-project-reviews.json`; merely observing a newer HEAD is not
+  a completed review.
+
 - Commit completed work directly to `main` unless the user explicitly requests
   another branch.
 - Optimized local test builds may be created from a clean local commit before

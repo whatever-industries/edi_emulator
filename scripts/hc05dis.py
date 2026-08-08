@@ -62,7 +62,12 @@ def main():
     end = int(sys.argv[3], 16) if len(sys.argv) > 3 else len(data)
     pc = start
     while pc < end:
-        ln, txt = dis(data, pc)
+        try:
+            ln, txt = dis(data, pc)
+        except IndexError:
+            # A trailing opcode can imply operands beyond the ROM boundary.
+            # Preserve that byte instead of crashing or omitting it.
+            ln, txt = 1, f"DC.B ${data[pc]:02X}"
         raw = " ".join(f"{data[pc+i]:02X}" for i in range(ln))
         print(f"{pc:04X}: {raw:<9} {txt}")
         pc += ln

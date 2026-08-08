@@ -198,42 +198,107 @@ fn region_is_pal(disc_name: &str) -> Option<bool> {
 }
 
 struct ParentalPasscode {
-    title: &'static str,
+    title_strings: &'static [&'static str],
     code: Option<&'static str>,
+    match_from_start: bool,
 }
 
 const PARENTAL_PASSCODES: &[ParentalPasscode] = &[
     ParentalPasscode {
-        title: "Voyeur",
+        title_strings: &["Voyeur II", "Voyeur 2", "Voyeur"],
         code: Some("3333"),
+        match_from_start: false,
     },
     ParentalPasscode {
-        title: "Vegas Girls",
+        title_strings: &["Vegas Girls"],
         code: Some("1234"),
+        match_from_start: false,
     },
     ParentalPasscode {
-        title: "Loving for a Lifetime",
+        // The region is intentionally part of this match: the single-word
+        // title "Girls" would otherwise collide with names such as
+        // "Vegas Girls". Accept the anticipated Europe naming alias too.
+        title_strings: &["Girls (France)", "Girls (Europe)"],
+        code: Some("019"),
+        match_from_start: true,
+    },
+    ParentalPasscode {
+        title_strings: &["Loving for a Lifetime"],
         code: Some("6969"),
+        match_from_start: false,
+    },
+    ParentalPasscode {
+        title_strings: &["Uncover featuring Tatjana"],
+        code: Some("1492"),
+        match_from_start: false,
     },
     // Keep the title in the registry so its code can be added without having
     // to rediscover where parental notices are maintained.
     ParentalPasscode {
-        title: "Pleasures of Sex, The",
+        title_strings: &["Joy of Sex"],
         code: None,
+        match_from_start: false,
+    },
+    ParentalPasscode {
+        title_strings: &["Pleasures of Sex"],
+        code: Some("1234"),
+        match_from_start: false,
     },
 ];
 
-/// Return a known parental passcode from the common dump-style disc name.
-/// Unknown and explicitly pending codes stay out of the UI.
+fn normalized_title_words(value: &str) -> String {
+    let mut normalized = String::with_capacity(value.len());
+    let mut separator_pending = false;
+
+    for character in value.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() {
+            if separator_pending && !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            normalized.push(character);
+            separator_pending = false;
+        } else {
+            separator_pending = true;
+        }
+    }
+
+    normalized
+}
+
+fn contains_title_string(disc_name: &str, title_string: &str) -> bool {
+    let disc_words = normalized_title_words(disc_name);
+    let title_words = normalized_title_words(title_string);
+    disc_words
+        .split(' ')
+        .collect::<Vec<_>>()
+        .windows(title_words.split(' ').count())
+        .any(|words| words.join(" ") == title_words)
+}
+
+fn starts_with_title_string(disc_name: &str, title_string: &str) -> bool {
+    let disc_words = normalized_title_words(disc_name);
+    let title_words = normalized_title_words(title_string);
+    disc_words == title_words
+        || disc_words
+            .strip_prefix(&title_words)
+            .is_some_and(|suffix| suffix.starts_with(' '))
+}
+
+/// Return a known parental passcode when a title-identifying string occurs in
+/// the disc name. Region, revision, article placement, and dump naming are not
+/// part of the password identity. Unknown and pending codes stay out of the UI.
 fn parental_passcode(disc_name: &str) -> Option<&'static str> {
-    let stem = disc_name
-        .strip_suffix(".cue")
-        .or_else(|| disc_name.strip_suffix(".CUE"))
-        .unwrap_or(disc_name);
-    let title = stem.split_once(" (").map_or(stem, |(title, _)| title);
     PARENTAL_PASSCODES
         .iter()
-        .find(|entry| entry.title.eq_ignore_ascii_case(title.trim()))
+        .find(|entry| {
+            entry.title_strings.iter().any(|title| {
+                if entry.match_from_start {
+                    starts_with_title_string(disc_name, title)
+                } else {
+                    contains_title_string(disc_name, title)
+                }
+            })
+        })
         .and_then(|entry| entry.code)
 }
 
@@ -2362,7 +2427,7 @@ impl App {
                     let response = ui
                         .add_sized(
                             egui::vec2(23.0, 23.0),
-                            egui::Button::new(egui::RichText::new("↻").size(17.0)).frame(false),
+                            egui::SelectableLabel::new(false, egui::RichText::new("↻").size(17.0)),
                         )
                         .on_hover_text("Refresh libraries");
                     if response.clicked() {
@@ -4403,14 +4468,14 @@ mod tests {
     use super::presentation::{screenshot_dimensions, DisplayAperture};
     use super::{
         audio_sample_format_preference, backup_nvram, configure_ui, configured_nvram_path,
-        controller_deflection, controller_dpad_deflection, controller_stick_deflection,
-        disc_load_action, display_aperture, display_diagnostic_field_count, display_name,
-        fill_audio, fit_aspect, is_quick_menu_button, library_dpad_direction, library_pad_action,
-        load_nvram, parental_passcode, pointer_mapping, presentation_aspect,
-        quick_menu_chord_pressed, quick_menu_consumes_controller_poll, region_is_pal,
-        screenshot_image, signed_pcm_to_u8, suppress_guest_buttons_until_release, write_nvram,
-        DiscLoadAction, DiscOverride, HostMenuBinding, LibraryPadAction, Prefs, SharedFrame,
-        MAX_DISPLAY_DIAGNOSTIC_FIELDS, UI_SELECTED_TEXT,
+        contains_title_string, controller_deflection, controller_dpad_deflection,
+        controller_stick_deflection, disc_load_action, display_aperture,
+        display_diagnostic_field_count, display_name, fill_audio, fit_aspect, is_quick_menu_button,
+        library_dpad_direction, library_pad_action, load_nvram, parental_passcode, pointer_mapping,
+        presentation_aspect, quick_menu_chord_pressed, quick_menu_consumes_controller_poll,
+        region_is_pal, screenshot_image, signed_pcm_to_u8, suppress_guest_buttons_until_release,
+        write_nvram, DiscLoadAction, DiscOverride, HostMenuBinding, LibraryPadAction, Prefs,
+        SharedFrame, MAX_DISPLAY_DIAGNOSTIC_FIELDS, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
 
@@ -4560,23 +4625,45 @@ mod tests {
     }
 
     #[test]
-    fn known_parental_passcode_matches_dump_style_disc_names() {
+    fn known_parental_passcode_matches_title_strings_in_disc_names() {
         assert_eq!(parental_passcode("Voyeur (Europe).cue"), Some("3333"));
         assert_eq!(parental_passcode("voyeur (USA) (Disc 1).CUE"), Some("3333"));
+        assert_eq!(
+            parental_passcode("Philips CD-i - Voyeur ...Don't Get Caught [!].cue"),
+            Some("3333")
+        );
+        assert_eq!(parental_passcode("Voyeur II (Europe).cue"), Some("3333"));
+        assert_eq!(
+            parental_passcode("Voyeur 2 - custom name.cue"),
+            Some("3333")
+        );
         assert_eq!(parental_passcode("Vegas Girls (Europe).cue"), Some("1234"));
+        assert_eq!(parental_passcode("Girls (France).cue"), Some("019"));
+        assert_eq!(parental_passcode("Girls (Europe) (Rev 1).cue"), Some("019"));
         assert_eq!(
             parental_passcode("Loving for a Lifetime (USA).cue"),
             Some("6969")
+        );
+        assert_eq!(
+            parental_passcode("Uncover featuring Tatjana - custom name.cue"),
+            Some("1492")
+        );
+        assert_eq!(
+            parental_passcode("Pleasures of Sex, The (Europe).cue"),
+            Some("1234")
         );
     }
 
     #[test]
     fn pending_and_unrelated_parental_passcodes_stay_hidden() {
-        assert_eq!(
-            parental_passcode("Pleasures of Sex, The (Europe).cue"),
-            None
-        );
-        assert_eq!(parental_passcode("Voyeur II (Europe).cue"), None);
+        assert!(contains_title_string(
+            "Badly Named - Joy of Sex, The [!].cue",
+            "Joy of Sex"
+        ));
+        assert_eq!(parental_passcode("Joy of Sex, The (USA).cue"), None);
+        assert_eq!(parental_passcode("Girls (USA).cue"), None);
+        assert_eq!(parental_passcode("European Girls (France).cue"), None);
+        assert_eq!(parental_passcode("Voyeuristic Art (Europe).cue"), None);
     }
 
     #[test]

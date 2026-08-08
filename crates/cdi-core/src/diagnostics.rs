@@ -80,6 +80,72 @@ pub struct DisplayProvenanceSnapshot {
     pub mixed_external_generation_fields: u64,
 }
 
+/// Mapping status of the long word at guest address zero.
+///
+/// Once OS-9 has initialized, the contents of address zero point at System
+/// Globals.  Before then the same location still contains the reset SSP
+/// vector, so a mapped value is only a candidate until a ROM-specific kernel
+/// layout validates the surrounding structure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "savestate", serde(rename_all = "kebab-case"))]
+pub enum Os9SystemGlobalsPointerState {
+    Unavailable,
+    Null,
+    Unaligned,
+    Unmapped,
+    MappedRamCandidate,
+}
+
+/// Why process, scheduler, module-directory, and path tables were not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "savestate", serde(rename_all = "kebab-case"))]
+pub enum Os9RuntimeTableStatus {
+    UnsupportedRomLayout,
+}
+
+/// A validated OS-9 module found in live guest RAM.
+///
+/// Only header-parity- and CRC-valid modules are reported.  This is a bounded
+/// RAM scan, not a claim that the kernel's live module-directory layout has
+/// been decoded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+pub struct Os9ModuleDiagnosticSnapshot {
+    pub address: u32,
+    pub size: u32,
+    pub name: String,
+    pub module_type: u8,
+    pub revision: u8,
+    pub edition: u16,
+}
+
+/// Bounded, observational CD-RTOS/OS-9 evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+pub struct Os9DiagnosticSnapshot {
+    pub rom_id: String,
+    pub rom_module_count: u32,
+    pub address_zero_value: Option<u32>,
+    pub system_globals_pointer_state: Os9SystemGlobalsPointerState,
+    pub runtime_table_status: Os9RuntimeTableStatus,
+    pub validated_ram_modules: Vec<Os9ModuleDiagnosticSnapshot>,
+}
+
+impl Default for Os9DiagnosticSnapshot {
+    fn default() -> Self {
+        Self {
+            rom_id: "unknown".to_owned(),
+            rom_module_count: 0,
+            address_zero_value: None,
+            system_globals_pointer_state: Os9SystemGlobalsPointerState::Unavailable,
+            runtime_table_status: Os9RuntimeTableStatus::UnsupportedRomLayout,
+            validated_ram_modules: Vec::new(),
+        }
+    }
+}
+
 /// Green Book VII.2 Play Control List state decoded from guest RAM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
@@ -158,6 +224,8 @@ pub struct MachineDiagnosticSnapshot {
     pub dvc: Option<DvcStats>,
     pub dvc_registers: Option<DvcRegisterSnapshot>,
     pub disc_inserted: bool,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    pub os9: Os9DiagnosticSnapshot,
 }
 
 /// Significant transitions sampled only while diagnostics are enabled.
@@ -359,6 +427,56 @@ pub(crate) struct DiagnosticProbe {
 pub(crate) struct RamDiagnosticRegion<'a> {
     pub base: u32,
     pub bytes: &'a [u8],
+}
+
+const MAX_OS9_DIAGNOSTIC_MODULES: usize = 64;
+
+pub(crate) fn os9_diagnostic_snapshot(
+    regions: &[RamDiagnosticRegion<'_>],
+    rom: &[u8],
+) -> Os9DiagnosticSnapshot {
+    let rom_modules = cdi_os9::scan_modules(rom);
+    let rom_type = cdi_os9::identify_rom(&rom_modules);
+    let address_zero_value = read_be_u32(regions, 0);
+    let system_globals_pointer_state = match address_zero_value {
+        None => Os9SystemGlobalsPointerState::Unavailable,
+        Some(0) => Os9SystemGlobalsPointerState::Null,
+        Some(address) if address & 1 != 0 => Os9SystemGlobalsPointerState::Unaligned,
+        Some(address) if read_memory(regions, address, 4).is_some() => {
+            Os9SystemGlobalsPointerState::MappedRamCandidate
+        }
+        Some(_) => Os9SystemGlobalsPointerState::Unmapped,
+    };
+
+    let mut validated_ram_modules = Vec::new();
+    for region in regions {
+        let remaining = MAX_OS9_DIAGNOSTIC_MODULES - validated_ram_modules.len();
+        for module in cdi_os9::scan_valid_modules(region.bytes, remaining) {
+            let Some(address) = region.base.checked_add(module.offset) else {
+                continue;
+            };
+            validated_ram_modules.push(Os9ModuleDiagnosticSnapshot {
+                address,
+                size: module.size,
+                name: module.name,
+                module_type: module.mod_type.code(),
+                revision: module.revision,
+                edition: module.edition,
+            });
+        }
+        if validated_ram_modules.len() == MAX_OS9_DIAGNOSTIC_MODULES {
+            break;
+        }
+    }
+
+    Os9DiagnosticSnapshot {
+        rom_id: rom_type.id.to_owned(),
+        rom_module_count: rom_modules.len().try_into().unwrap_or(u32::MAX),
+        address_zero_value,
+        system_globals_pointer_state,
+        runtime_table_status: Os9RuntimeTableStatus::UnsupportedRomLayout,
+        validated_ram_modules,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1116,5 +1234,107 @@ mod pcl_tests {
                 ..
             } if snapshot.channel_mask == 1 << 2 && snapshot.audio_channel_mask == 0
         )));
+    }
+}
+
+#[cfg(test)]
+mod os9_tests {
+    use super::*;
+
+    fn put_u32(memory: &mut [u8], offset: usize, value: u32) {
+        memory[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
+    }
+
+    fn synthetic_module(name: &str) -> Vec<u8> {
+        const HEADER_LEN: usize = 0x30;
+        let size = 0x60usize;
+        let mut module = vec![0; size];
+        module[0..2].copy_from_slice(&cdi_os9::module::SYNC.to_be_bytes());
+        module[4..8].copy_from_slice(&(size as u32).to_be_bytes());
+        module[0x0c..0x10].copy_from_slice(&(HEADER_LEN as u32).to_be_bytes());
+        module[0x12] = 12;
+        module[0x13] = 1;
+        module[0x16..0x18].copy_from_slice(&7u16.to_be_bytes());
+        module[HEADER_LEN..HEADER_LEN + name.len()].copy_from_slice(name.as_bytes());
+
+        let mut parity = 0u16;
+        for offset in (0..0x2e).step_by(2) {
+            parity ^= u16::from_be_bytes([module[offset], module[offset + 1]]);
+        }
+        module[0x2e..0x30].copy_from_slice(&(parity ^ 0xffff).to_be_bytes());
+        let crc = !cdi_os9::module::crc24(&module[..size - 3]) & 0x00ff_ffff;
+        module[size - 3] = (crc >> 16) as u8;
+        module[size - 2] = (crc >> 8) as u8;
+        module[size - 1] = crc as u8;
+        module
+    }
+
+    #[test]
+    fn system_globals_candidate_must_be_aligned_and_mapped() {
+        let rom = [];
+        let mut ram = vec![0; 0x200];
+        put_u32(&mut ram, 0, 0x100);
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &ram,
+        }];
+        assert_eq!(
+            os9_diagnostic_snapshot(&regions, &rom).system_globals_pointer_state,
+            Os9SystemGlobalsPointerState::MappedRamCandidate
+        );
+
+        put_u32(&mut ram, 0, 0x1fe);
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &ram,
+        }];
+        assert_eq!(
+            os9_diagnostic_snapshot(&regions, &rom).system_globals_pointer_state,
+            Os9SystemGlobalsPointerState::Unmapped
+        );
+
+        put_u32(&mut ram, 0, 0x101);
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &ram,
+        }];
+        assert_eq!(
+            os9_diagnostic_snapshot(&regions, &rom).system_globals_pointer_state,
+            Os9SystemGlobalsPointerState::Unaligned
+        );
+
+        put_u32(&mut ram, 0, 0x400);
+        let regions = [RamDiagnosticRegion {
+            base: 0,
+            bytes: &ram,
+        }];
+        assert_eq!(
+            os9_diagnostic_snapshot(&regions, &rom).system_globals_pointer_state,
+            Os9SystemGlobalsPointerState::Unmapped
+        );
+    }
+
+    #[test]
+    fn live_module_scan_reports_only_crc_valid_modules() {
+        let mut ram = vec![0; 0x200];
+        let module = synthetic_module("runtime");
+        ram[0x80..0x80 + module.len()].copy_from_slice(&module);
+        let regions = [RamDiagnosticRegion {
+            base: 0x0010_0000,
+            bytes: &ram,
+        }];
+        let snapshot = os9_diagnostic_snapshot(&regions, &[]);
+        assert_eq!(snapshot.validated_ram_modules.len(), 1);
+        assert_eq!(snapshot.validated_ram_modules[0].address, 0x0010_0080);
+        assert_eq!(snapshot.validated_ram_modules[0].name, "runtime");
+
+        ram[0x80 + module.len() - 1] ^= 1;
+        let regions = [RamDiagnosticRegion {
+            base: 0x0010_0000,
+            bytes: &ram,
+        }];
+        assert!(os9_diagnostic_snapshot(&regions, &[])
+            .validated_ram_modules
+            .is_empty());
     }
 }

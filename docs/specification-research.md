@@ -1,6 +1,6 @@
 # Philips CD-i specification research
 
-Status date: 2026-08-02
+Status date: 2026-08-07
 
 This is the durable research ledger for the local Philips CD-i/ICDIA document
 archive. It records claims that can constrain emulation behavior, their exact
@@ -52,6 +52,7 @@ These hashes pin the exact local editions used for the first priority pass:
 | `docs/cdi_may94_r2.pdf` | `a2e851a163b7abd2248f28f4713324f70e112d29ec03923dd8cf3d55950b4a7c` |
 | `docs/mcd212rev0.pdf` | `fac8b26b1830bd7899245c6f0bd56d2c42991ac80a3960578ff16dc7b1bb5947` |
 | `docs/mcd251ts.pdf` | `fbf214d5c167459aad69d9e19cf1973358b689203c69e68eb3a09058667d8ba2` |
+| Supplemental `BRIDGE10.pdf` (CD-I Bridge Specification 1.0, February 1995) | `99b6a85352444cb287cae1d4cb5100f37866788d8f4d79f3148728897e5eac4a` |
 | Supplemental `CD-I full-motion video encoding on a parallel computer.pdf` | `290dd3c3967e09643fa245022dba35f2e045e0bbb191acbdfbb2cc4ffe26f437` |
 | `docs/scc68070.zip` (`scc68070_apr93.pdf`) | archive `d75ac767121f9a8890d220afba420530de3aa9961c28452e2e4de672a4daf8b8`; PDF `71fbb838b265693bd2b8374fdc73e25c88827f90c7c24c439862bd2990bc57ff` |
 | `svcmanuals/cdi205.pdf` | `43121b5f0e21590f080de070c21ab51f940d2540f8952f5b6c51a283f98c3b42` |
@@ -75,6 +76,7 @@ These hashes pin the exact local editions used for the first priority pass:
 | `notes/technote063.pdf` | `3a2054a47f1faa4de9f7f7fb926023eb2a8dc7f3c66fd33c8267a4061f58e547` |
 | `notes/technote068.pdf` | `45cd9e7e57159d153ae2d379acd965479b937f72d2a4dbb73fe43d17a353d694` |
 | `notes/technote069.pdf` | `3a779194ad787c094766589d4d4810fe45191660621745b207977822a69e5ef4` |
+| `notes/technote072.pdf` | `1b61e19e6e41fd2cd47ada9f213e98055398116d47b6164fda971967b6473682` |
 | `notes/technote073.2.pdf` | `578d9434841abda7cc399cdbfdf27236a813e298ef30572cdb1f70bf9912b7ea` |
 | `notes/technote076.pdf` | `421ce068a95362f516c6d9f0d6271d8460dbf4938b45f4c6ae2ca43526ecdc47` |
 | `notes/technote085.1.pdf` | `69a1a8ab5d0d427c6ec64b58e6a875ef121a7c00d908dd5a52be178f15c15c84` |
@@ -99,6 +101,8 @@ These hashes pin the exact local editions used for the first priority pass:
 | `docs_sw/vcd_on_cdi_41.pdf` | `8a83f9fcce52b5d5ffb71b1ef367758256c00bc64bc079612c84e4897f0fb008` |
 | `docs/keyboards_1996.pdf` | `7164caf116f07c78ade8a4fa7d3ba2e272e8104ca79e361df551398f5bebcd8e` |
 | `docs/pointing_devices.pdf` | `660cf0d8cabfaf37236b2c11b1c522d07a0e39d60ee5a0abf0e55f96479c64ee` |
+| `books_os9/os9insights_ed2.pdf` | `c4bcd17b73b7a66537940a972435f6f304d75586772238a05b6978f48d9bc685` |
+| `books_os9/os9insights_ed3.pdf` | `2917725e3bb0ce64c9fc004fc3f0deec911cea984e6fcb73fc5464544b5c1b1f` |
 
 ## Compliance matrix
 
@@ -110,6 +114,8 @@ These hashes pin the exact local editions used for the first priority pass:
 | CDFM/PCL | CIL advances to `PCL_Nxt`; a full buffer cannot be reused; PCL signal precedes PCB signal; MPEG uses circular one-sector PCL chains. Balboa independently demonstrates circular per-channel/type buffer lists filled asynchronously in whole 2324-byte Form 2 sectors. | Green Book R2 `docs/cdi_may94_r2.pdf`, VII.4.4.2-VII.4.4.3 and IX.3.3.3; `notes/technote098.pdf`, “PCL Handling by the MPEG Drivers”; `notes/technote099.pdf`, printed pp. 18 and 67-69 | DMA-boundary ownership tracing, bounded guest-write provenance, and a synthetic reuse test are implemented. Current The 7th Guest and Addams runs show no full-PCL overwrite. The lone Addams hash difference is an intentional guest SCR retime, not payload corruption. | Retain these diagnostics when investigating a current visible transport failure; do not alter the nominal 75-sector cadence without a new first-divergence trace. |
 | CDFM error reporting and correction | Non-real-time Form 1 sectors may legally occur inside a real-time file and be delivered asynchronously with ECC, but software correction can interrupt subsequent real-time delivery. Form 2 may carry EDC without ECC. PCL `PL_ERR.Err_Res` can report byte or word resolution, requiring worst-case application buffers of 294 bytes for Form 2 and 256 for Form 1. | `notes/technote054.pdf`, printed pp. 2-5; `notes/technote058.pdf`, printed pp. 1-2 and 4 | Clean image-backed sectors preserve form/real-time/EDC metadata but expose no injected read-error path, correction latency, or guest `PL_ERR` population. Native dirty-disc dialogs therefore cannot yet be tied to a physical-error resolution. | Add project-owned correctable and uncorrectable Form 1/Form 2 sector fixtures, byte/word `PL_ERR` variants, and a timeline proving that software ECC can delay a real-time stream without changing the nominal clean-sector cadence. |
 | CDFM seek contract | `I$Seek` changes only the logical file-position pointer. Disc-reading calls perform an implicit physical seek; `SS_Seek` additionally repositions the head immediately and is useful only when that movement can overlap other presentation. A normal `SS_Seek` followed by a read can therefore move the head twice. | `notes/technote090.pdf`, printed pp. 1-2 | The image-backed drive has logical position and command latency, but does not model a physical head or distance-dependent implicit seek. This is a compatibility timing gap, not a reason to delay every host read. | Add a synthetic SLAVE/CDIC timeline for logical seek, pre-positioned asynchronous seek, near implicit seek, and cross-disc seek before modeling head position or Green Book 1-to-3-second limits. |
+| OS-9 inherited paths and device identity | `os9forkc()` and `chainc()` pass the contiguous path-number range `0..N-1`; they do not accept an arbitrary path list. A child identifies an inherited path by issuing `I$GetStat SS_Opt` (or `_gs_opt()`) and inspecting the returned 128-byte option packet. TN 072's packet-relative byte 0 is path-descriptor `PD_DTP` at absolute offset 128: class 5 is CDFM and class 6 is UCM. Relative byte 1 is CDFM `PD_CDFC` at absolute 129, with values 0 (CD) and 1 (audio). Relative byte 28 is UCM `PD_FC` at absolute 156, with bits 1 (keyboard), 2 (pointer), and 4 (video). | `notes/technote072.pdf`, printed pp. 1 and 3; Green Book R2 `docs/cdi_may94_r2.pdf`, VII.2 `SS_Opt`, Figures VII.33 and VII.40, printed pp. VII-19, VII-231, and VII-247 | `cdi-os9` now implements the exact 128-byte packet classifier and the contiguous `0..N-1` inherited-path helper. Runtime diagnostics do not yet discover the child's actual path table or capture its `SS_Opt` result buffers. The archived TN 072 PDF omits printed page 2; the constants and offset mapping were independently cross-checked against Green Book R2. | Trace one parent/child `forkc` or `chainc` handoff without changing guest execution. Record the requested inherited-path count and the child's actual path table, then feed captured option packets to the tested classifier. Require ROM-specific kernel evidence before decoding process-local path-table structures. |
+| OS-9 kernel diagnostic root | On 68000 OS-9, exception-vector entry zero—the reset stack-pointer longword at address zero—is used as the System Globals pointer. System Globals identifies the current process descriptor; the scheduler maintains separate current, active, and sleeping process state. The module directory consists of validated entries rooted in module headers and includes module/group pointers, group size, link count, and a header check. OS-9 2.4 is described as almost exactly CD-RTOS 1.1, making these structures relevant but not automatically layout-identical to every CD-i ROM. | *The OS-9 Guru, Vol. 1*, chapter 10.7, printed p. 229; *OS-9 Insights*, 3rd ed., printed pp. 16, 127-128, and 509 | Machine snapshots now report ROM identity/module count, address zero's value and mapped/aligned state, and at most 64 independently header/CRC-valid modules found by a bounded RAM scan. A CD-i 220 F2 boot reaches a mapped-RAM candidate at `$1500`. The status remains `unsupported-rom-layout`: neither that candidate nor the independent RAM scan is represented as a validated live module directory, current process, or scheduler state. | Corroborate `$1500` and equivalent roots for each supported ROM with kernel signatures and ROM-specific layout evidence. Validate module-directory bounds and every module header before reconciling it with the independent scan. Only then add current-process and queue walking with cycle detection, bounds, and fail-closed fallback to raw diagnostics. |
 | CDIC reset state | CDIC register 2 at base + `$3FFA` is nonzero after reset. The service manuals consistently say `$C7FE` in the PCB test and `$D7FE` in the terminal test | `svcmanuals/cdi205.pdf`, `svcmanuals/cdi220.pdf`, `svcmanuals/cdi350.pdf`, and `svcmanuals/cdi360.pdf`, PCB test step 9 and terminal test step 09 | `Cdic::new` currently initializes the corresponding Z/audio-control register to zero, so a reset mismatch is confirmed. The repeated bit-12 difference strongly suggests test-path state rather than a one-off typo; its cause must not be guessed. | Trace each BIOS's first accesses, identify what the terminal test initializes before reading register 2, and map `$C7FE`/`$D7FE` fields against CDIC documentation before correcting the reset state. |
 | CDIC disc audio | Direct real-time audio delivery is autonomous and does not consume the CPU bus. Its file-position pointer advances only when an ADPCM sector passes the selection mask, whereas any trigger can signal even from a non-selected channel. On Mono-I, the first selected XA sector reports DBUF low nibble 4 and places a complete post-sync image in `$2800`; the second uses `$3200`/5. CDDA and CD-fed XA still require guest `AUDCTL $0800` before audible playback. | `notes/technote092.pdf`, printed pp. 1-2; independent Mono-I hardware captures in `Slamy/CDIC_BlackBoxAnalyzer` revision `e861f76`, `doc/cdic_manual.md`, `src/test_xa_play.c`, `src/test_cdda_play.c`, and `src/test_audiomap.c` | Implemented as dual header/audio routing plus separate receipt and playback state. Focused tests cover ordinary-header visibility, first/second ADPCM placement, no PCM before `$0800`, CDDA gating, and the one-shot stop latch. Selected-sector file-position and cross-channel trigger semantics are not yet represented explicitly. | Preserve the hardware-verified buffer route. Add device tests for selected-sector file-position updates and non-selected-channel triggers before extending CDIC/CDFM synchronization behavior. Model SLAVE `$82/$83` plus AD7528 output gating separately. |
 | SLAVE analog audio output | The SLAVE serially programs two AD7528 devices for mute/unmute and the four-path stereo attenuation matrix. An external Hotel Mario score-screen SPI trace contains 55 four-byte-equal writes: ordinary updates are about 0.775-0.825 ms apart, a 0-to-255 ramp lasts 27.132 ms, and a 252-to-0 ramp lasts 24.031 ms; occasional 2.2-2.9 ms gaps are consistent with SLAVE workload. | Firmware command forms `$82`/`$83` and `$C0..$CF`; local external Saleae text export SHA-256 `0cd157158a3dd637fa3661e1840a04f799491b1da58cc82c3477335709ea2830` | The HLE parses the attenuation packet and applies a digital CDIC matrix, but does not model the serial DAC cadence, analog transfer function, mute latch, or a shared final boundary for VMPEG audio. The trace constrains timing only; repeated bytes do not prove the general command mapping. | Capture ch2 commands, SPI words, analog output, and source identity on one synchronized timeline. Establish code polarity and gain before changing audible output; then test whether CDIC and DVC both pass through the same boundary. |
@@ -144,6 +150,7 @@ These hashes pin the exact local editions used for the first priority pass:
 | Player control keys | `/pck` Play/Stop/Pause/Next/Previous/Search keys are an optional extension, separate from the base two-button pointer; Pause is code `$82` with distinct key-down/key-up events | `notes/technote073.2.pdf`, printed pp. 1-3 | Start defaults to the configurable host-level E-Di menu because `/pck` is not yet emulated; Guide/Home, L1+R1, and right-stick alternatives are available. The overlay pauses emulation only while visible. Start is never emitted as a third base-pointer button, and Select is unassigned. | Implement `/pck` as an optional advertised device with `KB_Read`/`KB_Rdy`/`KB_SSig` behavior and `ss_enable` gating. Then expose an explicit choice between native Start-to-Pause down/up and host-menu use; titles that do not open `/pck` naturally ignore the native events. |
 | Video CD engine | The engine requires DVC, starts the first PSD item, owns its control bars, and shows the multilingual dirty-disc message on disc errors. Release 4.1 says the control bar initially appears at the bottom, but the application is configurable. | `docs_sw/vcd_on_cdi_41.pdf`, Release 4.1, printed pp. 5-7 | A native dirty-disc screen is affirmative evidence of a CD-i engine transport/play failure, not proof that the image is bad. The documented configurability means a clean, flush bar on one title does not establish a different Video CD standard or a universal compositor boundary. | Correlate the dialog with the first PCL/decoder error and the exact PSD/entry point. Fingerprint the native engine/application and configuration before treating control-bar geometry as a cross-title invariant. |
 | Video CD filesystem and PSD | Philips' reference engine files are `CDI/CDI_VCD.APP;1`, `CDI/CDI_IMAG.RTF;1`, and `CDI/CDI_TEXT.FNT;1`; the PVD application identifier launches `CDI/CDI_VCD.APP;1`. Authored discs may instead use the standard `VCD/INFO.VCD`, `VCD/ENTRIES.VCD`, and `MPEGAV/AVSEQ*.DAT` structure with another native CD-i entry point. White Book 2.0 defines entry addresses plus LOT-indexed selection, play, and end lists whose offsets use the multiplier in `INFO.VCD`. | Video CD 2.0, III.2.5 and VI.1-VI.6; `docs_sw/vcd_on_cdi_41.pdf`, Release 4.1, p. 9; local metadata-only inventories | `DiscInventory` records the XA Bridge signature, PVD identifiers, native `CDI` application presence, `video-cd` classification, entry points, and PSD topology without retaining media. A synthetic Mode-2 Bridge image covers `INFO`/`ENTRIES`/`LOT`/`PSD`; a local 2.0 disc reports 156 valid lists (129 selection, 27 play). Media-panel work preserves the on-disc application instead of bypassing it. | Correlate native engine control failures with the selected PSD list and first transport/decoder error. |
+| CD-I Bridge identity and launch contract | Every session is CD-ROM XA with TOC `PSEC=$20`. The ISO PVD System Identifier is exactly `CD-RTOS CD-BRIDGE` padded with spaces, and its Application Identifier names the CD-I executable in the root `CDI` directory. A player may use the session type and/or System Identifier for startup recognition, but that recognition shortcut does not relax the format's mandatory fields. Multisession discs expose one logical volume: every session repeats the same SVD layout and the player remaps first-session descriptor LSNs to the last session. | CD-I Bridge Specification 1.0, printed pp. 7, 9, 15-17, 19-20, and 23-24 | Inventory schema 4 reports exact 32-byte System-Identifier conformance, ISO 8.3 version-1 Application-Identifier syntax, whether that application resolves in the parsed root `CDI` tree, and `CD-XA001` presence as four independent facts. Synthetic Photo CD and Video CD images cover the complete metadata path. Boot classification intentionally retains its earlier prefix-plus-XA gate: the XA label-record contract and Bridge startup discriminators have not yet been reconciled. Flat images also expose neither session `PSEC` nor last-session SVD remapping. | Resolve the full CD-ROM XA label-record requirement before changing `CD-XA001` behavior. Then extend the disc model with session descriptors and test `$20` versus `$10`, repeated SVD layouts, global LSNs, and last-session remapping. |
 | Photo CD | A compliant Photo CD is a CD-i Bridge disc with an on-disc CD-i application; Base images are 768×512 square pixels (3:2), while informative soft-display diagrams distinguish NTSC/PAL and 0/5/10% overscan | `faq/cdifaq5.html`, §§5.9-5.9.2; Photo CD v0.9, IV.2.1 and Appendix II; external package `sw_app/photocd_on_cdi_32.zip` | The Photo CD crate parses `PHOTO_CD/INFO.PCD`, images, and playlists and presents host controls while retaining the CD-i application path. `DiscInventory` now independently records the XA Bridge signature, PVD application identifier, root `CDI` tree, and `photo-cd` classification; a synthetic Mode-2 Bridge fixture and local compliant disc both pass. A clean 768×512 source and native 768×588 capture prove that stationary field-like detail and a magenta final column arise after source storage; horizontal bars can be compatible with application-selected 3:2-to-4:3 presentation, but the supplied asymmetric 76/34-row placement still requires live-register evidence. | Capture guest drawmaps, consecutive fields, composed raster, and live display registers before classifying native bars or field artifacts. |
 
 ## Detailed findings
@@ -870,45 +877,56 @@ the corresponding corrections:
     Bridge markers, PVD application identifier, and native `CDI` tree are
     classified without extracting image payloads; host controls continue to
     preserve native application behavior.
-12. **Native Photo CD display provenance:** compare a clean 768×512 source
+12. **CD-I Bridge conformance (PVD inventory complete):** exact padded-System-
+    Identifier and Application-Identifier resolution fixtures now pass. Next,
+    resolve the full XA label-record contract before changing the current
+    `CD-XA001` gate. Extend the image model with session `PSEC` and last-session
+    SVD remapping before claiming multisession Bridge support.
+13. **Native Photo CD display provenance:** compare a clean 768×512 source
     against guest drawmaps, four consecutive fields, composed output, and the
     hardware aperture. Record live standard, `CF`/`ST`/`FD`/`SM`, origins, and
     magnification so legitimate 3:2-to-4:3 borders remain separate from field
     or last-column corruption.
-13. **Physical sector-error contract:** inject correctable and uncorrectable
+14. **Physical sector-error contract:** inject correctable and uncorrectable
     Form 1/Form 2 errors, populate byte- and word-resolution `PL_ERR`, and
     prove software correction can delay following real-time delivery.
-14. **Player CSD matrix:** parse live zero/one/two-device boot configurations
+15. **Player CSD matrix:** parse live zero/one/two-device boot configurations
     and compare `/ptr`, `/pt2`, `/pck`, extension entries, and manufacturer-
     selected names without hard-coded Philips aliases.
-15. **Selected-sector play termination (current 220 gate complete):** PCB
+16. **Selected-sector play termination (current 220 gate complete):** PCB
     discovery and record/routing transitions are covered. Philips FPD805 now
     distinguishes normal exhaustion from its abort path and tests live
     `PCB_Rec = 0` during direct audio plus TN 085.1's zero/nonzero audio-CIL
     workaround. An alternate player/driver fixture is required before modeling
     the slower compatibility phenotype documented by TN 085.1.
-16. **Undefined DCP diagnostics:** identify missing final LCT links and illegal
+17. **Undefined DCP diagnostics:** identify missing final LCT links and illegal
     transient mode combinations while leaving their raster unspecified.
-17. **RGB555/DYUV raster contracts (complete):** asymmetric plane bytes prove
+18. **RGB555/DYUV raster contracts (complete):** asymmetric plane bytes prove
     plane-A/high plus plane-B/low RGB555 assembly; separate fixtures force
     modulo-256 DYUV wrap and fresh programmed Y/U/V starts on consecutive
     scanlines. IFF/UCM conversion remains outside the device.
-18. **NVRAM capacity/profile:** only if a title or shell diverges, probe the
+19. **NVRAM capacity/profile:** only if a title or shell diverges, probe the
     native address window and near-capacity filesystem behavior to distinguish
     8 KiB MK48T08 storage from the service manual's larger configuration and
     to verify NVRUI rounding/protection/deletion policy.
-19. **DCP live-update timeline:** place an interrupt command and a deliberately
+20. **DCP live-update timeline:** place an interrupt command and a deliberately
     split 32-bit LCT write around one display fetch. Record the active DCA slot,
     IT edge, both 16-bit halves, and affected raster line. The separate matte
     fixture is complete: flags restart false, commands persist and execute in
     order, STOP terminates a set, and a simultaneous shared-register load gives
     path A priority. Do not use the remaining synthetic race as a title
     workaround.
-20. **Native UVLO pipeline:** use a redistributable fixture, or an optional
+21. **Native UVLO pipeline:** use a redistributable fixture, or an optional
     local Engineering 6.0 case if present, to verify circular PCL ownership,
     deliberate frame dropping under decoder pressure, alternating DYUV
     drawmaps, matte bounds, and CSD-selected 384-pixel TV compatibility mode.
     Keep UVLO in guest software rather than adding a VMPEG or host codec path.
+22. **OS-9 inherited paths (pure classification complete):** the tested helper
+    represents inherited paths as `0..N-1`, and the 128-byte classifier handles
+    the documented CDFM/UCM fields. Still trace one real `os9forkc()` or
+    `chainc()` operation and capture the child's actual path table and option
+    buffers; do not decode process-local structures until the active ROM's
+    kernel layout is independently established.
 
 The full 185-PDF archive now has a validated searchable-text manifest. Research
 remains open while lower-priority player/service-manual claims are reviewed.

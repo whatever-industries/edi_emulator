@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "check_command": "python3 scripts/check-external-project-updates.py",
+    "review_triggers": [
+      "upstream HEAD differs from the last reviewed revision",
+      "a compatibility incident implicates the external project's changed subsystem",
+      "ninety days have elapsed since the last substantive review"
+    ],
+    "review_record_requirements": [
+      "review date",
+      "exact upstream revision",
+      "subsystem and path scope",
+      "useful findings and contradictions",
+      "resulting E-Di tests or explicitly no action"
+    ]
+  },
+  "projects": [
+    {
+      "id": "mame",
+      "name": "MAME",
+      "repository": "mamedev/mame",
+      "default_branch": "master",
+      "last_reviewed_on": "2026-07-19",
+      "last_reviewed_revision": "6effbd5b66b3062fbd1ba6c59cd1b070b5f04284",
+      "last_review_scope": [
+        "Philips CD-i driver and memory map",
+        "CDIC",
+        "SLAVE HLE",
+        "MCD212",
+        "DVC register-map coverage"
+      ],
+      "latest_observed_on": "2026-08-07",
+      "latest_observed_revision": "2cd762097742c10d8e784086d4ffa056d073a389",
+      "review_status": "update-available",
+      "next_review_scope": [
+        "src/mame/philips CD-i changes since the reviewed revision",
+        "front-panel output support",
+        "new CDIC, SLAVE, MCD212, or player-model behavior"
+      ],
+      "usage_boundary": "BSD-3-Clause CD-i source may be ported with attribution and preserved notices."
+    },
+    {
+      "id": "mister-cdi",
+      "name": "MiSTer CD-i",
+      "repository": "MiSTer-devel/CDi_MiSTer",
+      "default_branch": "main",
+      "last_reviewed_on": "2026-07-19",
+      "last_reviewed_revision": "bbaf100b5b7ab02af3f5932492c4989d5f91323f",
+      "last_review_scope": [
+        "VMPEG externally visible behavior",
+        "DVC register and DMA traces",
+        "known MPEG compatibility edge cases"
+      ],
+      "latest_observed_on": "2026-08-07",
+      "latest_observed_revision": "b84b270f8d9e5b0a4016fdbe4977896347b1ddeb",
+      "review_status": "update-available",
+      "next_review_scope": [
+        "VMPEG and CDIC changes since the reviewed revision",
+        "new hardware traces and title regressions"
+      ],
+      "usage_boundary": "Clean-room behavioral and test reference only; do not translate implementation code."
+    },
+    {
+      "id": "cedimu",
+      "name": "CeDImu",
+      "repository": "Stovent/CeDImu",
+      "default_branch": "master",
+      "last_reviewed_on": null,
+      "last_reviewed_revision": null,
+      "last_review_scope": [
+        "Historical behavioral comparison; exact revision and date were not recorded"
+      ],
+      "latest_observed_on": "2026-08-07",
+      "latest_observed_revision": "6eb8df48fe5414c51439531ec97aadca88c5849c",
+      "review_status": "pinned-review-needed",
+      "next_review_scope": [
+        "boot and OS-9 diagnostic behavior",
+        "player-model and display behavior visible without source reuse"
+      ],
+      "usage_boundary": "Behavioral comparison only; no source incorporation or close transliteration."
+    }
+  ]
+}

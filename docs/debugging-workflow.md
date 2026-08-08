@@ -11,6 +11,12 @@ Philips implementation notes, historical errata, and weaker observational
 evidence. A document finding is not itself authorization to change behavior:
 it still needs a falsifying test against the affected device boundary.
 
+`Machine::diagnostic_snapshot()` includes a bounded `os9` evidence block with
+static ROM identity, address zero's mapped/aligned state, and independently
+CRC-valid modules found in live RAM. `unsupported-rom-layout` is an expected,
+fail-closed result: it means diagnostics deliberately did not guess the live
+System Globals, module-directory, process, scheduler, or path-table layout.
+
 ## Start and reproduce
 
 1. Search `diagnose history` for the title, symptom, and affected components.

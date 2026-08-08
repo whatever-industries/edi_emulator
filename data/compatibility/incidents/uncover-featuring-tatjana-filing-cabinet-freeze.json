@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "uncover-featuring-tatjana-filing-cabinet-freeze",
+  "title": "Uncover featuring Tatjana filing-cabinet freeze",
+  "symptom": "The title freezes when the filing cabinet opens.",
+  "expected": "Opening the filing cabinet completes its transition and leaves the title responsive so the user can continue.",
+  "status": "reported",
+  "reported_revision": "cf6126718b3e90f3c46126b4511e391da610f9d2",
+  "last_reproduced_revision": null,
+  "last_verified_revision": null,
+  "evidence_status": "reported-current",
+  "revalidation_reason": null,
+  "components": [
+    "cpu-timing",
+    "cdic",
+    "slave",
+    "mcd212",
+    "dvc",
+    "mpeg-video"
+  ],
+  "disc_fingerprint": null,
+  "scenario": {
+    "model": "cdi220b",
+    "video_standard": "pal",
+    "dvc": null,
+    "instruction_limit": null,
+    "input_events": [
+      "manually navigate to the filing cabinet and open it"
+    ]
+  },
+  "hypotheses": [
+    {
+      "id": "filing-cabinet-transition-waits-for-missing-device-event",
+      "hardware_explanation": "Opening the cabinet may start a guest transition that waits for a CDIC/CDFM transfer, interrupt, SLAVE input response, or MCD212 display event that the current emulation does not complete.",
+      "supporting_evidence": [
+        "Manual testing reports that the title freezes specifically when the filing cabinet opens on the current build."
+      ],
+      "contradicting_evidence": [
+        "The report has not yet been reproduced in two bounded diagnostic runs.",
+        "No guest PC, IRQ/DMA, disc-position, CDIC, SLAVE, or display-event trace has yet identified which subsystem stops progressing."
+      ],
+      "falsifying_test": "Run the same clean-state path twice with bounded events and snapshots immediately before and after opening the cabinet. If guest execution and device events continue while only the rendered scene stops changing, a missing device-completion wait is not the cause.",
+      "citations": [
+        "docs/debugging-workflow.md",
+        "docs/specification-research.md"
+      ]
+    },
+    {
+      "id": "mpeg-still-transition-does-not-complete",
+      "hardware_explanation": "The filing-cabinet action may present or replace an MPEG still image. If VMPEG picture completion, final-picture presentation, or still-image release state is incorrect, the guest could remain waiting at that transition.",
+      "supporting_evidence": [
+        "A separate CD-i emulator has experienced regressions in this title's MPEG photo handling, showing that the title exercises a sensitive MPEG-still path."
+      ],
+      "contradicting_evidence": [
+        "It is not yet confirmed that opening this filing cabinet requests an MPEG still image.",
+        "No VMPEG command, picture-event, or decoder trace has yet tied the reported freeze to MPEG state."
+      ],
+      "falsifying_test": "Capture bounded VMPEG commands, FIFO state, decoded-picture events, display-timed completion, and guest execution immediately before and after opening the cabinet. If the cabinet does not invoke VMPEG or its picture lifecycle completes while the guest waits elsewhere, the MPEG-still hypothesis is false.",
+      "citations": [
+        "docs/debugging-workflow.md",
+        "docs/mpeg-dvc-plan.md"
+      ]
+    }
+  ],
+  "experiments": [],
+  "manual_verification": [
+    {
+      "result": "reported",
+      "revision": "cf61267+dirty:b331d974edf66ed1f04e5bb34a528b79000bb0ce0338d19dc541e3396fd3f765",
+      "notes": "Manual testing reported that Uncover featuring Tatjana freezes when the filing cabinet opens. This has not yet been reproduced with diagnostics."
+    }
+  ]
+}

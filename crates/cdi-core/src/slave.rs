@@ -117,6 +117,13 @@ pub struct SlaveDiagnosticSnapshot {
     /// Oldest unsolicited SERVO packet waiting for channel-3 delivery.
     #[cfg_attr(feature = "savestate", serde(default))]
     pub next_forwarded_servo_packet: Option<[u8; 4]>,
+    /// B0/B1 packet currently exposed in the channel-3 read window.
+    ///
+    /// Unlike `modeled_servo_b0_packet`, this is the packet the BIOS can
+    /// actually consume now. Unlike `next_forwarded_servo_packet`, it has
+    /// already crossed the HLE's SLAVE/SERVO forwarding boundary.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    pub bios_visible_drive_packet: Option<[u8; 4]>,
     pub pending_drive_status: usize,
     pub boot_status: u8,
     pub video_status: u8,
@@ -214,6 +221,7 @@ impl SlaveHle {
             disc_type_code: self.disc_type_code,
             modeled_servo_b0_packet: self.drive_status_packet(),
             next_forwarded_servo_packet: self.pending_drive_status.front().copied(),
+            bios_visible_drive_packet: self.bios_visible_drive_packet(),
             pending_drive_status: self.pending_drive_status.len(),
             boot_status: self.boot_status,
             video_status: self.video_status,
@@ -275,6 +283,11 @@ impl SlaveHle {
             0
         };
         [0xB0, 0x00, flags, 0x15]
+    }
+
+    fn bios_visible_drive_packet(&self) -> Option<[u8; 4]> {
+        let channel = &self.channels[3];
+        (channel.count != 0 && matches!(channel.cmd, 0xB0 | 0xB1)).then_some(channel.buf)
     }
 
     fn service_drive_status_notification(&mut self) {
@@ -877,11 +890,13 @@ mod tests {
         let ordinary = s.diagnostic_snapshot();
         assert_eq!(ordinary.modeled_servo_b0_packet, [0xB0, 0x00, 0x02, 0x15]);
         assert_eq!(ordinary.next_forwarded_servo_packet, None);
+        assert_eq!(ordinary.bios_visible_drive_packet, None);
 
         s.write(2, 0x8A);
         let retained = s.diagnostic_snapshot();
         assert_eq!(retained.modeled_servo_b0_packet, [0xB0, 0x00, 0x42, 0x15]);
         assert_eq!(retained.next_forwarded_servo_packet, None);
+        assert_eq!(retained.bios_visible_drive_packet, None);
 
         // With X-Bus notifications disabled, an atomic image replacement
         // retains the physical remove packet ahead of the insert packet.
@@ -896,6 +911,87 @@ mod tests {
             Some([0xB0, 0x00, 0x00, 0x15])
         );
         assert_eq!(replacement.pending_drive_status, 2);
+        assert_eq!(replacement.bios_visible_drive_packet, None);
+    }
+
+    #[test]
+    fn diagnostic_transition_matrix_exposes_the_bios_packet_boundary() {
+        const EMPTY: [u8; 4] = [0xB0, 0x00, 0x00, 0x15];
+        const CDI: [u8; 4] = [0xB0, 0x00, 0x02, 0x15];
+        const RETAINED_CDI: [u8; 4] = [0xB0, 0x00, 0x42, 0x15];
+        const DISC_BASE: [u8; 4] = [0xB1, 0x00, 0x00, 0x00];
+
+        let read_packet =
+            |slave: &mut SlaveHle| [slave.read(3), slave.read(3), slave.read(3), slave.read(3)];
+        let request_packet = |slave: &mut SlaveHle, command: u8, delay: u64| {
+            for byte in [command, 0, 0, 0] {
+                slave.write(3, byte);
+            }
+            assert_eq!(
+                slave.diagnostic_snapshot().bios_visible_drive_packet,
+                Some(if command == 0xB0 {
+                    slave.drive_status_packet()
+                } else {
+                    DISC_BASE
+                })
+            );
+            slave.tick(delay);
+            read_packet(slave)
+        };
+
+        // Power-on: explicit status queries distinguish an empty drive from
+        // already-mounted media without fabricating an unsolicited event.
+        let mut slave = SlaveHle::new("3231", true);
+        assert_eq!(request_packet(&mut slave, 0xB0, 15_000_000 / 4), EMPTY);
+        slave.set_disc_present(true);
+        assert_eq!(request_packet(&mut slave, 0xB0, 15_000_000 / 4), CDI);
+
+        // Live insertion and removal become visible only after FA enables
+        // forwarding. The diagnostic boundary reports the exact packet that
+        // the BIOS can consume, not merely the settled modeled state.
+        let mut slave = SlaveHle::new("3231", true);
+        slave.write(3, 0xFA);
+        slave.notify_disc_change(true, false);
+        assert_eq!(
+            slave.diagnostic_snapshot().bios_visible_drive_packet,
+            Some(CDI)
+        );
+        slave.tick(READBACK_DELAY);
+        assert_eq!(read_packet(&mut slave), CDI);
+        slave.notify_disc_change(false, false);
+        assert_eq!(
+            slave.diagnostic_snapshot().bios_visible_drive_packet,
+            Some(EMPTY)
+        );
+        slave.tick(READBACK_DELAY);
+        assert_eq!(read_packet(&mut slave), EMPTY);
+
+        // Atomic replacement preserves the physical ordering assumed by the
+        // HLE: removal first, then insertion after the first packet drains.
+        slave.set_disc_present(true);
+        slave.notify_disc_change(true, true);
+        assert_eq!(
+            slave.diagnostic_snapshot().bios_visible_drive_packet,
+            Some(EMPTY)
+        );
+        slave.tick(READBACK_DELAY);
+        assert_eq!(read_packet(&mut slave), EMPTY);
+        slave.tick(READBACK_DELAY);
+        assert_eq!(
+            slave.diagnostic_snapshot().bios_visible_drive_packet,
+            Some(CDI)
+        );
+        assert_eq!(read_packet(&mut slave), CDI);
+
+        // PLAY requests only a host reset. The retained SLAVE state is then
+        // visible to the restarted BIOS as B0 bit 6 followed by B1.
+        slave.write(2, 0x8A);
+        assert!(slave.take_host_reset_request());
+        assert_eq!(
+            request_packet(&mut slave, 0xB0, 15_000_000 / 4),
+            RETAINED_CDI
+        );
+        assert_eq!(request_packet(&mut slave, 0xB1, READBACK_DELAY), DISC_BASE);
     }
 
     #[test]

@@ -1346,6 +1346,7 @@ impl Machine {
             slave_drive_status: SlaveDriveStatusProbe {
                 modeled_servo_packet: slave.modeled_servo_b0_packet,
                 next_forwarded_packet: slave.next_forwarded_servo_packet,
+                bios_visible_packet: slave.bios_visible_drive_packet,
                 disc_boot_mode: slave.disc_boot_mode,
                 disc_present: slave.disc_present,
                 disc_type_code: slave.disc_type_code,
@@ -1476,6 +1477,7 @@ impl Machine {
                 cycle: self.cpu.cycles,
                 modeled_servo_packet: status.modeled_servo_packet,
                 next_forwarded_packet: status.next_forwarded_packet,
+                bios_visible_packet: status.bios_visible_packet,
                 disc_boot_mode: status.disc_boot_mode,
                 disc_present: status.disc_present,
                 disc_type_code: status.disc_type_code,
@@ -2269,10 +2271,28 @@ mod tests {
             [MachineDiagnosticEvent::SlaveDriveStatus {
                 modeled_servo_packet: [0xB0, 0x00, 0x02, 0x15],
                 next_forwarded_packet: Some([0xB0, 0x00, 0x00, 0x15]),
+                bios_visible_packet: None,
                 disc_boot_mode: false,
                 disc_present: true,
                 disc_type_code: 0x02,
                 pending_packets: 2,
+                ..
+            }]
+        ));
+
+        machine.bus.slave.write(3, 0xFA);
+        machine.sample_diagnostics();
+
+        assert!(matches!(
+            machine.take_diagnostic_events().as_slice(),
+            [MachineDiagnosticEvent::SlaveDriveStatus {
+                modeled_servo_packet: [0xB0, 0x00, 0x02, 0x15],
+                next_forwarded_packet: Some([0xB0, 0x00, 0x02, 0x15]),
+                bios_visible_packet: Some([0xB0, 0x00, 0x00, 0x15]),
+                disc_boot_mode: false,
+                disc_present: true,
+                disc_type_code: 0x02,
+                pending_packets: 1,
                 ..
             }]
         ));

@@ -270,6 +270,8 @@ pub enum MachineDiagnosticEvent {
         cycle: u64,
         modeled_servo_packet: [u8; 4],
         next_forwarded_packet: Option<[u8; 4]>,
+        #[cfg_attr(feature = "savestate", serde(default))]
+        bios_visible_packet: Option<[u8; 4]>,
         disc_boot_mode: bool,
         disc_present: bool,
         disc_type_code: u8,
@@ -442,6 +444,7 @@ pub(crate) struct DiagnosticProbe {
 pub(crate) struct SlaveDriveStatusProbe {
     pub modeled_servo_packet: [u8; 4],
     pub next_forwarded_packet: Option<[u8; 4]>,
+    pub bios_visible_packet: Option<[u8; 4]>,
     pub disc_boot_mode: bool,
     pub disc_present: bool,
     pub disc_type_code: u8,

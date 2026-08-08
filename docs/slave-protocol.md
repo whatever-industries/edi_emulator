@@ -398,11 +398,50 @@ The end-to-end firmware path is now identified:
   `$0C55..$0CE8` observes status but does not rewrite the packet.
 
 The current HLE retains `disc_boot_mode` as a behavioral abstraction for the
-proven `B0 00 42/44 15` conversation. Read-only diagnostics expose both the
-currently modeled SERVO B0 packet and the oldest queued channel-3 packet, so
-future transition captures can test that abstraction without claiming that
-the low-level SERVO state machine executed. Replacing it requires the bounded
-physical-transition matrix in checkpoint 5.
+proven `B0 00 42/44 15` conversation. Read-only diagnostics separately expose
+the currently modeled SERVO B0 packet, the oldest queued channel-3 packet,
+and the B0/B1 packet already present in the channel-3 window for the BIOS to
+consume. This lets a capture locate the forwarding boundary without claiming
+that the low-level SERVO state machine executed. Replacing the abstraction
+still requires the physical evidence identified in checkpoint 5.
+
+#### Checkpoint 5 transition matrix
+
+The deterministic HLE matrix below is now protected by a device test. It is a
+description of current observable behavior, not evidence that a physical
+player uses the same intermediate states or durations.
+
+| Scenario | Packet order visible to the host | Reset boundary | Current HLE duration | Evidence status |
+| --- | --- | --- | --- | --- |
+| Power-on, empty | No unsolicited packet; an explicit `B0` query returns `B0 00 00 15` | Whole machine starts reset | Query response after `15 MHz / 4` cycles (250 ms) | Packet is deterministic; duration is inherited HLE behavior, not a measured drive time. |
+| Power-on, disc already mounted | No unsolicited packet; explicit `B0` returns `B0 00 02 15` for the native/XA classification currently used by `SlaveHle` | Whole machine starts reset | 250 ms query response | Packet is deterministic; physical insertion/spin-up history is absent. |
+| Live insertion | After host command `FA` enables forwarding, one unsolicited ready `B0 00 02 15` becomes BIOS-visible | None | 100 us forwarding delay | Ordering is tested HLE behavior. Physical caddy, focus, TOC, and ready substates are unknown. |
+| PLAY and retained boot | Host command `8A` requests a 68070 reset while SLAVE state survives; restarted BIOS reads `B0 00 42 15`, then can request `B1 00 00 00` | Host/68070 only; SLAVE state preserved | B0 query 250 ms; B1 100 us | Reset topology, retained bit-6 behavior, and title boot are supported by firmware and observed software behavior. Exact timing is unmeasured. |
+| Live removal | One unsolicited empty `B0 00 00 15` becomes BIOS-visible | None | 100 us forwarding delay | Deterministic HLE behavior; physical tray timing unmeasured. |
+| Atomic replacement | Empty `B0 00 00 15` is delivered first; after it drains, ready `B0 00 02 15` follows | None | 100 us per forwarded packet | Deliberate HLE ordering with a regression test; it still needs hardware confirmation. |
+| Failed/not-ready media | Not modeled | Unknown | Unknown | SERVO RAM `$77.5` can select B0 byte-2 type code 5, but the available firmware and service text do not prove its physical meaning, packet sequence, or duration. |
+
+The CD-i 205 service manual confirms the physical routing needed for a
+capture: caddy-switch and drive-status information enters the drive
+processor, which returns four-byte status/error messages to SLAVE over SPI
+and then to the 68070. It does not define the transition timing or fully map
+the operational B0 bit field. Therefore successful title boot, HLE delay
+constants, or the existence of the caddy switch cannot fill the final row.
+
+To complete the physical matrix, record the drive-processor-to-SLAVE SPI
+traffic, SLAVE channel-3 traffic, 68070 reset, caddy switch, and drive busy
+signal where accessible. For each of the seven rows above, begin before the
+stimulus and continue until status remains stable or a bounded five-second
+timeout expires. Preserve raw timestamps and identify:
+
+1. every four-byte packet in order;
+2. the first packet exposed to the BIOS;
+3. assertion and release of the host reset line;
+4. duration of every distinct intermediate status; and
+5. the exact physical condition for any B0 type-5 packet.
+
+Only independently validated firmware simulation or a real-player capture is
+sufficient to promote those timings and ambiguous bits into emulation.
 
 ### ch2 payload forms (`0x048D..0x0511`)
 
@@ -506,13 +545,15 @@ produce names, call graphs, and trace points, not guessed transport behavior.
    path and persistence mechanism; exact tray/medium/spin-up timing belongs
    to checkpoint 5.
 
-5. **Capture a bounded transition matrix (high evidence requirement).** Trace
-   at least power-on empty, insertion, PLAY/reset/retained boot, removal,
-   replacement, and failed/not-ready media. For each transition, record packet
-   order, state duration, reset boundary, and the first BIOS-visible `B0`/`B1`
-   result. A real-hardware or independently validated firmware trace is
-   required for timing and ambiguous status bits; a successful title boot
-   alone is insufficient.
+5. **In progress: capture a bounded transition matrix (high evidence
+   requirement).** The current HLE matrix now has deterministic device tests,
+   and diagnostics distinguish modeled, queued, and BIOS-visible B0/B1
+   packets. Power-on empty/mounted, insertion, PLAY/reset/retained boot,
+   removal, and replacement are covered at that boundary. The checkpoint is
+   not complete: real hardware or independently validated firmware must still
+   establish mechanical timing, intermediate states, replacement ordering,
+   and the physical meaning of the SERVO type-5 failed/not-ready path. A
+   successful title boot alone remains insufficient.
 
 6. **Replace the shortcut only after checkpoints 1-5 (high implementation and
    regression risk).** Implement the smallest device-level SLAVE/SERVO

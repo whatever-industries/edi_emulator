@@ -100,9 +100,14 @@ none should be implemented as a title-specific workaround.
   discrepancies are recorded in `docs/slave-protocol.md`.
 - [x] Trace channel-3 `B0` byte 2 bit 6 end-to-end. SERVO copies the latched
   valid lower-drive status at `$77.4`; SLAVE forwards the packet unchanged.
-  Read-only diagnostics distinguish modeled B0 state from queued forwarding.
-  Exact tray/medium/spin-up transitions remain checkpoint 5 in
-  `docs/slave-protocol.md`.
+  Read-only diagnostics distinguish modeled, queued, and BIOS-visible B0/B1
+  packets. A deterministic HLE matrix now covers power-on, insertion,
+  retained PLAY/reset, removal, and replacement.
+- [ ] Finish SLAVE checkpoint 5 with real-hardware or independently validated
+  firmware traces for caddy/spin-up timing, intermediate states, replacement
+  ordering, and the SERVO type-5 failed/not-ready condition. Do not promote
+  the tested HLE delays or packet assumptions into a physical state machine
+  without that evidence; see `docs/slave-protocol.md`.
 - [ ] Verify VMPEG guest-visible CSD and memory descriptors: `/mv`, `/ma`,
   `RAM00`, `RAM01`, priority `$81`, color `$90`, and the guaranteed 960 KiB
   contiguous extension allocation.

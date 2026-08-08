@@ -10,7 +10,10 @@ pub mod module;
 pub mod rules;
 pub mod runtime;
 
-pub use module::{scan_modules, scan_valid_modules, Module, ModuleType};
+pub use module::{
+    parse_csd_records, scan_modules, scan_valid_modules, CsdParseError, CsdRecord, Module,
+    ModuleType,
+};
 pub use rules::{identify_board, identify_dvc_rom, identify_rom, BoardType, DvcRomType, RomType};
 pub use runtime::{
     classify_ss_opt, inherited_path_numbers, CdiPathKind, SsOptPacketTooShort, SS_OPT_PACKET_LEN,

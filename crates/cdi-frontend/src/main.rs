@@ -1594,8 +1594,9 @@ fn emu_loop(
                         match load_action {
                             DiscLoadAction::LiveInsert => {
                                 // Preserve the player's initial boot: its
-                                // shell observes the physical insertion
-                                // through the SLAVE X-Bus drive event.
+                                // shell observes insertion through the
+                                // CPU-visible SLAVE/SERVO drive event. Sector
+                                // payloads use the drive's internal X-Bus.
                                 machine.change_disc(Some(disc));
                             }
                             DiscLoadAction::ReplaceAndPowerCycle => {

@@ -1,5 +1,9 @@
 # Mono-I SLAVE MCU protocol — reverse-engineering notes
 
+The system-wide ownership model is summarized in
+`docs/hardware-boundaries.md`. This document covers the CPU-visible
+SLAVE/SERVO protocol; it is not a specification of the sector-payload path.
+
 Source: disassembly of the SLAVE firmware dump `zx405042p` ("cdi slave 2.0",
 MC68HC705C8A, 8 KB) — see `slave-zx405042p.disasm.asm`, produced with
 `scripts/hc05dis.py`. These are original notes documenting facts extracted
@@ -322,6 +326,15 @@ transport state machine should preserve the four-byte forwarding boundary,
 model the second drive MCU's status transitions, and let the SLAVE transform
 or expose them exactly as its firmware does. It should not synthesize
 open/close/spin-up timing directly in the frontend.
+
+This CPU-visible SLAVE/SERVO path is drive control and status, not the
+audio/video payload path. The SERVO owns mechanism state and media-type
+classification; sector data returns through the drive's internal X-Bus into
+the DSP/CDIC path. CDIC/DMA/DVC timing must therefore not be inferred from
+SLAVE command timing. The frontend may perform a full machine reset when the
+user selects a different library title, but a tray-open command issued by
+guest software must remain an emulated mechanism event and must not itself
+power-cycle the machine.
 
 ### SERVO 2.1 firmware packet map
 

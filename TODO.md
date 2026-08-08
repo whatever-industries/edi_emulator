@@ -108,9 +108,13 @@ none should be implemented as a title-specific workaround.
   ordering, and the SERVO type-5 failed/not-ready condition. Do not promote
   the tested HLE delays or packet assumptions into a physical state machine
   without that evidence; see `docs/slave-protocol.md`.
-- [ ] Verify VMPEG guest-visible CSD and memory descriptors: `/mv`, `/ma`,
-  `RAM00`, `RAM01`, priority `$81`, color `$90`, and the guaranteed 960 KiB
-  contiguous extension allocation.
+- [x] Verify the bundled VMPEG firmware's CRC-valid `/mv`, `/ma`, `RAM00`, and
+  `RAM01` descriptors, including 1 MiB extension RAM, 512 KiB MPEG RAM, and
+  color `$90`, with a firmware-backed CSD parser regression.
+- [ ] Capture the live post-boot OS-9 memory list and verify priority `$81`,
+  priority-zero decoder RAM, and the guaranteed 960 KiB contiguous extension
+  allocation. Do not infer these runtime facts from the CSD: TN 101 says
+  priority is not encoded there.
 - [ ] Add project-owned MPEG transition fixtures for display-timed first/last
   picture events, EOS+SOS recovery, delayed B-pictures, pause/continue,
   abort/restart, redundant EOS, input errors, and old-PCL release.

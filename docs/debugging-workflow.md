@@ -238,11 +238,11 @@ Use this impact matrix for neighboring regressions:
 | Changed area | Neighboring checks |
 |---|---|
 | CPU/timing | scheduling, audio, video, input |
-| CDIC | filesystem, CDDA, XA, RTF, DVC, VCD |
+| Drive X-Bus/CDIC | sector delivery, filesystem, CDDA, XA, RTF, DVC, VCD |
 | MCD212 | graphics, interlace, cursor, overlays, screenshots, pointer mapping |
-| SLAVE | input, buttons, reset, video-standard reporting |
+| SLAVE/SERVO | input, buttons, reset, tray mechanism, media classification, output attenuation |
 | DVC | MPEG, VCD, A/V synchronization, external video |
-| Frontend | host presentation, input, screenshots, audio transport |
+| Frontend | host presentation, input mapping, screenshots, host audio delivery |
 
 ## Verification and handoff
 

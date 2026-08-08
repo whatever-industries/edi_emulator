@@ -4,6 +4,9 @@ This index identifies the authority to consult before a device change.
 Generated OCR text is local and ignored; tracked citations must include the
 document edition, section/page, and source hash from the OCR manifest.
 
+Read `docs/hardware-boundaries.md` first for the ownership/data-flow model and
+`docs/reference-inventory.md` for the current extraction coverage and gaps.
+
 Use `docs/specification-research.md` for the current human-readable research
 ledger, evidence interpretations, and prioritized falsifying tests.
 `docs/icdia-archive-assessment.md` remains the historical archive survey; its

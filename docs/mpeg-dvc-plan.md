@@ -2,6 +2,11 @@
 
 Status date: 2026-08-04
 
+The subsystem ownership and end-to-end data flow are consolidated in
+`docs/hardware-boundaries.md`. This ledger supplies the detailed VMPEG
+evidence; it must not be read as assigning drive, MCD212, or frontend behavior
+to MCD251.
+
 ## Current implementation status
 
 - [x] M3.1 optional DVC firmware identification and attachment
@@ -468,6 +473,15 @@ through CSD records. Our firmware-mapped cartridge already follows that path,
 as demonstrated by the unmodified title choosing `cdi_t7g` and reaching
 gameplay. The loader does not describe VMPEG registers, DMA, MPEG decoding, or
 external-plane mixing, so it does not replace the Philips hardware sources.
+
+A firmware-backed `cdi-os9` regression now parses the CRC-valid
+`csd_fmvvm` module and asserts the native `/mv`, `/ma`, `RAM00`, and `RAM01`
+records as well as both device-descriptor modules. Philips TN 101 defines
+`SZ#8` as 1 MiB and the omitted `RAM01` size as the 4-Mbit/512-KiB default;
+`CO#90` identifies MPEG memory color `$90`. TN 101 also states that memory
+priority is not encoded in the CSD. Priority `$81`, priority-zero decoder RAM,
+and the 960-KiB contiguous-free guarantee therefore remain a live OS-9 memory
+list checkpoint rather than being inferred from the firmware strings.
 
 ## VMPEG hardware contract
 

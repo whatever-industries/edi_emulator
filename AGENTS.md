@@ -2,13 +2,15 @@
 
 Read these files top-to-bottom before changing the emulator:
 
-1. `docs/slave-protocol.md`
-2. `docs/mpeg-dvc-plan.md`
-3. `docs/display-geometry.md`
-4. `docs/debugging-workflow.md`
-5. `docs/core-compatibility-audit.md`
-6. `docs/specification-research.md`
-7. `TODO.md`
+1. `docs/hardware-boundaries.md`
+2. `docs/slave-protocol.md`
+3. `docs/mpeg-dvc-plan.md`
+4. `docs/display-geometry.md`
+5. `docs/debugging-workflow.md`
+6. `docs/core-compatibility-audit.md`
+7. `docs/specification-research.md`
+8. `docs/reference-inventory.md`
+9. `TODO.md`
 
 Whenever a compatibility problem is reported, open or resume a diagnostic
 incident using `docs/debugging-workflow.md` before changing emulation

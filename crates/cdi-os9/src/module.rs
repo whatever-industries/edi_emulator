@@ -107,6 +107,30 @@ pub struct Module {
     pub crc_ok: bool,
 }
 
+/// One colon-delimited entry from an OS-9 configuration-status descriptor.
+///
+/// CSD records begin with a decimal device-class number and a device name.
+/// Remaining fields are retained verbatim because their operators are
+/// class-specific (for example, `SZ#8` and `RV="CTP2"`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CsdRecord {
+    pub device_class: u16,
+    pub name: String,
+    pub fields: Vec<String>,
+}
+
+/// Why a module could not be decoded as configuration-status data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CsdParseError {
+    NotCsdData,
+    ModuleOutOfBounds,
+    MissingDataOffset,
+    InvalidDataOffset,
+    MissingTerminator,
+    InvalidAscii,
+    InvalidRecord,
+}
+
 fn be16(d: &[u8], off: usize) -> u16 {
     u16::from_be_bytes([d[off], d[off + 1]])
 }
@@ -216,6 +240,69 @@ pub fn scan_valid_modules(image: &[u8], limit: usize) -> Vec<Module> {
         }
     }
     modules
+}
+
+/// Parse the carriage-return-delimited records in a CSD data module.
+///
+/// Type-5 OS-9 modules place a big-endian, module-relative data offset at
+/// `$30`. Records run from that offset to the first NUL byte. This function
+/// deliberately reports only the firmware declaration; priorities and live
+/// memory allocation are OS-9 runtime state and are not encoded here.
+pub fn parse_csd_records(image: &[u8], module: &Module) -> Result<Vec<CsdRecord>, CsdParseError> {
+    if module.mod_type != ModuleType::CsdData {
+        return Err(CsdParseError::NotCsdData);
+    }
+
+    let start = module.offset as usize;
+    let end = start
+        .checked_add(module.size as usize)
+        .filter(|&end| end <= image.len())
+        .ok_or(CsdParseError::ModuleOutOfBounds)?;
+    let bytes = &image[start..end];
+    if bytes.len() < HEADER_LEN + 4 {
+        return Err(CsdParseError::MissingDataOffset);
+    }
+
+    let data_offset = be32(bytes, HEADER_LEN) as usize;
+    if !(HEADER_LEN + 4..bytes.len()).contains(&data_offset) {
+        return Err(CsdParseError::InvalidDataOffset);
+    }
+    let data = &bytes[data_offset..];
+    let data_end = data
+        .iter()
+        .position(|&byte| byte == 0)
+        .ok_or(CsdParseError::MissingTerminator)?;
+    let data = &data[..data_end];
+    if !data.is_ascii() {
+        return Err(CsdParseError::InvalidAscii);
+    }
+
+    let mut records = Vec::new();
+    for raw in data.split(|&byte| byte == b'\r') {
+        if raw.is_empty() {
+            continue;
+        }
+        let text = std::str::from_utf8(raw).map_err(|_| CsdParseError::InvalidAscii)?;
+        let mut parts = text.split(':');
+        let device_class = parts
+            .next()
+            .and_then(|part| part.parse().ok())
+            .ok_or(CsdParseError::InvalidRecord)?;
+        let name = parts
+            .next()
+            .filter(|name| !name.is_empty())
+            .ok_or(CsdParseError::InvalidRecord)?;
+        let fields = parts
+            .filter(|field| !field.is_empty())
+            .map(str::to_owned)
+            .collect();
+        records.push(CsdRecord {
+            device_class,
+            name: name.to_owned(),
+            fields,
+        });
+    }
+    Ok(records)
 }
 
 fn read_cstr(module: &[u8], start: usize) -> String {

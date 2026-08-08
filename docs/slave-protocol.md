@@ -152,8 +152,12 @@ handler) show this sequence:
 
 The low three bits of B0 byte 2 are the disc-type code later returned by
 `cdapdriv` GetStat `$55`. Native CD-i is type `2`; CD-ROM XA Bridge/White
-Book VCD is type `4`. Bit 6 is independent retained-disc state, so a retained
-bridge disc is reported as `B0 00 44 15`. The VMPEG `vcd` module tests
+Book VCD is type `4`. A retained bridge disc is observed as `B0 00 44 15`.
+The physical origin of bit 6 is narrower than the earlier HLE name
+`disc_boot_mode` implied: SERVO sets it from a latched valid lower-drive
+status, as detailed in the SERVO packet map below. Its persistence across the
+host-only reset makes it the BIOS-visible retained-mode signal, but it is not
+itself a PLAY-command flag. The VMPEG `vcd` module tests
 GetStat `$55` for bit `0x400` and writes `1` to `$E01000` when type 4 is
 present. Hardware review identifies this register as the control for a
 separate 13.5 MHz output-clock converter on the VMPEG cartridge, downstream
@@ -370,6 +374,36 @@ revision-specific firmware result: the service manual still supplies the
 physical meaning of the command families, but is not evidence that every
 documented reply is implemented by this exact ROM.
 
+#### B0 byte-2 bit 6 provenance
+
+The end-to-end firmware path is now identified:
+
+- SERVO `$178B..$181D` builds `B0`. `$D0` is byte 2; `$17BD..$17C2`
+  copies RAM latch `$77.4` into `$D0.6`.
+- The ordinary receive path reaches `$08CC` only when the lower status nibble
+  in `$9A` is `5`. If the received command in `$9C` is `B0`, it copies the
+  three payload bytes `$A1..$A3` into `$BC..$BE`, marks the response valid at
+  `$7A.1`, and sets `$77.4` at `$08E0`.
+- The downstream `D1` status paths at `$1CBE..$1CDB` likewise store their
+  three status bytes in `$B4..$B6` before setting `$77.4`. This makes the bit
+  a valid/latching lower-drive-controller-status indication, not a direct
+  tray, spin, or PLAY state.
+- Sending B0 does not clear `$77.4`. It is cleared only with broader drive
+  state resets that clear all of `$77`, including `$1568`, `$1ACD`, and
+  `$1B0B`. A host-only 68070 reset does not reset the SERVO or SLAVE MCU, so
+  this state can survive into the restarted BIOS query.
+- SLAVE SCI receive `$0BF4..$0C2C` stores the four bytes in `$66..$69`.
+  With channel-3 forwarding enabled, `$0C36..$0C49` copies them unchanged to
+  `$99..$9C` and schedules the host response. The B0 interpreter at
+  `$0C55..$0CE8` observes status but does not rewrite the packet.
+
+The current HLE retains `disc_boot_mode` as a behavioral abstraction for the
+proven `B0 00 42/44 15` conversation. Read-only diagnostics expose both the
+currently modeled SERVO B0 packet and the oldest queued channel-3 packet, so
+future transition captures can test that abstraction without claiming that
+the low-level SERVO state machine executed. Replacing it requires the bounded
+physical-transition matrix in checkpoint 5.
+
 ### ch2 payload forms (`0x048D..0x0511`)
 
 - Bytes below `0x80` are collected as a four-byte payload in `$76..$79`,
@@ -463,13 +497,14 @@ produce names, call graphs, and trace points, not guessed transport behavior.
    versus request-driven packets. Completion means a packet table links each
    byte to both a firmware address and a documented physical meaning.
 
-4. **Trace the retained-disc bit end-to-end (medium-high difficulty).** Start
-   at the SERVO state change for tray/medium/spin-up, follow its four-byte
-   packet into the SLAVE SCI receive routine, and follow the SLAVE state into
-   the channel-3 `B0` reply. The goal is to identify the exact source and
-   clearing conditions of B0 byte-2 bit 6—not merely another flag correlated
-   with a successful boot. Add read-only diagnostic points for the raw SERVO
-   packet, derived SLAVE flags, and resulting `B0` packet before changing HLE.
+4. **Completed: trace B0 byte-2 bit 6 end-to-end.** SERVO B0 builder
+   `$178B..$181D` copies `$77.4` into byte 2 bit 6. The latch is set only after
+   valid lower-drive status reception and cleared with broader drive-state
+   resets, while the SLAVE SCI/channel-3 path forwards the four bytes
+   unchanged. Read-only snapshots and bounded events now distinguish the
+   HLE-modeled B0 from queued forwarded packets. This proves the transport
+   path and persistence mechanism; exact tray/medium/spin-up timing belongs
+   to checkpoint 5.
 
 5. **Capture a bounded transition matrix (high evidence requirement).** Trace
    at least power-on empty, insertion, PLAY/reset/retained boot, removal,

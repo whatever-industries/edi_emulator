@@ -261,6 +261,20 @@ pub enum MachineDiagnosticEvent {
         data_buffer: u16,
         interrupt_asserted: bool,
     },
+    /// A modeled SERVO B0 status or queued SLAVE channel-3 packet changed.
+    ///
+    /// Mono-I SERVO firmware builds B0 at `$178B..$181D`; its byte-2 bit 6
+    /// comes from the latched lower drive-controller status at `$77.4`.
+    /// SLAVE `$0C36..$0C49` preserves all four bytes on normal channel-3 forwarding.
+    SlaveDriveStatus {
+        cycle: u64,
+        modeled_servo_packet: [u8; 4],
+        next_forwarded_packet: Option<[u8; 4]>,
+        disc_boot_mode: bool,
+        disc_present: bool,
+        disc_type_code: u8,
+        pending_packets: u32,
+    },
     DvcCounters {
         cycle: u64,
         demux_errors: u64,
@@ -418,9 +432,20 @@ pub(crate) struct DiagnosticProbe {
     pub cdic_selected_channels: u32,
     pub cdic_audio_channel: u16,
     pub cdic_interrupt: bool,
+    pub slave_drive_status: SlaveDriveStatusProbe,
     pub dvc_errors: [u64; 6],
     pub dvc_milestones: [u64; 12],
     pub dvc_state: Option<DvcRegisterSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SlaveDriveStatusProbe {
+    pub modeled_servo_packet: [u8; 4],
+    pub next_forwarded_packet: Option<[u8; 4]>,
+    pub disc_boot_mode: bool,
+    pub disc_present: bool,
+    pub disc_type_code: u8,
+    pub pending_packets: u32,
 }
 
 #[derive(Debug, Clone, Copy)]

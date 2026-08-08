@@ -496,15 +496,22 @@
         "Philips CD-i 205 service manual PDF pages 79 through 81"
       ],
       "firmware_evidence": [
-        "SLAVE firmware-derived B0 boot and media flow"
+        "SLAVE firmware-derived B0 boot and media flow",
+        "SERVO $178B through $181D maps valid lower-drive-status latch $77.4 to B0 byte-2 bit 6",
+        "SLAVE $0BF4 through $0C49 receives and forwards the four-byte SERVO packet unchanged"
       ],
       "source_symbols": [
-        "cdi_core::slave"
+        "cdi_core::slave::SlaveHle",
+        "cdi_core::slave::SlaveDiagnosticSnapshot",
+        "cdi_core::diagnostics::MachineDiagnosticEvent::SlaveDriveStatus"
       ],
-      "tests": [],
+      "tests": [
+        "cdi_core::slave::tests::diagnostics_distinguish_modeled_b0_from_queued_forwarding",
+        "cdi_core::machine::tests::slave_diagnostics_record_modeled_and_queued_drive_status",
+        "cdi_core::slave::tests::retained_disc_boot_changes_drive_status_and_answers_disc_base"
+      ],
       "known_gaps": [
-        "SERVO firmware A0 through A5 and AB command correlation",
-        "Physical open, close, spin-up, and live-media state transitions"
+        "Physical open, close, spin-up, not-ready, and live-media state durations and packet order require a bounded transition matrix"
       ]
     },
     {

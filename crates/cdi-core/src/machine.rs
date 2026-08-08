@@ -18,7 +18,7 @@ use crate::diagnostics::{
     os9_diagnostic_snapshot, CpuDiagnosticSnapshot, DiagnosticProbe, DisplayProvenanceSnapshot,
     DmaChannelDiagnosticSnapshot, DmaDiagnosticSnapshot, InterruptDiagnosticSnapshot,
     MachineDiagnosticEvent, MachineDiagnosticSnapshot, Mcd212DiagnosticSnapshot,
-    PclOwnershipTracker, RamDiagnosticRegion,
+    PclOwnershipTracker, RamDiagnosticRegion, SlaveDriveStatusProbe,
 };
 use crate::dvc::{DvcConfig, DvcKind, DvcStats, Vmpeg};
 use crate::mcd212::Mcd212;
@@ -1313,6 +1313,7 @@ impl Machine {
 
     fn diagnostic_probe(&self) -> DiagnosticProbe {
         let cdic = self.bus.cdic.diagnostic_snapshot();
+        let slave = self.bus.slave.diagnostic_snapshot();
         let dvc = self.dvc_stats().unwrap_or_default();
         let mut dvc_state = self.bus.dvc.as_ref().map(Vmpeg::register_snapshot);
         if let Some(registers) = &mut dvc_state {
@@ -1342,6 +1343,14 @@ impl Machine {
             cdic_selected_channels: cdic.selected_channels,
             cdic_audio_channel: cdic.audio_channel,
             cdic_interrupt: cdic.interrupt_asserted,
+            slave_drive_status: SlaveDriveStatusProbe {
+                modeled_servo_packet: slave.modeled_servo_b0_packet,
+                next_forwarded_packet: slave.next_forwarded_servo_packet,
+                disc_boot_mode: slave.disc_boot_mode,
+                disc_present: slave.disc_present,
+                disc_type_code: slave.disc_type_code,
+                pending_packets: u32::try_from(slave.pending_drive_status).unwrap_or(u32::MAX),
+            },
             dvc_errors: [
                 dvc.demux_errors,
                 dvc.video_errors,
@@ -1457,6 +1466,20 @@ impl Machine {
                 z_buffer: current.cdic_state[3],
                 data_buffer: current.cdic_state[4],
                 interrupt_asserted: current.cdic_interrupt,
+            });
+        }
+        if !self.milestone_only_diagnostics
+            && current.slave_drive_status != previous.slave_drive_status
+        {
+            let status = current.slave_drive_status;
+            self.push_diagnostic_event(MachineDiagnosticEvent::SlaveDriveStatus {
+                cycle: self.cpu.cycles,
+                modeled_servo_packet: status.modeled_servo_packet,
+                next_forwarded_packet: status.next_forwarded_packet,
+                disc_boot_mode: status.disc_boot_mode,
+                disc_present: status.disc_present,
+                disc_type_code: status.disc_type_code,
+                pending_packets: status.pending_packets,
             });
         }
         if !self.milestone_only_diagnostics && current.dvc_errors != previous.dvc_errors {
@@ -2228,6 +2251,28 @@ mod tests {
                 selected_file: 1,
                 selected_channels: 0x0001_8001,
                 audio_channel: 0x8000,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn slave_diagnostics_record_modeled_and_queued_drive_status() {
+        let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
+        machine.enable_diagnostics(8);
+
+        machine.bus.slave.notify_disc_change(true, true);
+        machine.sample_diagnostics();
+
+        assert!(matches!(
+            machine.take_diagnostic_events().as_slice(),
+            [MachineDiagnosticEvent::SlaveDriveStatus {
+                modeled_servo_packet: [0xB0, 0x00, 0x02, 0x15],
+                next_forwarded_packet: Some([0xB0, 0x00, 0x00, 0x15]),
+                disc_boot_mode: false,
+                disc_present: true,
+                disc_type_code: 0x02,
+                pending_packets: 2,
                 ..
             }]
         ));

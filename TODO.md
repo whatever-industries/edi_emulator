@@ -98,10 +98,11 @@ none should be implemented as a title-specific workaround.
   `A0..A5`/`AB` paths with the service-manual four-byte contract. The
   generated disassembly, vector map, buffers, scheduler, and revision
   discrepancies are recorded in `docs/slave-protocol.md`.
-- [ ] Trace the retained-disc bit from the SERVO tray/medium/spin-up state,
-  through the SLAVE SCI receive path, to channel-3 `B0` byte 2 bit 6. Add
-  read-only trace points for the raw packet, derived flags, and resulting
-  host packet before changing HLE behavior.
+- [x] Trace channel-3 `B0` byte 2 bit 6 end-to-end. SERVO copies the latched
+  valid lower-drive status at `$77.4`; SLAVE forwards the packet unchanged.
+  Read-only diagnostics distinguish modeled B0 state from queued forwarding.
+  Exact tray/medium/spin-up transitions remain checkpoint 5 in
+  `docs/slave-protocol.md`.
 - [ ] Verify VMPEG guest-visible CSD and memory descriptors: `/mv`, `/ma`,
   `RAM00`, `RAM01`, priority `$81`, color `$90`, and the guaranteed 960 KiB
   contiguous extension allocation.

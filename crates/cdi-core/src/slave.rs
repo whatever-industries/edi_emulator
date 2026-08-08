@@ -107,6 +107,16 @@ pub struct SlaveDiagnosticSnapshot {
     pub disc_boot_mode: bool,
     pub disc_present: bool,
     pub disc_type_code: u8,
+    /// Four-byte B0 packet currently synthesized at the HLE's SERVO boundary.
+    ///
+    /// Real firmware builds this packet in SERVO `$178B..$181D` and the
+    /// SLAVE forwards it unchanged. This is explicitly a modeled packet,
+    /// not a claim that a low-level SERVO MCU executed in this HLE.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    pub modeled_servo_b0_packet: [u8; 4],
+    /// Oldest unsolicited SERVO packet waiting for channel-3 delivery.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    pub next_forwarded_servo_packet: Option<[u8; 4]>,
     pub pending_drive_status: usize,
     pub boot_status: u8,
     pub video_status: u8,
@@ -202,6 +212,8 @@ impl SlaveHle {
             disc_boot_mode: self.disc_boot_mode,
             disc_present: self.disc_present,
             disc_type_code: self.disc_type_code,
+            modeled_servo_b0_packet: self.drive_status_packet(),
+            next_forwarded_servo_packet: self.pending_drive_status.front().copied(),
             pending_drive_status: self.pending_drive_status.len(),
             boot_status: self.boot_status,
             video_status: self.video_status,
@@ -856,6 +868,34 @@ mod tests {
             [s.read(3), s.read(3), s.read(3), s.read(3)],
             [0xB1, 0x00, 0x00, 0x00]
         );
+    }
+
+    #[test]
+    fn diagnostics_distinguish_modeled_b0_from_queued_forwarding() {
+        let mut s = SlaveHle::new("3231", true);
+        s.set_disc_present(true);
+        let ordinary = s.diagnostic_snapshot();
+        assert_eq!(ordinary.modeled_servo_b0_packet, [0xB0, 0x00, 0x02, 0x15]);
+        assert_eq!(ordinary.next_forwarded_servo_packet, None);
+
+        s.write(2, 0x8A);
+        let retained = s.diagnostic_snapshot();
+        assert_eq!(retained.modeled_servo_b0_packet, [0xB0, 0x00, 0x42, 0x15]);
+        assert_eq!(retained.next_forwarded_servo_packet, None);
+
+        // With X-Bus notifications disabled, an atomic image replacement
+        // retains the physical remove packet ahead of the insert packet.
+        s.notify_disc_change(true, true);
+        let replacement = s.diagnostic_snapshot();
+        assert_eq!(
+            replacement.modeled_servo_b0_packet,
+            [0xB0, 0x00, 0x02, 0x15]
+        );
+        assert_eq!(
+            replacement.next_forwarded_servo_packet,
+            Some([0xB0, 0x00, 0x00, 0x15])
+        );
+        assert_eq!(replacement.pending_drive_status, 2);
     }
 
     #[test]

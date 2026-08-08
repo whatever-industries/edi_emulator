@@ -27,3 +27,12 @@ its paths are edited. Runs retain local PNG/WAV/diagnostic artifacts and may be
 promoted only after manual checkpoint acceptance. Promotion updates the
 payload-free `title-matrix.json`, whose entries contain exact disc
 fingerprints and emulator configurations but no host paths or media.
+
+`small-baseline.example.json` is the narrow regression set: one base CD-i RTF
+path, one sustained VMPEG path, and one native Video CD path. Replace its local
+media paths and scripted checkpoints, run it twice, then use
+`compatibility compare BASELINE CANDIDATE`. The comparison ignores revisions,
+host paths, and wall-clock duration, but requires identical disc/configuration,
+instruction count, final framebuffer/audio hashes, device counters, raster
+statistics, CDIC position, and Video CD navigation state. Baseline reports and
+media remain ignored local data.

@@ -44,6 +44,13 @@ pub enum CompatibilityCommand {
         /// suite-result.json produced by `compatibility run`.
         report: PathBuf,
     },
+    /// Compare stable evidence from two runs of the same suite.
+    Compare {
+        /// Previously accepted local suite-result.json.
+        baseline: PathBuf,
+        /// New suite-result.json to compare with the baseline.
+        candidate: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,7 +140,7 @@ enum CaseOutcome {
     TimedOut,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CaseResult {
     id: String,
     title: String,
@@ -151,6 +158,12 @@ struct CaseResult {
     screenshot_path: PathBuf,
     audio_path: PathBuf,
     disc_fingerprint: Option<String>,
+    #[serde(default)]
+    instructions: Option<u64>,
+    #[serde(default)]
+    framebuffer_sha256: Option<String>,
+    #[serde(default)]
+    audio_sha256: Option<String>,
     frames: Option<u64>,
     audio_frames: Option<u64>,
     unique_rasters: Option<usize>,
@@ -170,7 +183,7 @@ struct CaseResult {
     vcd_current_entry: Option<u16>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SuiteResult {
     schema_version: u32,
     suite_id: String,
@@ -213,6 +226,10 @@ pub fn execute(command: CompatibilityCommand) -> Result<(), Box<dyn std::error::
             matrix,
         } => promote(&report, accepted, &matrix),
         CompatibilityCommand::Report { report } => print_report(&report),
+        CompatibilityCommand::Compare {
+            baseline,
+            candidate,
+        } => compare_reports(&baseline, &candidate),
     }
 }
 
@@ -369,6 +386,13 @@ fn run_case(
             .as_ref()
             .and_then(|evidence| evidence.disc.as_ref())
             .map(|disc| disc.fingerprint.sha1.clone()),
+        instructions: evidence.as_ref().map(|evidence| evidence.instructions),
+        framebuffer_sha256: evidence
+            .as_ref()
+            .map(|evidence| evidence.framebuffer_sha256.clone()),
+        audio_sha256: evidence
+            .as_ref()
+            .map(|evidence| evidence.audio_sha256.clone()),
         frames: evidence
             .as_ref()
             .map(|evidence| evidence.snapshot.mcd212.frame_count),
@@ -692,6 +716,228 @@ fn print_report(report_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn compare_reports(
+    baseline_path: &Path,
+    candidate_path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let baseline: SuiteResult = read_json(baseline_path)?;
+    let candidate: SuiteResult = read_json(candidate_path)?;
+    let differences = stable_report_differences(&baseline, &candidate);
+    if differences.is_empty() {
+        println!(
+            "{}: {} case(s) match the deterministic baseline",
+            candidate.suite_id,
+            candidate.cases.len()
+        );
+        return Ok(());
+    }
+    for difference in &differences {
+        eprintln!("- {difference}");
+    }
+    Err(format!(
+        "compatibility baseline differs in {} stable field(s)",
+        differences.len()
+    )
+    .into())
+}
+
+fn stable_report_differences(baseline: &SuiteResult, candidate: &SuiteResult) -> Vec<String> {
+    let mut differences = Vec::new();
+    if baseline.schema_version != candidate.schema_version {
+        differences.push(format!(
+            "schema_version: baseline={} candidate={}",
+            baseline.schema_version, candidate.schema_version
+        ));
+    }
+    if baseline.suite_id != candidate.suite_id {
+        differences.push(format!(
+            "suite_id: baseline={:?} candidate={:?}",
+            baseline.suite_id, candidate.suite_id
+        ));
+    }
+
+    let baseline_cases = baseline
+        .cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let candidate_cases = candidate
+        .cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for id in baseline_cases.keys() {
+        if !candidate_cases.contains_key(id) {
+            differences.push(format!("case {id:?} is missing from candidate"));
+        }
+    }
+    for id in candidate_cases.keys() {
+        if !baseline_cases.contains_key(id) {
+            differences.push(format!("case {id:?} is new in candidate"));
+        }
+    }
+    for (id, baseline_case) in baseline_cases {
+        let Some(candidate_case) = candidate_cases.get(id) else {
+            continue;
+        };
+        compare_case_field(
+            id,
+            "model",
+            &baseline_case.model,
+            &candidate_case.model,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "video_standard",
+            &baseline_case.video_standard,
+            &candidate_case.video_standard,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "dvc_required",
+            &baseline_case.dvc_required,
+            &candidate_case.dvc_required,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "dvc_attached",
+            &baseline_case.dvc_attached,
+            &candidate_case.dvc_attached,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "outcome",
+            &baseline_case.outcome,
+            &candidate_case.outcome,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "disc_fingerprint",
+            &baseline_case.disc_fingerprint,
+            &candidate_case.disc_fingerprint,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "instructions",
+            &baseline_case.instructions,
+            &candidate_case.instructions,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "framebuffer_sha256",
+            &baseline_case.framebuffer_sha256,
+            &candidate_case.framebuffer_sha256,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "audio_sha256",
+            &baseline_case.audio_sha256,
+            &candidate_case.audio_sha256,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "frames",
+            &baseline_case.frames,
+            &candidate_case.frames,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "audio_frames",
+            &baseline_case.audio_frames,
+            &candidate_case.audio_frames,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "unique_rasters",
+            &baseline_case.unique_rasters,
+            &candidate_case.unique_rasters,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "longest_identical_raster_run",
+            &baseline_case.longest_identical_raster_run,
+            &candidate_case.longest_identical_raster_run,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "dvc_errors",
+            &baseline_case.dvc_errors,
+            &candidate_case.dvc_errors,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "disc_content_kind",
+            &baseline_case.disc_content_kind,
+            &candidate_case.disc_content_kind,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "cdic_lba",
+            &baseline_case.cdic_lba,
+            &candidate_case.cdic_lba,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "vcd_specification_version",
+            &baseline_case.vcd_specification_version,
+            &candidate_case.vcd_specification_version,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "vcd_entry_count",
+            &baseline_case.vcd_entry_count,
+            &candidate_case.vcd_entry_count,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "vcd_list_count",
+            &baseline_case.vcd_list_count,
+            &candidate_case.vcd_list_count,
+            &mut differences,
+        );
+        compare_case_field(
+            id,
+            "vcd_current_entry",
+            &baseline_case.vcd_current_entry,
+            &candidate_case.vcd_current_entry,
+            &mut differences,
+        );
+    }
+    differences
+}
+
+fn compare_case_field<T: std::fmt::Debug + PartialEq>(
+    case_id: &str,
+    field: &str,
+    baseline: &T,
+    candidate: &T,
+    differences: &mut Vec<String>,
+) {
+    if baseline != candidate {
+        differences.push(format!(
+            "case {case_id:?} {field}: baseline={baseline:?} candidate={candidate:?}"
+        ));
+    }
+}
+
 fn format_vcd_version(version: u16) -> String {
     format!("{}.{}", version >> 8, version & 0xff)
 }
@@ -752,6 +998,52 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), Box<dyn std::e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn case_result(id: &str) -> CaseResult {
+        CaseResult {
+            id: id.into(),
+            title: "Title".into(),
+            model: "cdi220b".into(),
+            video_standard: "pal".into(),
+            dvc_required: false,
+            dvc_attached: false,
+            checkpoint: "menu".into(),
+            known_issues: Vec::new(),
+            outcome: CaseOutcome::Passed,
+            reasons: vec!["all explicit assertions passed".into()],
+            elapsed_millis: 10,
+            exit_code: Some(0),
+            evidence_path: "first/evidence.json".into(),
+            screenshot_path: "first/final.png".into(),
+            audio_path: "first/audio.wav".into(),
+            disc_fingerprint: Some("disc".into()),
+            instructions: Some(100),
+            framebuffer_sha256: Some("frame".into()),
+            audio_sha256: Some("audio".into()),
+            frames: Some(5),
+            audio_frames: Some(20),
+            unique_rasters: Some(3),
+            longest_identical_raster_run: Some(2),
+            dvc_errors: Some(0),
+            disc_content_kind: None,
+            cdic_lba: Some(75),
+            vcd_specification_version: None,
+            vcd_entry_count: None,
+            vcd_list_count: None,
+            vcd_current_entry: None,
+        }
+    }
+
+    fn suite_result(case: CaseResult) -> SuiteResult {
+        SuiteResult {
+            schema_version: SCHEMA_VERSION,
+            suite_id: "baseline".into(),
+            revision: "revision-a".into(),
+            dirty_diff_sha256: "dirty-a".into(),
+            manifest_path: "first/manifest.json".into(),
+            cases: vec![case],
+        }
+    }
 
     fn evidence(frame_hashes: &[u64], frames: u64, audio_frames: u64) -> BootEvidence {
         let mut machine = cdi_core::Machine::new(
@@ -904,5 +1196,52 @@ mod tests {
         assert_eq!(vcd_entry_at_lba(&navigation, 0), Some(1));
         assert_eq!(vcd_entry_at_lba(&navigation, 74), Some(1));
         assert_eq!(vcd_entry_at_lba(&navigation, 75), Some(2));
+    }
+
+    #[test]
+    fn deterministic_comparison_ignores_revision_paths_and_elapsed_time() {
+        let baseline = suite_result(case_result("case"));
+        let mut candidate = baseline.clone();
+        candidate.revision = "revision-b".into();
+        candidate.dirty_diff_sha256 = "dirty-b".into();
+        candidate.manifest_path = "second/manifest.json".into();
+        candidate.cases[0].elapsed_millis = 999;
+        candidate.cases[0].evidence_path = "second/evidence.json".into();
+        candidate.cases[0].screenshot_path = "second/final.png".into();
+        candidate.cases[0].audio_path = "second/audio.wav".into();
+
+        assert!(stable_report_differences(&baseline, &candidate).is_empty());
+    }
+
+    #[test]
+    fn deterministic_comparison_reports_stable_evidence_changes() {
+        let baseline = suite_result(case_result("case"));
+        let mut candidate = baseline.clone();
+        candidate.cases[0].framebuffer_sha256 = Some("different".into());
+        candidate.cases[0].cdic_lba = Some(76);
+
+        let differences = stable_report_differences(&baseline, &candidate);
+        assert_eq!(differences.len(), 2);
+        assert!(differences
+            .iter()
+            .any(|difference| difference.contains("framebuffer_sha256")));
+        assert!(differences
+            .iter()
+            .any(|difference| difference.contains("cdic_lba")));
+    }
+
+    #[test]
+    fn deterministic_comparison_reports_case_set_changes() {
+        let baseline = suite_result(case_result("base"));
+        let candidate = suite_result(case_result("candidate-only"));
+
+        let differences = stable_report_differences(&baseline, &candidate);
+        assert_eq!(differences.len(), 2);
+        assert!(differences
+            .iter()
+            .any(|difference| difference.contains("missing")));
+        assert!(differences
+            .iter()
+            .any(|difference| difference.contains("new")));
     }
 }

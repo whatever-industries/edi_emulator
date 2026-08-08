@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "id": "small-deterministic-baseline",
+  "timeout_seconds": 900,
+  "cases": [
+    {
+      "id": "base-rtf-title",
+      "title": "Known-good base CD-i RTF title",
+      "rom": "firmware/cdi220b.rom",
+      "disc": "tests-data/local/media/base-rtf-title.cue",
+      "dvc_rom": null,
+      "model": "cdi220b",
+      "video_standard": "pal",
+      "instructions": 250000000,
+      "nvram": null,
+      "click_events": [
+        "60000000:588,265,1,2000000"
+      ],
+      "checkpoint": "title reaches a moving, audible base CD-i scene through native RTF transport",
+      "known_issues": [],
+      "assertions": {
+        "minimum_frames": 100,
+        "minimum_audio_frames": 1,
+        "minimum_unique_rasters": 2,
+        "maximum_consecutive_identical_rasters": null,
+        "maximum_dvc_errors": null
+      }
+    },
+    {
+      "id": "sustained-vmpeg-title",
+      "title": "Known-good sustained VMPEG title",
+      "rom": "firmware/cdi220b.rom",
+      "disc": "tests-data/local/media/sustained-vmpeg-title.cue",
+      "dvc_rom": "firmware/vmpega.rom",
+      "model": "cdi220b",
+      "video_standard": "pal",
+      "instructions": 600000000,
+      "nvram": null,
+      "click_events": [
+        "60000000:588,265,1,2000000"
+      ],
+      "checkpoint": "native title path produces sustained MPEG video and audio without decoder errors",
+      "known_issues": [],
+      "assertions": {
+        "minimum_frames": 100,
+        "minimum_audio_frames": 1,
+        "minimum_unique_rasters": 2,
+        "maximum_consecutive_identical_rasters": null,
+        "maximum_dvc_errors": 0
+      }
+    },
+    {
+      "id": "native-vcd-title",
+      "title": "Known-good native Video CD title",
+      "rom": "firmware/cdi220b.rom",
+      "disc": "tests-data/local/media/native-vcd-title.cue",
+      "dvc_rom": "firmware/vmpega.rom",
+      "model": "cdi220b",
+      "video_standard": "pal",
+      "instructions": 400000000,
+      "nvram": null,
+      "click_events": [
+        "60000000:588,265,1,2000000"
+      ],
+      "checkpoint": "native Video CD application reaches feature playback with video and audio",
+      "known_issues": [],
+      "assertions": {
+        "minimum_frames": 100,
+        "minimum_audio_frames": 1,
+        "minimum_unique_rasters": 2,
+        "maximum_consecutive_identical_rasters": null,
+        "maximum_dvc_errors": 0
+      }
+    }
+  ]
+}

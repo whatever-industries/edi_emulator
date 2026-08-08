@@ -1,6 +1,6 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-08-04
+Status date: 2026-08-08
 
 The subsystem ownership and end-to-end data flow are consolidated in
 `docs/hardware-boundaries.md`. This ledger supplies the detailed VMPEG
@@ -36,6 +36,16 @@ a perceptual or presentation-overlap A/V drift oracle. The White Book 13.5 MHz p
 meanwhile been assigned to the correct hardware boundary: a separate VMPEG
 output circuit downstream of MCD251. This ownership refactor preserves the
 accepted raster mapping and adds no title-specific presentation rule.
+
+A native Green Book transport regression found with The Lost Ride is now
+covered at the CDIC boundary. A selected Mode-2 EOF sector remains deliverable
+file/record metadata and no longer cancels an active `$2a` read; only explicit
+`$23`/`$24` commands stop that transport. This replaces neither the SLAVE nor
+SERVO model and does not restore the historical invalid behavior that treated
+an idle `$23` as a new Mode-1 read. The corrected path boots The Lost Ride into
+native VMPEG playback, while the deterministic Alien Gate, The 7th Guest, and
+Accused baseline remains byte-for-byte unchanged. Manual GUI confirmation is
+still pending.
 
 The cake-puzzle gate now passes manually on The 7th Guest USA: entering the
 table and selecting the cake reaches playable puzzle interaction. Separate

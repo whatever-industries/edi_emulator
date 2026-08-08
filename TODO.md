@@ -169,9 +169,15 @@ none should be implemented as a title-specific workaround.
   WAV/MPEG-frame previews.
 - [ ] Add project-owned fixtures that damage individual provenance stages and
   prove `diagnose compare` locates the first divergence.
-- [ ] Complete current-build local pilots. The known-good sustained-MPEG
-  comparator (The 7th Guest) and current VCD transport run are recorded; a
-  known-good base boot and base RTF display sequence remain.
+- [x] Add a small deterministic compatibility-baseline workflow. The tracked
+  template covers base RTF, sustained VMPEG, and native Video CD paths; exact
+  report comparison excludes host metadata while checking stable hashes,
+  counters, disc position, and navigation state.
+- [ ] Manually accept the three recorded current-build baseline checkpoints.
+  Alien Gate, The 7th Guest, and Accused are calibrated in the ignored local
+  manifest; two exact headless runs match on all stable evidence. Keep the
+  reports local and promote them only after their named scenes are observed in
+  the GUI.
 
 ## Disc loading and player state
 

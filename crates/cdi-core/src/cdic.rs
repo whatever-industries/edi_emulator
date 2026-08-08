@@ -593,12 +593,11 @@ impl Cdic {
             return false;
         }
         let submode = buf[SECTOR_SUBMODE2];
-        if submode & SUBMODE_EOF != 0 {
-            self.disc_command = 0;
-        }
         // The CDIC delivers event sectors after file selection. cdapdriv then
         // applies the Green Book's finer rule by clearing EOR when the channel
         // was not selected, while retaining EOF/TRIG (cdi220b ROM $2A804).
+        // EOF is record/file metadata delivered to that driver; it does not
+        // replace the explicit $23/$24 CDIC transport-stop commands.
         if submode & (SUBMODE_EOF | SUBMODE_TRIG | SUBMODE_EOR) != 0 {
             return true;
         }
@@ -1668,13 +1667,16 @@ mod tests {
     }
 
     #[test]
-    fn mode2_eof_event_ends_the_read() {
+    fn mode2_eof_event_does_not_stop_the_transport() {
         let mut c = Cdic::new();
         c.file = 7 << 8;
         c.audio_channel = 1 << 3;
         c.disc_command = 0x2A;
 
         assert!(c.is_mode2_sector_selected(&mode2_sector(7, 4, SUBMODE_EOF)));
-        assert_eq!(c.disc_command, 0);
+        assert_eq!(
+            c.disc_command, 0x2A,
+            "EOF is sector metadata; an explicit CDIC command stops transport"
+        );
     }
 }

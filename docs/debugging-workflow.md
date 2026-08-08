@@ -144,6 +144,34 @@ standard, and DVC configuration. Automated process success alone never claims
 that a title reached gameplay. The manifest's checkpoint becomes accepted
 compatibility evidence only through the explicit `--accepted` step.
 
+### Small deterministic baseline
+
+Keep the routine baseline deliberately small: a base CD-i RTF title, a
+sustained VMPEG title, and a native Video CD title. Copy
+`data/compatibility/small-baseline.example.json` into ignored local storage,
+replace its media paths and calibrate its scripted checkpoints, then record two
+otherwise identical runs:
+
+```sh
+cargo run -p cdi-cli --release -- compatibility run \
+  tests-data/local/diagnostics/compatibility/small-baseline.json \
+  --output tests-data/local/diagnostics/compatibility/baseline-a
+cargo run -p cdi-cli --release -- compatibility run \
+  tests-data/local/diagnostics/compatibility/small-baseline.json \
+  --output tests-data/local/diagnostics/compatibility/baseline-b
+cargo run -p cdi-cli -- compatibility compare \
+  tests-data/local/diagnostics/compatibility/baseline-a/suite-result.json \
+  tests-data/local/diagnostics/compatibility/baseline-b/suite-result.json
+```
+
+The comparison deliberately excludes Git revision, dirty-diff hash, local
+paths, and elapsed host time. It compares exact media/configuration identity,
+instruction count, final framebuffer and audio hashes, frame/audio/DVC
+counters, raster statistics, CDIC position, and Video CD navigation state.
+Treat a difference as a regression signal to investigate, not proof that the
+candidate is wrong. Accept the first baseline only after its three named
+checkpoints have been observed manually.
+
 ## Smallest distinguishing experiment
 
 Model the disc/display path explicitly:

@@ -618,8 +618,11 @@ fn controller_deflection(
     selected.clamp(egui::vec2(-1.0, -1.0), egui::vec2(1.0, 1.0))
 }
 
-/// Apply a continuous radial deadzone to a stick. Values just beyond the
-/// deadzone start near zero instead of jumping directly to the raw input.
+/// Reject radial center drift without compressing the remaining stick travel.
+///
+/// Rescaling `deadzone..1` onto `0..1` made the useful low-speed band narrow:
+/// a small additional push produced a disproportionately large speed change.
+/// Preserve the controller's native magnitude outside the drift gate instead.
 fn controller_stick_deflection(stick: egui::Vec2, deadzone: f32) -> egui::Vec2 {
     let magnitude = stick.length();
     let deadzone = deadzone.clamp(0.0, 0.99);
@@ -627,8 +630,7 @@ fn controller_stick_deflection(stick: egui::Vec2, deadzone: f32) -> egui::Vec2 {
         return egui::Vec2::ZERO;
     }
 
-    let scaled = (magnitude.min(1.0) - deadzone) / (1.0 - deadzone);
-    stick / magnitude * scaled
+    stick / magnitude * magnitude.min(1.0)
 }
 
 /// Merge a controller's D-pad buttons and hat axes into one screen-space
@@ -4788,15 +4790,17 @@ mod tests {
     }
 
     #[test]
-    fn controller_stick_deadzone_has_no_step_discontinuity() {
+    fn controller_stick_deadzone_rejects_drift_without_rescaling_travel() {
         assert_eq!(
             controller_stick_deflection(egui::vec2(0.15, 0.0), 0.15),
             egui::Vec2::ZERO
         );
         let just_outside = controller_stick_deflection(egui::vec2(0.16, 0.0), 0.15);
-        assert!(just_outside.x > 0.0);
-        assert!(just_outside.x < 0.02);
+        assert!((just_outside.x - 0.16).abs() < f32::EPSILON);
         assert_eq!(just_outside.y, 0.0);
+
+        let half_travel = controller_stick_deflection(egui::vec2(0.5, 0.0), 0.15);
+        assert!((half_travel.x - 0.5).abs() < f32::EPSILON);
     }
 
     #[test]

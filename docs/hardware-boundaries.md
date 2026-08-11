@@ -3,7 +3,9 @@
 This is the short ownership map for the currently emulated CD-i 220/Mono-I
 player and optional 22ER9141 VMPEG cartridge. It defines where an observed
 effect belongs before implementation work begins. Detailed evidence remains
-in the subsystem ledgers linked below.
+in the subsystem ledgers linked below. The reviewer-facing VMPEG data path and
+component provenance are summarized in
+[`vmpeg-architecture.md`](vmpeg-architecture.md).
 
 ## Data flow
 

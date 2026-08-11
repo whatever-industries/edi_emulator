@@ -58,6 +58,12 @@ retaining the current disc.
 
 Game disc images are not included and must be supplied by the user.
 
+## Architecture documentation
+
+- [Mono-I hardware boundaries](docs/hardware-boundaries.md)
+- [VMPEG architecture and provenance](docs/vmpeg-architecture.md)
+- [M3 VMPEG implementation ledger](docs/mpeg-dvc-plan.md)
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for

@@ -1,11 +1,12 @@
 # M3 VMPEG / Digital Video Cartridge plan and source ledger
 
-Status date: 2026-08-08
+Status date: 2026-08-11
 
 The subsystem ownership and end-to-end data flow are consolidated in
 `docs/hardware-boundaries.md`. This ledger supplies the detailed VMPEG
 evidence; it must not be read as assigning drive, MCD212, or frontend behavior
-to MCD251.
+to MCD251. The concise outside-reviewer map is
+`docs/vmpeg-architecture.md`.
 
 ## Current implementation status
 
@@ -23,6 +24,10 @@ to MCD251.
 - [x] M3.12 reconcile SCC68070 datasheet timing with VMPEG/CDIC interrupt arbitration
 - [x] M3.13 full multi-play B-picture revalidation after shared-IN4 correction
 - [ ] M3.14 transition compliance and long-run regressions
+
+The reviewer-facing architecture and component-provenance checkpoint is
+complete. It adds no emulation behavior and does not change M3.14's next
+action: establish a perceptual or presentation-overlap A/V drift oracle.
 
 The cake-puzzle gate passes. The first manual deinterlacing pass removed The
 7th Guest's combing but exposed slight alternating bob jitter. Moving regions

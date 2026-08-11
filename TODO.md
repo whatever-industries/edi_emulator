@@ -57,7 +57,7 @@ patches belong in the ignored `tests-data/local/diagnostics/`.
   workload stalls up to 2.9 ms. Still needed are simultaneous ch2 command,
   analog-output, and CDIC/DVC-source traces to establish polarity, gain curve,
   mute behavior, and the shared output boundary.
-- [ ] Add a concise `docs/vmpeg-architecture.md` for outside reviewers. Diagram
+- [x] Add a concise `docs/vmpeg-architecture.md` for outside reviewers. Diagram
   the guest/CDIC/main-RAM/DMA2/FIFO/PES/decoder/MCD251/MCD212/audio path and give
   a component-by-component provenance table: Philips specifications and
   firmware evidence, clean-room MiSTer behavioral checks, the attributed

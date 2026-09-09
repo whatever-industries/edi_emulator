@@ -7,6 +7,36 @@ behavior that has the strongest manual compatibility evidence, then
 reintroduces later device changes in isolated batches. A change is promoted
 only when its device-level evidence and neighboring title regressions agree.
 
+## Driver-guided HLE strategy
+
+E-Di runs the native CD-i system ROM and preserves its CD-RTOS/OS-9 driver
+path. Device high-level emulation should therefore reproduce the observable
+hardware contract used by those native drivers rather than replace operating
+system services or title code. For ordinary conforming software, the Green
+Book service interface, ROM-specific driver control flow, device transactions,
+and focused tests form one evidence chain:
+
+`service request -> native driver path -> device transaction -> guest-visible result`
+
+This is a compatibility strategy, not permission to approximate behavior until
+one title happens to work. Each modeled result still needs Philips documentation,
+firmware or disassembly evidence, measurement, and a generalized device test.
+It is also not an assumption that every disc is forbidden from accessing
+hardware directly: bundled or replacement drivers, optional peripherals, and
+nonconforming software must be diagnosed from their actual execution paths.
+
+CD+Audio/CDIC receives particular attention because its native driver stack
+combines disc transport, buffering, audio, interrupts, and subordinate
+firmware. That complexity and E-Di's compatibility history make it a
+higher-value audit target than already well-documented display operations,
+without reducing the verification required for MCD212 or VMPEG changes.
+
+This approach is independently advocated in CD-i Fan's public 2021 article
+[Why is CD-i emulation hard (or isn't it)?](https://cdibits.blogspot.com/2021/03/why-is-cd-i-emulation-hard-or-isnt-it.html).
+The article is secondary methodological commentary. Its implementation-size
+estimates and historical emulator conclusions are not specifications and do
+not independently authorize an emulation change.
+
 ## Preserved references
 
 - Current recoverable checkpoint: commit `af3ca1d`.
@@ -50,10 +80,13 @@ The Philips documentation pass adds a second constraint to that
 reconstruction. TN 94 says disc/audio, video-field, and system-tick time bases
 are asynchronous. The CD-i 205 service manual specifies a 30.0000/15.000 MHz
 PAL system/CPU clock but a 30.2098 MHz NTSC system clock, matching the
-MCD212's 525-TV timing table. The current global 30/15 MHz scheduler cannot
-represent that distinction. It remains a player-clock modeling limitation,
-but it was not the cause of this transition failure. See
-`docs/specification-research.md`.
+MCD212's 525-TV timing table. Runtime regional clocks and chronological
+device-to-device advancement over each completed instruction now represent
+that distinction; CPU bus accesses within the instruction are still executed
+before device catch-up. The deterministic Alien Gate, The 7th Guest, and
+Accused baseline passes with the new scheduling, while CD Shoot cadence remains
+a separate manual gate. The regional clock was not the cause of this
+transition failure. See `docs/specification-research.md`.
 
 ## Resolved device-contract boundary
 

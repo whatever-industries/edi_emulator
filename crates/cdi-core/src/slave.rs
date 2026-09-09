@@ -9,16 +9,33 @@
 
 use std::collections::VecDeque;
 
+use crate::keyboard::KeyboardModifiers;
+
 /// CPU cycles (15 MHz domain) per microsecond.
+#[cfg(test)]
 const CYCLES_PER_US: u64 = 15;
 /// Response latency used by MAME for most queries (100 µs).
+#[cfg(test)]
 const READBACK_DELAY: u64 = 100 * CYCLES_PER_US;
 /// Input poll cadence (60 Hz).
+#[cfg(test)]
 const POLL_INTERVAL: u64 = 15_000_000 / 60;
+
+#[cfg(feature = "savestate")]
+const fn default_cpu_clock_hz() -> u64 {
+    crate::sched::PAL_CPU_HZ
+}
 /// `cdapdriv` disc-type field for a native CD-i disc.
 const DISC_TYPE_CDI: u8 = 0x02;
 /// `cdapdriv` disc-type field for a CD-ROM XA Bridge disc.
 const DISC_TYPE_CD_ROM_XA_BRIDGE: u8 = 0x04;
+
+fn pointer_packet_fields(packet: [u8; 4]) -> (i32, i32, u8) {
+    let x = (i32::from(packet[0] & 0x07) << 7) | i32::from(packet[1] & 0x7f);
+    let y = (i32::from(packet[2] & 0x07) << 7) | i32::from(packet[3] & 0x7f);
+    let button_code = (packet[0] >> 3) & 0x07;
+    (x, y, button_code)
+}
 
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
@@ -27,6 +44,37 @@ struct OutChannel {
     index: usize,
     count: usize,
     cmd: u8,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+struct PendingReadback {
+    delay: Option<u64>,
+    count: usize,
+    data: [u8; 4],
+    cmd: u8,
+}
+
+/// Minimum player-control keys defined by the Green Book for `/pck2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayerControlKey {
+    Play,
+    Stop,
+    Pause,
+    Next,
+    Previous,
+}
+
+impl PlayerControlKey {
+    fn slave_mask(self) -> u8 {
+        match self {
+            Self::Play => 0x20,
+            Self::Stop => 0x04,
+            Self::Pause => 0x10,
+            Self::Next => 0x01,
+            Self::Previous => 0x02,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +88,32 @@ pub struct SlaveHle {
     /// Firmware `$63.4`: allow pending pointer events to notify the host.
     pointer_interrupt_enable: bool,
     xbus_interrupt_enable: bool,
+    /// Channel-1 player-control reports are enabled by the native `/pck2`
+    /// driver with command $8D and disabled with $8E.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    player_control_enabled: bool,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    player_control_mask: u8,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    pending_player_control: VecDeque<[u8; 2]>,
+    /// A K-mode keyboard is physically present on the SLAVE-managed input
+    /// port, so F3 advertises the combined keyboard/pointer device class.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    keyboard_attached: bool,
+    /// Firmware `$56.1`, set/cleared by channel-C commands $80/$81.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    keyboard_events_enabled: bool,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    keyboard_pressed_keys: Vec<u8>,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    keyboard_modifiers: KeyboardModifiers,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    pending_keyboard: VecDeque<[u8; 3]>,
+    /// Ordered status-query responses sharing the CPU-visible channel C.
+    /// Real firmware retains one-shot request flags until each reply has
+    /// crossed the channel; a later query must not overwrite an earlier one.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    pending_channel2_readbacks: VecDeque<PendingReadback>,
     lcd_state: [u8; 16],
     /// SLAVE revision bytes reported to the BIOS (e.g. "21" for v3231).
     version: [u8; 2],
@@ -84,10 +158,16 @@ pub struct SlaveHle {
 
     /// Latest audio-attenuation command payload for the CDIC, if pending.
     attenuation: Option<u32>,
+    #[cfg_attr(feature = "savestate", serde(default = "default_cpu_clock_hz"))]
+    clock_hz: u64,
     /// IRQ (IN2) line state.
     irq_asserted: bool,
-    /// Cycles until the pending response raises the IRQ, if any.
-    irq_countdown: Option<u64>,
+    /// Channels currently contributing to the shared level-sensitive IN2.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    irq_pending_channels: u8,
+    /// Per-channel cycles until a delayed response raises the shared IRQ.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    irq_countdowns: [Option<u64>; 4],
     poll_countdown: u64,
 }
 
@@ -148,6 +228,15 @@ impl SlaveHle {
             polling_active: false,
             pointer_interrupt_enable: false,
             xbus_interrupt_enable: false,
+            player_control_enabled: false,
+            player_control_mask: 0,
+            pending_player_control: VecDeque::new(),
+            keyboard_attached: false,
+            keyboard_events_enabled: false,
+            keyboard_pressed_keys: Vec::new(),
+            keyboard_modifiers: KeyboardModifiers::default(),
+            pending_keyboard: VecDeque::new(),
+            pending_channel2_readbacks: VecDeque::new(),
             lcd_state: [0; 16],
             version,
             video_status: if pal { 2 } else { 1 },
@@ -171,10 +260,20 @@ impl SlaveHle {
             pending_dx: 0,
             pending_dy: 0,
             attenuation: None,
+            clock_hz: crate::sched::cpu_clock_hz(pal),
             irq_asserted: false,
-            irq_countdown: None,
-            poll_countdown: POLL_INTERVAL,
+            irq_pending_channels: 0,
+            irq_countdowns: [None; 4],
+            poll_countdown: crate::sched::cpu_clock_hz(pal) / 60,
         }
+    }
+
+    fn readback_delay(&self) -> u64 {
+        self.clock_hz / 10_000
+    }
+
+    fn poll_interval(&self) -> u64 {
+        self.clock_hz / 60
     }
 
     /// Select the player video standard reported by the firmware's `F6`
@@ -182,20 +281,27 @@ impl SlaveHle {
     /// configurations even when they shared the same main system ROM.
     pub fn set_video_standard(&mut self, pal: bool) {
         self.video_status = if pal { 2 } else { 1 };
+        self.clock_hz = crate::sched::cpu_clock_hz(pal);
+        self.poll_countdown = self.poll_interval();
     }
 
     pub fn reset(&mut self) {
-        let (version, video_status, disc_type_code, disc_present) = (
+        let (version, video_status, disc_type_code, disc_present, keyboard_attached, clock_hz) = (
             self.version,
             self.video_status,
             self.disc_type_code,
             self.disc_present,
+            self.keyboard_attached,
+            self.clock_hz,
         );
         *self = Self {
             version,
             video_status,
             disc_type_code,
             disc_present,
+            keyboard_attached,
+            clock_hz,
+            poll_countdown: clock_hz / 60,
             ..Self::new("", true)
         };
     }
@@ -203,6 +309,16 @@ impl SlaveHle {
     /// Current IN2 line state.
     pub fn irq(&self) -> bool {
         self.irq_asserted
+    }
+
+    fn assert_channel_irq(&mut self, channel: usize) {
+        self.irq_pending_channels |= 1 << channel;
+        self.irq_asserted = true;
+    }
+
+    fn clear_channel_irq(&mut self, channel: usize) {
+        self.irq_pending_channels &= !(1 << channel);
+        self.irq_asserted = self.irq_pending_channels != 0;
     }
 
     pub fn diagnostic_snapshot(&self) -> SlaveDiagnosticSnapshot {
@@ -293,12 +409,12 @@ impl SlaveHle {
     fn service_drive_status_notification(&mut self) {
         if !self.xbus_interrupt_enable
             || self.channels[3].count != 0
-            || self.irq_countdown.is_some()
+            || self.irq_countdowns[3].is_some()
         {
             return;
         }
         if let Some(packet) = self.pending_drive_status.pop_front() {
-            self.prepare_readback(Some(READBACK_DELAY), 3, 4, packet, 0xB0);
+            self.prepare_readback(Some(self.readback_delay()), 3, 4, packet, 0xB0);
         }
     }
 
@@ -334,6 +450,169 @@ impl SlaveHle {
         self.device_y = y.clamp(0, 559);
     }
 
+    /// Set one physical player-control key. The native `/pck2` driver opens
+    /// and gates these channel-1 events; no guest event is synthesized while
+    /// that path is disabled.
+    pub fn set_player_control_key(&mut self, key: PlayerControlKey, pressed: bool) {
+        let bit = key.slave_mask();
+        let next = if pressed {
+            self.player_control_mask | bit
+        } else {
+            self.player_control_mask & !bit
+        };
+        if next == self.player_control_mask {
+            return;
+        }
+        self.player_control_mask = next;
+        if self.player_control_enabled {
+            self.pending_player_control.push_back([0x87, next]);
+            self.service_player_control();
+        }
+    }
+
+    /// Attach or remove a K-mode keyboard on the SLAVE-managed input port.
+    /// Attachment is persistent hardware state; the event gate and queued
+    /// key state are volatile firmware state.
+    pub fn set_keyboard_attached(&mut self, attached: bool) {
+        if self.keyboard_attached == attached {
+            return;
+        }
+        self.keyboard_attached = attached;
+        self.keyboard_events_enabled = false;
+        self.keyboard_pressed_keys.clear();
+        self.keyboard_modifiers = KeyboardModifiers::default();
+        self.pending_keyboard.clear();
+        if self.channels[2].cmd == 0xA0 {
+            self.channels[2] = OutChannel::default();
+            self.clear_channel_irq(2);
+        }
+    }
+
+    pub fn keyboard_attached(&self) -> bool {
+        self.keyboard_attached
+    }
+
+    /// Feed a physical keyboard transition into the Mono-I SLAVE input path.
+    /// The native `/kb1` driver consumes channel-C `A0` plus the keyboard's
+    /// documented two-byte K-mode state packet.
+    pub fn set_keyboard_key(&mut self, code: u8, pressed: bool, modifiers: KeyboardModifiers) {
+        if !self.keyboard_attached {
+            return;
+        }
+        let previous = self.keyboard_packet();
+        if pressed {
+            if let Some(index) = self
+                .keyboard_pressed_keys
+                .iter()
+                .position(|held| *held == code)
+            {
+                self.keyboard_pressed_keys.remove(index);
+            }
+            self.keyboard_pressed_keys.push(code);
+        } else if let Some(index) = self
+            .keyboard_pressed_keys
+            .iter()
+            .position(|held| *held == code)
+        {
+            self.keyboard_pressed_keys.remove(index);
+        }
+        self.keyboard_modifiers = modifiers;
+        let packet = self.keyboard_packet();
+        if packet == previous || !self.keyboard_events_enabled {
+            return;
+        }
+        self.pending_keyboard.push_back(packet);
+        self.service_keyboard();
+    }
+
+    pub fn set_keyboard_modifiers(&mut self, modifiers: KeyboardModifiers) {
+        if !self.keyboard_attached || modifiers == self.keyboard_modifiers {
+            return;
+        }
+        self.keyboard_modifiers = modifiers;
+        if self.keyboard_events_enabled {
+            self.pending_keyboard.push_back(self.keyboard_packet());
+            self.service_keyboard();
+        }
+    }
+
+    fn keyboard_packet(&self) -> [u8; 3] {
+        let key = self.keyboard_pressed_keys.last().copied();
+        let extension = if key.is_some() { 0 } else { 0x02 };
+        let key = key.unwrap_or(0);
+        [
+            0xA0,
+            0x80 | (self.keyboard_modifiers.packet_bits() << 3) | extension | ((key >> 7) & 1),
+            key & 0x7F,
+        ]
+    }
+
+    fn service_player_control(&mut self) {
+        if !self.player_control_enabled || self.channels[1].count != 0 {
+            return;
+        }
+        let Some(packet) = self.pending_player_control.pop_front() else {
+            return;
+        };
+        let channel = &mut self.channels[1];
+        channel.buf = [packet[0], packet[1], 0, 0];
+        channel.index = 0;
+        channel.count = 2;
+        channel.cmd = 0x87;
+        self.assert_channel_irq(1);
+    }
+
+    fn service_keyboard(&mut self) {
+        if !self.keyboard_events_enabled
+            || self.channels[2].count != 0
+            || !self.pending_channel2_readbacks.is_empty()
+        {
+            return;
+        }
+        let Some(packet) = self.pending_keyboard.pop_front() else {
+            return;
+        };
+        let channel = &mut self.channels[2];
+        channel.buf = [packet[0], packet[1], packet[2], 0];
+        channel.index = 0;
+        channel.count = 3;
+        channel.cmd = 0xA0;
+        self.assert_channel_irq(2);
+    }
+
+    fn queue_channel2_readback(
+        &mut self,
+        delay: Option<u64>,
+        count: usize,
+        data: [u8; 4],
+        cmd: u8,
+    ) {
+        self.pending_channel2_readbacks.push_back(PendingReadback {
+            delay,
+            count,
+            data,
+            cmd,
+        });
+        self.service_channel2();
+    }
+
+    fn service_channel2(&mut self) {
+        if self.channels[2].count != 0 || self.irq_countdowns[2].is_some() {
+            return;
+        }
+        if let Some(readback) = self.pending_channel2_readbacks.pop_front() {
+            self.prepare_readback(
+                readback.delay,
+                2,
+                readback.count,
+                readback.data,
+                readback.cmd,
+            );
+        } else {
+            self.service_keyboard();
+        }
+    }
+
     fn prepare_readback(
         &mut self,
         delay: Option<u64>,
@@ -347,25 +626,39 @@ impl SlaveHle {
         ch.count = count;
         ch.buf = data;
         ch.cmd = cmd;
-        self.irq_countdown = delay;
+        self.irq_countdowns[channel] = delay;
     }
 
     /// Advance time; fires delayed response IRQs and input polling.
     pub fn tick(&mut self, cycles: u64) {
         self.service_drive_status_notification();
-        if let Some(remaining) = self.irq_countdown {
-            if remaining <= cycles {
-                self.irq_asserted = true;
-                self.irq_countdown = None;
-            } else {
-                self.irq_countdown = Some(remaining - cycles);
+        for channel in 0..self.irq_countdowns.len() {
+            if let Some(remaining) = self.irq_countdowns[channel] {
+                if remaining <= cycles {
+                    self.irq_countdowns[channel] = None;
+                    self.assert_channel_irq(channel);
+                } else {
+                    self.irq_countdowns[channel] = Some(remaining - cycles);
+                }
             }
         }
         self.poll_countdown = self.poll_countdown.saturating_sub(cycles);
         if self.poll_countdown == 0 {
-            self.poll_countdown = POLL_INTERVAL;
+            self.poll_countdown = self.poll_interval();
             self.poll_inputs();
         }
+    }
+
+    /// CPU clocks until the next delayed response or pointer poll boundary.
+    pub(crate) fn cycles_until_next_event(&self) -> u64 {
+        self.irq_countdowns
+            .iter()
+            .flatten()
+            .copied()
+            .min()
+            .unwrap_or(u64::MAX)
+            .min(self.poll_countdown)
+            .max(1)
     }
 
     fn poll_inputs(&mut self) {
@@ -409,29 +702,46 @@ impl SlaveHle {
             // bit even while `$63.4` masks host notification. Keep the most
             // recent packet queued, but only assert IN2 when ch0 command 0x83
             // has enabled pointer-event notification.
-            self.prepare_readback(None, 0, 4, [byte3, byte2, byte1, byte0], 0xF7);
+            let packet = [byte3, byte2, byte1, byte0];
+            let (_, _, button_code) = pointer_packet_fields(packet);
+            log::debug!(
+                "slave: queue pointer packet raw={packet:02x?} device=({}, {}) button_code={button_code:#03x} host_buttons={btn:#04x}",
+                self.device_x,
+                self.device_y
+            );
+            self.prepare_readback(None, 0, 4, packet, 0xF7);
             if self.pointer_interrupt_enable {
-                self.irq_asserted = true;
+                self.assert_channel_irq(0);
             }
         }
     }
 
     /// Read a byte from a channel's response queue.
     pub fn read(&mut self, channel: usize) -> u8 {
-        let ch = &mut self.channels[channel];
-        if ch.count == 0 {
+        if self.channels[channel].count == 0 {
             return 0xFF;
+        }
+        // Native drivers may poll and consume a prepared response before its
+        // notification delay expires. That read acknowledges the response,
+        // so its timer must not later assert IN2 for an empty channel.
+        let polled_before_irq = self.irq_countdowns[channel].take().is_some();
+        let ch = &mut self.channels[channel];
+        if channel == 0 && ch.index == 0 && ch.count == 4 && ch.cmd == 0xF7 {
+            let (x, y, button_code) = pointer_packet_fields(ch.buf);
+            log::debug!(
+                "slave: consume pointer packet raw={:02x?} device=({}, {}) button_code={button_code:#03x}",
+                ch.buf,
+                x,
+                y
+            );
         }
         let ret = ch.buf[ch.index.min(3)];
         log::trace!("slave: read ch{channel} -> {ret:#04x}");
-        if ch.index == 0
-            && matches!(
+        let clear_irq = ch.index == 0
+            && (matches!(
                 ch.cmd,
-                0xB0 | 0xB1 | 0xF0 | 0xF3 | 0xF4 | 0xF7 | 0xF9 | 0xFB..=0xFE
-            )
-        {
-            self.irq_asserted = false;
-        }
+                0xA0 | 0xA2 | 0xB0 | 0xB1 | 0xF0 | 0xF3 | 0xF4 | 0xF7 | 0xF9 | 0xFB..=0xFE
+            ) || (channel == 1 && ch.cmd == 0x87));
         let ch = &mut self.channels[channel];
         ch.index += 1;
         ch.count -= 1;
@@ -440,6 +750,14 @@ impl SlaveHle {
             ch.cmd = 0;
             ch.buf = [0; 4];
         }
+        if clear_irq || polled_before_irq {
+            self.clear_channel_irq(channel);
+        }
+        if channel == 1 {
+            self.service_player_control();
+        } else if channel == 2 {
+            self.service_channel2();
+        }
         ret
     }
 
@@ -447,10 +765,22 @@ impl SlaveHle {
     pub fn write(&mut self, channel: usize, data: u8) {
         log::trace!("slave: write ch{channel} <- {data:#04x}");
         if channel == 1 && self.in_index == 0 {
-            // Channel 1 single-byte writes: unknown/ignored.
-            log::trace!("slave: ch1 unknown register {data:#04x}");
-            self.in_buf = [0; 17];
-            self.in_count = 0;
+            match data {
+                0x8D => {
+                    self.player_control_enabled = true;
+                    self.pending_player_control.clear();
+                }
+                0x8E => {
+                    self.player_control_enabled = false;
+                    self.pending_player_control.clear();
+                    if self.channels[1].cmd == 0x87 {
+                        self.channels[1] = OutChannel::default();
+                        self.clear_channel_irq(1);
+                    }
+                }
+                _ => log::trace!("slave: ch1 unknown register {data:#04x}"),
+            }
+            self.clear_input();
             return;
         }
         self.in_buf[self.in_index.min(16)] = data;
@@ -483,12 +813,18 @@ impl SlaveHle {
                 log::trace!("slave: ch0 update mouse position ({data:#04x})");
                 self.in_count = 3;
             } else if self.in_index == self.in_count {
-                self.device_x = (((self.in_buf[1] as i32 & 0x70) << 3)
-                    | (self.in_buf[2] as i32 & 0x7F))
+                let x = (((self.in_buf[1] as i32 & 0x70) << 3) | (self.in_buf[2] as i32 & 0x7F))
                     .min(767);
-                self.device_y = (((self.in_buf[1] as i32 & 0x0F) << 6)
-                    | (self.in_buf[0] as i32 & 0x3F))
+                let y = (((self.in_buf[1] as i32 & 0x0F) << 6) | (self.in_buf[0] as i32 & 0x3F))
                     .min(559);
+                self.device_x = x;
+                self.device_y = y;
+                log::debug!(
+                    "slave: absolute pointer command raw={:02x?} device=({}, {})",
+                    &self.in_buf[..3],
+                    x,
+                    y
+                );
                 self.clear_input();
             }
         } else {
@@ -500,7 +836,7 @@ impl SlaveHle {
                 0x83 => {
                     self.pointer_interrupt_enable = true;
                     if self.channels[0].cmd == 0xF7 && self.channels[0].count != 0 {
-                        self.irq_asserted = true;
+                        self.assert_channel_irq(0);
                     }
                 }
                 0x84 => self.pointer_interrupt_enable = false,
@@ -547,6 +883,20 @@ impl SlaveHle {
             }
         } else {
             match data {
+                0x80 => {
+                    self.keyboard_events_enabled = true;
+                    self.pending_keyboard.clear();
+                    self.clear_input();
+                }
+                0x81 => {
+                    self.keyboard_events_enabled = false;
+                    self.pending_keyboard.clear();
+                    if self.channels[2].cmd == 0xA0 {
+                        self.channels[2] = OutChannel::default();
+                        self.clear_channel_irq(2);
+                    }
+                    self.clear_input();
+                }
                 0x82 => {
                     log::trace!("slave: mute audio");
                     self.clear_input();
@@ -569,7 +919,7 @@ impl SlaveHle {
                     }
                     self.clear_input();
                 }
-                0x80..=0x87 | 0x89 | 0x8B..=0x8C | 0x8E..=0x8F | 0x91..=0x93 => {
+                0x84..=0x87 | 0x89 | 0x8B..=0x8C | 0x8E..=0x8F | 0x91..=0x93 => {
                     // Immediate flag/control commands decoded from the
                     // firmware. Their lower-level SERVO effects are not
                     // required for host transport yet.
@@ -605,7 +955,7 @@ impl SlaveHle {
                         // Retained launch mode sets the driver's disc-base
                         // available bit, prompting its B1 follow-up query.
                         self.prepare_readback(
-                            Some(15_000_000 / 4),
+                            Some(self.clock_hz / 4),
                             3,
                             4,
                             self.drive_status_packet(),
@@ -614,7 +964,7 @@ impl SlaveHle {
                     }
                     0xB1 => {
                         self.prepare_readback(
-                            Some(READBACK_DELAY),
+                            Some(self.readback_delay()),
                             3,
                             4,
                             [0xB1, 0x00, 0x00, 0x00],
@@ -631,12 +981,25 @@ impl SlaveHle {
                 0xF0 => {
                     // Request SLAVE revision.
                     let [v0, v1] = self.version;
-                    self.prepare_readback(Some(READBACK_DELAY), 2, 2, [0xF0, v0, v1, 0], 0xF0);
+                    self.queue_channel2_readback(
+                        Some(self.readback_delay()),
+                        2,
+                        [0xF0, v0, v1, 0],
+                        0xF0,
+                    );
                     self.in_index = 0;
                 }
                 0xF3 => {
-                    // Request pointer type (1 = relative).
-                    self.prepare_readback(Some(READBACK_DELAY), 2, 2, [0xF3, 1, 0, 0], 0xF3);
+                    // Request the configuration-device class derived from
+                    // pointing-port recognition. Class 5 adds `/kb1` to the
+                    // ordinary class-C relative-pointer configuration.
+                    let device_class = if self.keyboard_attached { 5 } else { 1 };
+                    self.queue_channel2_readback(
+                        Some(self.readback_delay()),
+                        2,
+                        [0xF3, device_class, 0xFF, 0],
+                        0xF3,
+                    );
                     self.in_index = 0;
                 }
                 0xF4 => {
@@ -644,13 +1007,18 @@ impl SlaveHle {
                     // forms this byte from $55 bits 0-1; bit 1 is set by
                     // ch0 0x88 during the PLAY CD-I launch flow.
                     let status = self.boot_status;
-                    self.prepare_readback(Some(READBACK_DELAY), 2, 2, [0xF4, status, 0, 0], 0xF4);
+                    self.queue_channel2_readback(
+                        Some(self.readback_delay()),
+                        2,
+                        [0xF4, status, 0, 0],
+                        0xF4,
+                    );
                     self.in_index = 0;
                 }
                 0xF6 => {
                     // Request NTSC/PAL status; response without an IRQ.
                     let vs = self.video_status;
-                    self.prepare_readback(None, 2, 2, [0xF6, vs, 0, 0], 0xF6);
+                    self.queue_channel2_readback(None, 2, [0xF6, vs, 0, 0], 0xF6);
                     self.in_index = 0;
                 }
                 0xF7 => {
@@ -675,13 +1043,17 @@ impl SlaveHle {
                     self.in_index = 0;
                     self.service_drive_status_notification();
                 }
-                0xF9 | 0xFB..=0xFD => {
-                    // Undocumented queries used by the disc-play flow;
-                    // acknowledge with a polled (no-IRQ) echoed response so
-                    // the driver's wait loop completes (protocol under
-                    // investigation — see CODEX_HANDOVER.md).
-                    log::debug!("slave: ch3 command {data:#04x} — echo-ack");
-                    self.prepare_readback(None, 2, 2, [data, 0, 0, 0], data);
+                0xF9 => {
+                    // Firmware clears the host-ready gate paired with F8.
+                    self.in_index = 0;
+                }
+                0xFB => {
+                    self.xbus_interrupt_enable = false;
+                    self.in_index = 0;
+                }
+                0xFC | 0xFD => {
+                    // Firmware drives/releases Port C bit 6. Neither command
+                    // returns a channel-2 echo response.
                     self.in_index = 0;
                 }
                 _ => {
@@ -696,6 +1068,20 @@ impl SlaveHle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ntsc_host_clock_scales_fixed_slave_delays() {
+        let mut slave = SlaveHle::new("3231", true);
+        assert_eq!(slave.readback_delay(), 1_500);
+        assert_eq!(slave.poll_interval(), 250_000);
+
+        slave.set_video_standard(false);
+        assert_eq!(slave.readback_delay(), 1_510);
+        assert_eq!(slave.poll_interval(), 251_748);
+        slave.reset();
+        assert_eq!(slave.readback_delay(), 1_510);
+        assert_eq!(slave.poll_countdown, 251_748);
+    }
 
     #[test]
     fn revision_query_responds_on_channel_2() {
@@ -723,6 +1109,96 @@ mod tests {
     }
 
     #[test]
+    fn f3_advertises_the_attached_keyboard_class() {
+        let mut slave = SlaveHle::new("3231", true);
+        slave.write(3, 0xF3);
+        slave.tick(READBACK_DELAY);
+        assert_eq!([slave.read(2), slave.read(2)], [0xF3, 1]);
+
+        slave.set_keyboard_attached(true);
+        slave.reset();
+        slave.write(3, 0xF3);
+        slave.tick(READBACK_DELAY);
+        assert_eq!([slave.read(2), slave.read(2)], [0xF3, 5]);
+    }
+
+    #[test]
+    fn back_to_back_status_queries_do_not_overwrite_keyboard_discovery() {
+        let mut slave = SlaveHle::new("3231", true);
+        slave.set_keyboard_attached(true);
+        slave.write(3, 0xF3);
+        slave.write(3, 0xF4);
+
+        slave.tick(READBACK_DELAY);
+        assert_eq!([slave.read(2), slave.read(2)], [0xF3, 5]);
+        assert!(!slave.irq());
+
+        slave.tick(READBACK_DELAY);
+        assert_eq!([slave.read(2), slave.read(2)], [0xF4, 0]);
+    }
+
+    #[test]
+    fn polling_a_delayed_reply_cancels_its_stale_interrupt() {
+        let mut slave = SlaveHle::new("3231", true);
+        slave.prepare_readback(Some(READBACK_DELAY), 3, 4, [0xB0, 0x00, 0x00, 0x00], 0xB0);
+
+        assert_eq!(
+            [slave.read(3), slave.read(3), slave.read(3), slave.read(3)],
+            [0xB0, 0x00, 0x00, 0x00]
+        );
+        slave.tick(READBACK_DELAY);
+        assert!(!slave.irq());
+    }
+
+    #[test]
+    fn channel_d_control_commands_do_not_synthesize_query_replies() {
+        let mut slave = SlaveHle::new("3231", true);
+        for command in [0xF9, 0xFB, 0xFC, 0xFD] {
+            slave.write(3, command);
+            assert_eq!(slave.read(2), 0xFF, "command {command:#04x}");
+        }
+    }
+
+    #[test]
+    fn native_keyboard_gate_delivers_press_and_release_packets() {
+        let mut slave = SlaveHle::new("3231", true);
+        slave.set_keyboard_attached(true);
+        let modifiers = crate::keyboard::KeyboardModifiers {
+            shift: true,
+            control: true,
+            ..crate::keyboard::KeyboardModifiers::default()
+        };
+
+        slave.set_keyboard_key(b'A', true, modifiers);
+        assert_eq!(slave.read(2), 0xFF, "disabled device stays silent");
+
+        slave.write(2, 0x80);
+        slave.set_keyboard_key(b'A', false, Default::default());
+        slave.set_keyboard_key(b'A', true, modifiers);
+        assert!(slave.irq());
+        assert_eq!(
+            [slave.read(2), slave.read(2), slave.read(2)],
+            [0xA0, 0x82, 0x00]
+        );
+        assert!(slave.irq(), "the queued press reasserts IN2");
+        assert_eq!(
+            [slave.read(2), slave.read(2), slave.read(2)],
+            [0xA0, 0xC8, b'A']
+        );
+    }
+
+    #[test]
+    fn disabling_keyboard_events_discards_pending_packets() {
+        let mut slave = SlaveHle::new("3231", true);
+        slave.set_keyboard_attached(true);
+        slave.write(2, 0x80);
+        slave.set_keyboard_key(b'A', true, Default::default());
+        slave.write(2, 0x81);
+        assert!(!slave.irq());
+        assert_eq!(slave.read(2), 0xFF);
+    }
+
+    #[test]
     fn video_standard_can_switch_to_ntsc_and_survives_reset() {
         let mut s = SlaveHle::new("3231", true);
         s.set_video_standard(false);
@@ -737,6 +1213,49 @@ mod tests {
     fn empty_channel_reads_ff() {
         let mut s = SlaveHle::new("3231", true);
         assert_eq!(s.read(0), 0xFF);
+    }
+
+    #[test]
+    fn native_player_control_gate_delivers_press_and_release_packets() {
+        let mut slave = SlaveHle::new("3231", true);
+        slave.set_player_control_key(PlayerControlKey::Pause, true);
+        assert_eq!(slave.read(1), 0xFF, "disabled device stays silent");
+
+        slave.write(1, 0x8D);
+        slave.set_player_control_key(PlayerControlKey::Pause, false);
+        slave.set_player_control_key(PlayerControlKey::Pause, true);
+        assert!(slave.irq());
+        assert_eq!([slave.read(1), slave.read(1)], [0x87, 0x00]);
+        assert!(slave.irq(), "the queued press reasserts IN2");
+        assert_eq!([slave.read(1), slave.read(1)], [0x87, 0x10]);
+    }
+
+    #[test]
+    fn player_control_raw_masks_match_the_bundled_pck2_driver() {
+        let mut slave = SlaveHle::new("3231", true);
+        slave.write(1, 0x8D);
+        for (key, mask) in [
+            (PlayerControlKey::Play, 0x20),
+            (PlayerControlKey::Stop, 0x04),
+            (PlayerControlKey::Pause, 0x10),
+            (PlayerControlKey::Next, 0x01),
+            (PlayerControlKey::Previous, 0x02),
+        ] {
+            slave.set_player_control_key(key, true);
+            assert_eq!([slave.read(1), slave.read(1)], [0x87, mask]);
+            slave.set_player_control_key(key, false);
+            assert_eq!([slave.read(1), slave.read(1)], [0x87, 0x00]);
+        }
+    }
+
+    #[test]
+    fn disabling_player_controls_discards_pending_events() {
+        let mut slave = SlaveHle::new("3231", true);
+        slave.write(1, 0x8D);
+        slave.set_player_control_key(PlayerControlKey::Play, true);
+        slave.write(1, 0x8E);
+        assert!(!slave.irq());
+        assert_eq!(slave.read(1), 0xFF);
     }
 
     #[test]
@@ -780,6 +1299,13 @@ mod tests {
         s.set_pointer(100, 100, 1);
         s.tick(POLL_INTERVAL);
         assert_eq!(s.read(0) & 0x38, 0x18);
+
+        for _ in 0..3 {
+            s.read(0);
+        }
+        s.set_pointer(100, 100, 2);
+        s.tick(POLL_INTERVAL);
+        assert_eq!(s.read(0) & 0x38, 0x28);
     }
 
     #[test]

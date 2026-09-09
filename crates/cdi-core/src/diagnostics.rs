@@ -3,8 +3,9 @@
 
 use crate::cdic::CdicDiagnosticSnapshot;
 use crate::dvc::{DvcRegisterSnapshot, DvcStats};
-use crate::mcd212::DisplayGeometry;
+use crate::mcd212::{DisplayGeometry, Mcd212LineDiagnostic};
 use crate::slave::SlaveDiagnosticSnapshot;
+use cdi_scc68070::TimerDiagnosticSnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
@@ -57,10 +58,19 @@ pub struct Mcd212DiagnosticSnapshot {
     pub ddr: [u16; 2],
     pub dcp: [u16; 2],
     pub dca: [u32; 2],
+    pub clut: Vec<u32>,
+    pub clut_bank: [u8; 2],
     pub image_coding_method: u32,
     pub transparency_control: u32,
     pub plane_order: u32,
+    pub transparent_color: [u32; 2],
+    pub mask_color: [u32; 2],
     pub dyuv_absolute_start: [u32; 2],
+    pub matte_control: [u32; 8],
+    pub backdrop_color: u8,
+    pub mosaic_hold: [u32; 2],
+    pub weight_factor_base: [u8; 2],
+    pub line_states: Vec<Mcd212LineDiagnostic>,
     pub cursor_position: u32,
     pub cursor_control: u32,
     pub frame_count: u64,
@@ -233,6 +243,7 @@ pub struct MachineDiagnosticSnapshot {
 #[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "savestate", serde(tag = "kind", rename_all = "kebab-case"))]
 pub enum MachineDiagnosticEvent {
+    /// One MCD212 television field boundary (50 Hz PAL or 60 Hz NTSC).
     Frame {
         cycle: u64,
         frame: u64,
@@ -240,6 +251,22 @@ pub enum MachineDiagnosticEvent {
         plane_a_hash: u64,
         plane_b_hash: u64,
         raster_hash: u64,
+    },
+    /// One edge of CDIC's independent nominal 75 Hz sector clock.
+    DiscClock {
+        cycle: u64,
+        tick: u64,
+        mode: u8,
+        lba: u32,
+        read_enabled: bool,
+    },
+    /// One SCC68070 timer-0 overflow used by CD-RTOS as its system tick.
+    SystemTick {
+        cycle: u64,
+        tick: u64,
+        timer0: u16,
+        reload: u16,
+        interrupt_asserted: bool,
     },
     DiscPosition {
         cycle: u64,
@@ -261,6 +288,13 @@ pub enum MachineDiagnosticEvent {
         data_buffer: u16,
         interrupt_asserted: bool,
     },
+    /// A decoded CDIC audio queue transition at the core/frontend boundary.
+    AudioBuffer {
+        cycle: u64,
+        queued_samples: u64,
+        audio_buffer: u16,
+        z_buffer: u16,
+    },
     /// A modeled SERVO B0 status or queued SLAVE channel-3 packet changed.
     ///
     /// Mono-I SERVO firmware builds B0 at `$178B..$181D`; its byte-2 bit 6
@@ -276,6 +310,18 @@ pub enum MachineDiagnosticEvent {
         disc_present: bool,
         disc_type_code: u8,
         pending_packets: u32,
+    },
+    /// Host input, the SLAVE's polled device position, or related IRQ state changed.
+    PointerUpdate {
+        cycle: u64,
+        input_x: i32,
+        input_y: i32,
+        device_x: i32,
+        device_y: i32,
+        buttons: u8,
+        polling_active: bool,
+        interrupt_enabled: bool,
+        interrupt_asserted: bool,
     },
     DvcCounters {
         cycle: u64,
@@ -427,17 +473,34 @@ pub enum MachineDiagnosticEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DiagnosticProbe {
     pub frame: u64,
+    pub system_tick: TimerDiagnosticSnapshot,
+    pub cdic_sector_ticks: u64,
     pub cdic_mode: u8,
     pub cdic_lba: u32,
+    pub cdic_read_enabled: bool,
+    pub cdic_audio_queue: usize,
     pub cdic_state: [u16; 5],
     pub cdic_selected_file: u16,
     pub cdic_selected_channels: u32,
     pub cdic_audio_channel: u16,
     pub cdic_interrupt: bool,
+    pub pointer: PointerDiagnosticProbe,
     pub slave_drive_status: SlaveDriveStatusProbe,
     pub dvc_errors: [u64; 6],
     pub dvc_milestones: [u64; 12],
     pub dvc_state: Option<DvcRegisterSnapshot>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PointerDiagnosticProbe {
+    pub input_x: i32,
+    pub input_y: i32,
+    pub device_x: i32,
+    pub device_y: i32,
+    pub buttons: u8,
+    pub polling_active: bool,
+    pub interrupt_enabled: bool,
+    pub interrupt_asserted: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

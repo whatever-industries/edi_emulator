@@ -133,16 +133,43 @@ Update that document's status and next action whenever a checkpoint is reached.
 
 ## Required verification
 
-Run before handoff:
+Choose the verification tier that matches the files and behavior changed. Run
+the highest applicable tier when a change spans categories; do not use a
+frontend-only tier for shared/core changes.
+
+### Tier 1 — frontend-only changes
+
+Use for UI, input-mapping, presentation, and library-browser changes confined
+to `crates/cdi-frontend` that do not alter emulator behavior or shared crates:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy -p cdi-frontend --all-targets --all-features -- -D warnings
+cargo test -p cdi-frontend
+```
+
+### Tier 2 — workspace changes
+
+Use for shared libraries, Cargo/build configuration, or emulator changes that
+do not affect compatibility-sensitive CPU/device behavior:
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
+```
+
+### Tier 3 — compatibility and release changes
+
+Use for CPU/device emulation, timing, video/audio/transport behavior, firmware,
+compatibility incidents, external-reference updates, or release checkpoints.
+Run Tier 2 plus the Harte regression:
+
+```sh
 scripts/fetch-harte.sh
 cargo test -p cdi-scc68070 --test harte --release -- --nocapture
 ```
 
-The Harte result must remain 118,187 passed and 0 failed. Ask the user before
-creating a commit unless they explicitly authorized that commit in the active
-request.
+The Harte result must remain 118,187 passed and 0 failed. Record any skipped
+tier and the reason in the handoff. Ask the user before creating a commit
+unless they explicitly authorized that commit in the active request.

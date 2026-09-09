@@ -538,6 +538,94 @@
       ]
     },
     {
+      "requirement": "Optional player-control keys reach the native /pck2 UCM driver without entering base pointer packets",
+      "subsystem": "slave-input",
+      "status": "implemented-tested",
+      "specification": [
+        "Green Book R2 player-control key codes and UCM keyboard calls",
+        "Philips Technical Note 073.2 printed pages 1 through 3"
+      ],
+      "firmware_evidence": [
+        "Bundled CSD record 11:/pck2:KG=\"8\"",
+        "Bundled ckeydriv/pck2driv channel-1 $8D/$8E gate and $87 packet decoder"
+      ],
+      "source_symbols": [
+        "cdi_core::slave::PlayerControlKey",
+        "cdi_core::slave::SlaveHle::set_player_control_key"
+      ],
+      "tests": [
+        "cdi_core::slave::tests::native_player_control_gate_delivers_press_and_release_packets",
+        "cdi_core::slave::tests::player_control_raw_masks_match_the_bundled_pck2_driver",
+        "cdi_core::slave::tests::disabling_player_controls_discards_pending_events"
+      ],
+      "known_gaps": [
+        "Manual confirmation remains for a title that opens /pck2",
+        "Other player models may advertise a different optional device name or route"
+      ]
+    },
+    {
+      "requirement": "An optional rear-port K-mode keyboard is recognized and transported through SCC68070 UART port 2 as /kb",
+      "subsystem": "keyboard",
+      "status": "implemented-tested",
+      "specification": [
+        "Philips Keyboard Specification version 0.92 pages 1 through 5",
+        "CD-i 605 technical documentation chapters 8 and 9"
+      ],
+      "firmware_evidence": [
+        "Bundled /kb descriptor uses kbdrvr at SCC68070 UART base $80002011",
+        "Bundled kbdrvr programs 8-bit UART receive mode and accepts K-mode ID $CB"
+      ],
+      "source_symbols": [
+        "cdi_core::keyboard::KeyboardKMode",
+        "cdi_core::keyboard::KeyboardModifiers",
+        "cdi_scc68070::Peripherals::uart_rx"
+      ],
+      "tests": [
+        "cdi_core::keyboard::tests::powered_keyboard_advertises_id_after_one_hundred_milliseconds",
+        "cdi_core::keyboard::tests::recognition_requires_ten_milliseconds_low_and_returns_k_mode_id",
+        "cdi_core::keyboard::tests::press_release_and_modifiers_use_documented_two_byte_packets",
+        "cdi_core::keyboard::tests::unchanged_state_is_silent",
+        "cdi_core::machine::tests::k_mode_keyboard_crosses_uart_register_boundary"
+      ],
+      "known_gaps": [
+        "The consumer frontend setting selects front-input /kb1 rather than this separate rear-port route",
+        "T-mode belongs to later 450/380 player support and is not implemented"
+      ]
+    },
+    {
+      "requirement": "An optional front-input K-mode keyboard is discovered as /kb1 and delivered through Mono-I SLAVE channel 2",
+      "subsystem": "slave-input",
+      "status": "implemented-tested",
+      "specification": [
+        "Philips Keyboard Specification version 0.92 pages 1 through 7",
+        "CD-i 605 technical documentation input-device and configuration chapters",
+        "CD-i 615 technical documentation sections 2.2.2 and 5.2"
+      ],
+      "firmware_evidence": [
+        "Bundled CRC-valid kb1driv and /kb1 modules",
+        "Bundled config consumes CPU-visible F3 class 5 while the SLAVE firmware uses $56.1 as the channel-C keyboard event gate",
+        "Bundled firmware builds the K-mode A0 keyboard report family on channel C"
+      ],
+      "source_symbols": [
+        "cdi_core::slave::SlaveHle::set_keyboard_attached",
+        "cdi_core::slave::SlaveHle::set_keyboard_key",
+        "cdi_core::machine::Machine::set_keyboard_attached"
+      ],
+      "tests": [
+        "cdi_core::slave::tests::f3_advertises_the_attached_keyboard_class",
+        "cdi_core::slave::tests::back_to_back_status_queries_do_not_overwrite_keyboard_discovery",
+        "cdi_core::slave::tests::channel_d_control_commands_do_not_synthesize_query_replies",
+        "cdi_core::slave::tests::native_keyboard_gate_delivers_press_and_release_packets",
+        "cdi_core::slave::tests::disabling_keyboard_events_discards_pending_packets",
+        "cdi_core::machine::tests::bundled_rom_consumes_keyboard_class_discovery",
+        "cdi_frontend::tests::cdi_keyboard_uses_green_book_character_and_cursor_codes"
+      ],
+      "known_gaps": [
+        "Manual confirmation remains for Web-i and an unrelated title that opens /kb1",
+        "T-mode and IKAT device-ID replies belong to later player generations"
+      ]
+    },
+    {
       "requirement": "Native Video CD engine errors are attributed to the transport or decoder stage that triggered them",
       "subsystem": "vcd",
       "status": "gap",

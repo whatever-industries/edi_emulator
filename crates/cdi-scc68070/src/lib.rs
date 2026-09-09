@@ -16,7 +16,7 @@ pub mod periph;
 
 pub use bus::{Bus68k, BusAccessSize, BusError, FnCode};
 pub use cpu::Cpu;
-pub use periph::Peripherals;
+pub use periph::{Peripherals, TimerDiagnosticSnapshot};
 
 /// Master-clock tick count (30 MHz crystal domain).
 pub type Ticks = u64;

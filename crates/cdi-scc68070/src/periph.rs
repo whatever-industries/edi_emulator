@@ -27,6 +27,16 @@ const TIMER_DIVIDER: u64 = 96;
 /// Crude TX pacing: one byte drained per this many CPU cycles.
 const UART_TX_CYCLES: u64 = 1200;
 
+/// Read-only timer state used by bounded machine diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+pub struct TimerDiagnosticSnapshot {
+    pub timer0: u16,
+    pub reload: u16,
+    pub overflows: u64,
+    pub interrupt_asserted: bool,
+}
+
 #[derive(Debug, Default, Clone)]
 #[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
 pub struct Peripherals {
@@ -53,12 +63,18 @@ pub struct Peripherals {
     timer1: u16,
     timer2: u16,
     timer_accum: u64,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    timer0_overflows: u64,
 
     // UART
     umr: u8,
     usr: u8,
     ucsr: u8,
     ucr: u8,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    uart_rx_enabled: bool,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    uart_tx_enabled: bool,
     rx_holding: u8,
     #[cfg_attr(feature = "savestate", serde(default))]
     rx_queue: Vec<u8>,
@@ -94,12 +110,15 @@ impl Peripherals {
         self.picr1 = 0;
         self.picr2 = 0;
         self.timer_int = false;
+        self.timer0_overflows = 0;
         self.uart_rx_int = false;
         self.uart_tx_int = false;
         self.tsr = 0;
         self.tcr = 0;
         self.usr = USR_TXRDY | USR_TXEMT;
         self.ucr = 0;
+        self.uart_rx_enabled = false;
+        self.uart_tx_enabled = false;
         self.tx_fifo.clear();
         self.rx_queue.clear();
         self.dma_regs.fill(0);
@@ -120,9 +139,43 @@ impl Peripherals {
         self.int2_line = state;
     }
 
+    /// Snapshot timer 0 without reading or acknowledging guest-visible state.
+    pub fn timer_diagnostic_snapshot(&self) -> TimerDiagnosticSnapshot {
+        TimerDiagnosticSnapshot {
+            timer0: self.timer0,
+            reload: self.reload,
+            overflows: self.timer0_overflows,
+            interrupt_asserted: self.timer_int,
+        }
+    }
+
+    /// CPU clocks until the next internally clocked peripheral boundary.
+    ///
+    /// The machine scheduler uses this to advance devices chronologically
+    /// across a completed CPU instruction without changing its cycle total.
+    pub fn cycles_until_next_event(&self) -> u64 {
+        let increments = u64::from(u16::MAX - self.timer0) + 1;
+        let timer =
+            (TIMER_DIVIDER - self.timer_accum) + (increments - 1).saturating_mul(TIMER_DIVIDER);
+        let uart_active =
+            self.uart_tx_enabled || (self.uart_rx_enabled && !self.rx_queue.is_empty());
+        let uart = if uart_active {
+            UART_TX_CYCLES - self.tx_accum
+        } else {
+            u64::MAX
+        };
+        timer.min(uart).max(1)
+    }
+
     /// Feed a received byte into the UART (e.g. debug terminal input).
     pub fn uart_rx(&mut self, byte: u8) {
         self.rx_queue.push(byte);
+    }
+
+    /// Whether the UART receiver is enabled and therefore asserts RTS to an
+    /// attached serial input device.
+    pub fn uart_receiver_enabled(&self) -> bool {
+        self.uart_rx_enabled
     }
 
     // DMA channel 0 register access (big-endian bytes at $80004000+;
@@ -304,6 +357,7 @@ impl Peripherals {
             self.timer0 = self.timer0.wrapping_add(1);
             if self.timer0 == 0 {
                 self.timer0 = self.reload;
+                self.timer0_overflows = self.timer0_overflows.saturating_add(1);
                 self.tsr |= TSR_OV0;
                 self.timer_int = true;
             }
@@ -314,7 +368,7 @@ impl Peripherals {
         self.tx_accum += cycles;
         while self.tx_accum >= UART_TX_CYCLES {
             self.tx_accum -= UART_TX_CYCLES;
-            if (self.ucr >> 2) & 3 == 1 {
+            if self.uart_tx_enabled {
                 self.usr |= USR_TXRDY;
                 self.uart_tx_int = true;
                 if let Some(byte) = self.tx_fifo.first().copied() {
@@ -326,7 +380,7 @@ impl Peripherals {
                 }
             }
             // UART RX: present the next queued byte when receiver enabled.
-            if self.ucr & 3 == 1 && !self.rx_queue.is_empty() {
+            if self.uart_rx_enabled && !self.rx_queue.is_empty() {
                 self.rx_holding = self.rx_queue[0];
                 self.usr |= USR_RXRDY;
                 self.uart_rx_int = true;
@@ -350,9 +404,11 @@ impl Peripherals {
             0x2017 => self.ucr,
             0x2019 => self.tx_fifo.last().copied().unwrap_or(0),
             0x201B => {
-                self.usr &= !USR_RXRDY;
-                if !self.rx_queue.is_empty() {
-                    self.rx_queue.remove(0);
+                if self.usr & USR_RXRDY != 0 {
+                    self.usr &= !USR_RXRDY;
+                    if !self.rx_queue.is_empty() {
+                        self.rx_queue.remove(0);
+                    }
                 }
                 self.rx_holding
             }
@@ -395,7 +451,7 @@ impl Peripherals {
             0x2009 => self.i2c_regs[4] = val,
             0x2011 => self.umr = val,
             0x2015 => self.ucsr = val,
-            0x2017 => self.ucr = val,
+            0x2017 => self.write_uart_command(val),
             0x2019 => {
                 self.tx_fifo.push(val);
                 self.usr &= !USR_TXEMT;
@@ -445,6 +501,53 @@ impl Peripherals {
             }
         }
     }
+
+    fn write_uart_command(&mut self, val: u8) {
+        self.ucr = val;
+
+        // The receiver/transmitter fields are commands, not retained mode
+        // bits: 00 leaves the state unchanged, 01 enables, and 10 disables.
+        // This is the sequence used by the bundled `gtuart`/`kbdrvr` modules
+        // (notably receive-enable/transmit-disable command $89).
+        match val & 0x03 {
+            0x01 => self.uart_rx_enabled = true,
+            0x02 => {
+                self.uart_rx_enabled = false;
+                self.usr &= !USR_RXRDY;
+                self.uart_rx_int = false;
+            }
+            _ => {}
+        }
+        match (val >> 2) & 0x03 {
+            0x01 => self.uart_tx_enabled = true,
+            0x02 => {
+                self.uart_tx_enabled = false;
+                self.uart_tx_int = false;
+            }
+            _ => {}
+        }
+
+        match (val >> 4) & 0x07 {
+            0x02 => {
+                self.uart_rx_enabled = false;
+                self.usr &= !USR_RXRDY;
+                self.uart_rx_int = false;
+                self.rx_queue.clear();
+            }
+            0x03 => {
+                self.uart_tx_enabled = false;
+                self.tx_fifo.clear();
+                self.usr |= USR_TXRDY | USR_TXEMT;
+                self.uart_tx_int = false;
+            }
+            0x04 => {
+                // Reset receiver error status. Framing/parity/overrun bits
+                // are not otherwise synthesized by this implementation.
+                self.usr &= 0x0F;
+            }
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -461,6 +564,7 @@ mod tests {
         p.write8(0x2025, 0xFE); // timer0 = 0xFFFE: two ticks to overflow
         assert_eq!(p.pending_ipl(), 0);
         p.tick(2 * TIMER_DIVIDER);
+        assert_eq!(p.timer_diagnostic_snapshot().overflows, 1);
         assert_eq!(p.pending_ipl(), 5);
         assert_eq!(p.read8(0x2020) & TSR_OV0, TSR_OV0);
         // Acknowledge clears the source and yields vector 0x38+5.
@@ -468,6 +572,29 @@ mod tests {
         assert_eq!(p.pending_ipl(), 0);
         // Counter reloaded.
         assert_eq!(p.read8(0x2024), 0xFF);
+    }
+
+    #[test]
+    fn timer_diagnostic_counter_is_observational_and_resets() {
+        let mut p = Peripherals::new();
+        p.write8(0x2022, 0xFF);
+        p.write8(0x2023, 0xFE);
+        p.write8(0x2024, 0xFF);
+        p.write8(0x2025, 0xFF);
+
+        p.tick(TIMER_DIVIDER);
+        assert_eq!(
+            p.timer_diagnostic_snapshot(),
+            TimerDiagnosticSnapshot {
+                timer0: 0xFFFE,
+                reload: 0xFFFE,
+                overflows: 1,
+                interrupt_asserted: true,
+            }
+        );
+
+        p.reset();
+        assert_eq!(p.timer_diagnostic_snapshot().overflows, 0);
     }
 
     #[test]
@@ -561,5 +688,48 @@ mod tests {
         p.tick(UART_TX_CYCLES * 3);
         assert_eq!(p.tx_out, b"OK");
         assert_eq!(p.read8(0x2013) & USR_TXEMT, USR_TXEMT);
+    }
+
+    #[test]
+    fn uart_data_read_before_ready_preserves_pending_input() {
+        let mut p = Peripherals::new();
+        p.write8(0x2017, 0x01);
+        p.uart_rx(b' ');
+
+        assert_eq!(p.read8(0x201B), 0);
+        assert_eq!(p.read8(0x2013) & USR_RXRDY, 0);
+
+        p.tick(UART_TX_CYCLES);
+        assert_eq!(p.read8(0x2013) & USR_RXRDY, USR_RXRDY);
+        assert_eq!(p.read8(0x201B), b' ');
+        assert_eq!(p.read8(0x2013) & USR_RXRDY, 0);
+    }
+
+    #[test]
+    fn uart_control_fields_are_commands_with_persistent_enable_state() {
+        let mut p = Peripherals::new();
+        p.write8(0x2017, 0x01);
+        assert!(p.uart_receiver_enabled());
+
+        // Reset-error carries receiver command 00 and leaves RTS unchanged.
+        p.write8(0x2017, 0x40);
+        assert!(p.uart_receiver_enabled());
+
+        // Reset-receiver is itself a receiver reset/disable operation.
+        p.write8(0x2017, 0x20);
+        assert!(!p.uart_receiver_enabled());
+
+        p.write8(0x2017, 0x01);
+        p.write8(0x2017, 0x02);
+        assert!(!p.uart_receiver_enabled());
+    }
+
+    #[test]
+    fn native_keyboard_command_enables_rx_and_disables_tx() {
+        let mut p = Peripherals::new();
+        p.write8(0x2017, 0x05); // enable both first
+        p.write8(0x2017, 0x89);
+        assert!(p.uart_rx_enabled);
+        assert!(!p.uart_tx_enabled);
     }
 }

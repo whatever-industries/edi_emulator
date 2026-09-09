@@ -134,10 +134,14 @@ disassembly rules that out:
 - command `0x2E` follows channel/configuration-register writes, so it is a
   configuration commit, not a “read current position” operation.
 
-Therefore the HLE design—live register writes, a no-op `0x2E`, CDIC event
-sectors bypassing the channel mask but not the file mask, BIOS-level EOR
-masking, and no autonomous CDIC time-register advance—is intentional. Unit
-tests lock the low-level selection semantics down. Clearing CDIC DBUF bit 14
+Therefore the HLE keeps guest-visible channel-register writes live for sector
+selection while `0x2E` separately commits ACHAN to an internal audio-DSP
+latch. CDIC event sectors bypass the channel mask but not the file mask,
+BIOS-level EOR masking remains in place, and the CDIC time register does not
+advance autonomously. Unit tests lock the low-level selection and commit
+semantics down. The committed latch is currently diagnostic state only: it
+does not alter filtering or audible stop behavior until a controlled physical
+player test establishes the nonzero-ACHAN boundary. Clearing CDIC DBUF bit 14
 stops Mode-2 delivery; the emulator must not keep scanning later sectors only
 to discover an EOR. That discarded heuristic contradicted the documented
 transport and caused The 7th Guest to stall between VMPEG plays. Seek latency

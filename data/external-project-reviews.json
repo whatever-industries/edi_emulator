@@ -62,6 +62,95 @@
       "usage_boundary": "Clean-room behavioral and test reference only; do not translate implementation code."
     },
     {
+      "id": "cdichips",
+      "name": "CD-i Chips",
+      "repository": "cdifan/cdichips",
+      "default_branch": "master",
+      "last_reviewed_on": "2026-08-10",
+      "last_reviewed_revision": "c1cf836421146bc20b2972d8ee7f608da39030a0",
+      "last_review_scope": [
+        "Mono-I/Mono-II SLAVE channel-C keyboard commands and responses",
+        "Mono-III/Mono-IV IKAT pointing-device identification boundary"
+      ],
+      "last_review_findings": [
+        "SLAVE channel C command 0x80 enables keyboard events and A0 carries a two-byte K-mode state packet",
+        "IKAT F3 reports concrete pointing-device IDs and is a later-board protocol, not the Mono-I F3 device-class response",
+        "The reverse-engineered notes corroborate bundled Philips firmware and technical-document evidence but do not override it"
+      ],
+      "resulting_tests": [
+        "cdi_core::slave::tests::f3_advertises_the_attached_keyboard_class",
+        "cdi_core::slave::tests::native_keyboard_gate_delivers_press_and_release_packets",
+        "cdi_core::machine::tests::bundled_rom_consumes_keyboard_class_discovery"
+      ],
+      "latest_observed_on": "2026-08-10",
+      "latest_observed_revision": "c1cf836421146bc20b2972d8ee7f608da39030a0",
+      "review_status": "current",
+      "next_review_scope": [
+        "Revisit IKAT only when a Mono-III/Mono-IV model enters scope",
+        "Recheck SLAVE input notes if new primary firmware or service evidence contradicts the current packet boundary"
+      ],
+      "usage_boundary": "Reverse-engineered behavioral reference only; implement from Philips documentation and bundled firmware evidence."
+    },
+    {
+      "id": "cdi-serial",
+      "name": "cdi-serial",
+      "repository": "Slamy/cdi-serial",
+      "default_branch": "main",
+      "last_reviewed_on": "2026-08-17",
+      "last_reviewed_revision": "69b7809c51d3e1069def05dff3d4343ccb5d72b1",
+      "last_review_scope": [
+        "CD-i Stub 0.5.1 framing, download, upload, and baud negotiation",
+        "full-Stub OS-9 system-call bridge and file operations",
+        "F$GModDr module inventory and init-module memory-list inspection",
+        "potential interoperability with E-Di's SCC68070 UART and runtime diagnostics"
+      ],
+      "last_review_findings": [
+        "cdi-serial is a host-side physical-player development client, not an emulator or replacement for E-Di diagnostics",
+        "E-Di already models the guest-visible UART registers and can drain guest serial output, but it does not expose a bidirectional host serial endpoint or implement the CD-i Stub protocol",
+        "Its F$GModDr and init memory-list commands overlap E-Di's OS-9 module research in output, while requiring a loaded full Stub and therefore changing guest state",
+        "A physical-player run could independently corroborate module mappings and VMPEG memory type and priority, but it cannot by itself validate E-Di's non-invasive process, scheduler, path-table, or contiguous-free-memory diagnostics"
+      ],
+      "resulting_tests": [],
+      "resulting_action": "No emulator behavior change. Consider cdi-serial as a physical-player evidence tool when hardware access is available; add an E-Di PTY/serial bridge only as a separately scoped developer feature with accurate UART timing and rear-port device arbitration.",
+      "latest_observed_on": "2026-08-17",
+      "latest_observed_revision": "69b7809c51d3e1069def05dff3d4343ccb5d72b1",
+      "review_status": "current",
+      "next_review_scope": [
+        "Physical-player romlist and mod output for supported system and VMPEG ROMs",
+        "Protocol or transport changes relevant to a future E-Di PTY endpoint"
+      ],
+      "usage_boundary": "MIT host tool. CD-i Stub is a separate LGPL component and is not redistributed by this project; use hardware output as corroborating evidence rather than behavioral authority."
+    },
+    {
+      "id": "cdic-black-box-analyzer",
+      "name": "CDIC Black Box Analyzer",
+      "repository": "Slamy/CDIC_BlackBoxAnalyzer",
+      "default_branch": "main",
+      "last_reviewed_on": "2026-08-26",
+      "last_reviewed_revision": "e861f76ece477b3aff0e9c4c70f5c6ba1715e60a",
+      "last_review_scope": [
+        "AUDCTL zero sound-map abort behavior",
+        "ACHAN writes and command 0x2E execution",
+        "published CDICTEST audio-map and XA channel-change tests"
+      ],
+      "last_review_findings": [
+        "The published revision still describes AUDCTL zero as an immediate abort, but its sound-map abort test does not independently set and commit ACHAN after reset",
+        "The published XA channel-change test states that command 0x2E is essential after changing ACHAN and CHAN",
+        "The public test source and native cdapdriv sequencing support tracking guest-visible and command-committed ACHAN separately, but do not establish a complete nonzero-ACHAN stop rule"
+      ],
+      "resulting_tests": [],
+      "resulting_action": "No emulator behavior change. A local CDIC incident defines the required committed/uncommitted ACHAN hardware matrix and separate stop-granularity experiment before replacing E-Di's command-0x2E no-op.",
+      "latest_observed_on": "2026-08-26",
+      "latest_observed_revision": "e861f76ece477b3aff0e9c4c70f5c6ba1715e60a",
+      "review_status": "current",
+      "next_review_scope": [
+        "Hardware captures crossing ACHAN zero/nonzero with command 0x2E executed/not executed",
+        "The state that selects sound-group-boundary versus immediate AUDCTL-zero stopping",
+        "Exact CDICTEST beep-pair register and audible-output timeline"
+      ],
+      "usage_boundary": "MIT test source may be adapted with attribution. Treat captured physical-player behavior as corroborating evidence and retain independent Philips specification and firmware tests."
+    },
+    {
       "id": "cedimu",
       "name": "CeDImu",
       "repository": "Stovent/CeDImu",

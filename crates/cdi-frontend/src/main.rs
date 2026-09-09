@@ -11,7 +11,7 @@ mod presentation;
 mod storage;
 mod store_zip;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -141,13 +141,43 @@ const SYSTEM_ROMS: &[SystemRom] = &[
     },
 ];
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MixedRegionPreference {
+    /// Prefer the smoother 60 Hz player timing for titles with both regions.
+    #[default]
+    Ntsc,
+    /// Prefer the taller 50 Hz player timing for titles with both regions.
+    Pal,
+    /// Preserve the player's existing standard.
+    Current,
+}
+
+impl MixedRegionPreference {
+    fn pal(self) -> Option<bool> {
+        match self {
+            Self::Ntsc => Some(false),
+            Self::Pal => Some(true),
+            Self::Current => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegionVideoHint {
+    Ntsc,
+    Pal,
+    Mixed,
+    Unknown,
+}
+
 /// Guess the player video standard from a disc's release-region tag, as used
 /// by the common `Title (Region)` dump naming.
 ///
 /// This is a naming convention, not disc content: region is a property of the
 /// player, and cross-region pressings share one image across markets. It is a
 /// convenience default only, and always user-overridable.
-fn region_is_pal(disc_name: &str) -> Option<bool> {
+fn region_video_hint(disc_name: &str) -> RegionVideoHint {
     const NTSC: &[&str] = &[
         "usa", "u.s.a", "us", "japan", "jp", "canada", "korea", "taiwan", "mexico", "brazil",
     ];
@@ -188,12 +218,25 @@ fn region_is_pal(disc_name: &str) -> Option<bool> {
         }
     }
     match (found_pal, found_ntsc) {
-        (true, false) => Some(true),
-        (false, true) => Some(false),
+        (true, false) => RegionVideoHint::Pal,
+        (false, true) => RegionVideoHint::Ntsc,
         // A cross-region pressing does not identify the target player. Keep
         // the user's current standard instead of trusting whichever region
         // happens to be listed first in the filename.
-        _ => None,
+        (true, true) => RegionVideoHint::Mixed,
+        (false, false) => RegionVideoHint::Unknown,
+    }
+}
+
+fn standard_for_region_hint(
+    hint: RegionVideoHint,
+    mixed_region_preference: MixedRegionPreference,
+) -> Option<bool> {
+    match hint {
+        RegionVideoHint::Pal => Some(true),
+        RegionVideoHint::Ntsc => Some(false),
+        RegionVideoHint::Mixed => mixed_region_preference.pal(),
+        RegionVideoHint::Unknown => None,
     }
 }
 
@@ -397,6 +440,20 @@ struct InputState {
     buttons: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum GuestInputEvent {
+    PlayerControl {
+        key: cdi_core::PlayerControlKey,
+        pressed: bool,
+    },
+    KeyboardKey {
+        code: u8,
+        pressed: bool,
+        modifiers: cdi_core::KeyboardModifiers,
+    },
+    KeyboardModifiers(cdi_core::KeyboardModifiers),
+}
+
 /// User preferences persisted across runs via eframe storage.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -415,6 +472,10 @@ struct Prefs {
     capture_mouse_enabled: bool,
     #[serde(default = "default_true")]
     auto_region: bool,
+    /// Default hardware standard for titles explicitly tagged for both PAL
+    /// and NTSC markets.
+    #[serde(default)]
+    mixed_region_preference: MixedRegionPreference,
     /// User choices keyed by exact ordered track SHA-1 fingerprint. Path and
     /// filename changes therefore do not lose a disc's settings.
     disc_overrides: BTreeMap<String, DiscOverride>,
@@ -429,6 +490,10 @@ struct Prefs {
     // This key intentionally differs from the short-lived development-only
     // `host_menu_binding` preference so Start becomes the new default once.
     host_menu_shortcut: HostMenuBinding,
+    #[serde(default)]
+    start_button_action: StartButtonAction,
+    #[serde(default)]
+    keyboard_passthrough: bool,
     kb_speed: f32,
     kb_up: egui::Key,
     kb_down: egui::Key,
@@ -449,6 +514,7 @@ impl Default for Prefs {
             deinterlace: true,
             capture_mouse_enabled: true,
             auto_region: true,
+            mixed_region_preference: MixedRegionPreference::default(),
             disc_overrides: BTreeMap::new(),
             ff_key: default_ff_key(),
             pad_speed: 8.0,
@@ -457,6 +523,8 @@ impl Default for Prefs {
             pad_button1: gilrs::Button::South,
             pad_button2: gilrs::Button::East,
             host_menu_shortcut: HostMenuBinding::default(),
+            start_button_action: StartButtonAction::default(),
+            keyboard_passthrough: false,
             kb_speed: 6.0,
             kb_up: egui::Key::ArrowUp,
             kb_down: egui::Key::ArrowDown,
@@ -493,6 +561,26 @@ enum HostMenuBinding {
     Guide,
     Bumpers,
     RightStick,
+}
+
+/// Whether a controller's Start button belongs to E-Di or to the native
+/// player-control-key device.
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+enum StartButtonAction {
+    #[default]
+    HostMenu,
+    NativePause,
+}
+
+impl StartButtonAction {
+    const ALL: [Self; 2] = [Self::HostMenu, Self::NativePause];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::HostMenu => "E-Di menu",
+            Self::NativePause => "CD-i Pause",
+        }
+    }
 }
 
 impl HostMenuBinding {
@@ -597,6 +685,114 @@ fn quick_menu_consumes_controller_poll(
 fn suppress_guest_buttons_until_release(physical: u8, suppressed: u8) -> (u8, u8) {
     let still_suppressed = suppressed & physical;
     (physical & !still_suppressed, still_suppressed)
+}
+
+fn cdi_keyboard_modifiers(modifiers: egui::Modifiers) -> cdi_core::KeyboardModifiers {
+    cdi_core::KeyboardModifiers {
+        shift: modifiers.shift,
+        caps_lock: false,
+        supershift: modifiers.alt,
+        control: modifiers.ctrl,
+    }
+}
+
+fn cdi_keyboard_code(key: egui::Key, modifiers: cdi_core::KeyboardModifiers) -> Option<u8> {
+    use egui::Key;
+
+    let letter = match key {
+        Key::A => Some(b'a'),
+        Key::B => Some(b'b'),
+        Key::C => Some(b'c'),
+        Key::D => Some(b'd'),
+        Key::E => Some(b'e'),
+        Key::F => Some(b'f'),
+        Key::G => Some(b'g'),
+        Key::H => Some(b'h'),
+        Key::I => Some(b'i'),
+        Key::J => Some(b'j'),
+        Key::K => Some(b'k'),
+        Key::L => Some(b'l'),
+        Key::M => Some(b'm'),
+        Key::N => Some(b'n'),
+        Key::O => Some(b'o'),
+        Key::P => Some(b'p'),
+        Key::Q => Some(b'q'),
+        Key::R => Some(b'r'),
+        Key::S => Some(b's'),
+        Key::T => Some(b't'),
+        Key::U => Some(b'u'),
+        Key::V => Some(b'v'),
+        Key::W => Some(b'w'),
+        Key::X => Some(b'x'),
+        Key::Y => Some(b'y'),
+        Key::Z => Some(b'z'),
+        _ => None,
+    };
+    if let Some(lower) = letter {
+        let shifted = modifiers.shift ^ modifiers.caps_lock;
+        let mut code = if modifiers.control {
+            lower - b'a' + 1
+        } else if shifted {
+            lower.to_ascii_uppercase()
+        } else {
+            lower
+        };
+        if modifiers.supershift {
+            code |= 0x80;
+        }
+        return Some(code);
+    }
+
+    let shifted_digit = |normal, shifted| if modifiers.shift { shifted } else { normal };
+    Some(match key {
+        Key::Num0 => shifted_digit(b'0', b')'),
+        Key::Num1 => shifted_digit(b'1', b'!'),
+        Key::Num2 => shifted_digit(b'2', b'@'),
+        Key::Num3 => shifted_digit(b'3', b'#'),
+        Key::Num4 => shifted_digit(b'4', b'$'),
+        Key::Num5 => shifted_digit(b'5', b'%'),
+        Key::Num6 => shifted_digit(b'6', b'^'),
+        Key::Num7 => shifted_digit(b'7', b'&'),
+        Key::Num8 => shifted_digit(b'8', b'*'),
+        Key::Num9 => shifted_digit(b'9', b'('),
+        Key::Backtick => shifted_digit(b'`', b'~'),
+        Key::Minus => shifted_digit(b'-', b'_'),
+        Key::Equals => shifted_digit(b'=', b'+'),
+        Key::OpenBracket => shifted_digit(b'[', b'{'),
+        Key::CloseBracket => shifted_digit(b']', b'}'),
+        Key::Backslash => shifted_digit(b'\\', b'|'),
+        Key::Semicolon => shifted_digit(b';', b':'),
+        Key::Quote => shifted_digit(b'\'', b'"'),
+        Key::Comma => shifted_digit(b',', b'<'),
+        Key::Period => shifted_digit(b'.', b'>'),
+        Key::Slash => shifted_digit(b'/', b'?'),
+        Key::Colon => b':',
+        Key::Pipe => b'|',
+        Key::Questionmark => b'?',
+        Key::Exclamationmark => b'!',
+        Key::OpenCurlyBracket => b'{',
+        Key::CloseCurlyBracket => b'}',
+        Key::Plus => b'+',
+        Key::Space => b' ',
+        Key::Tab => 0x09,
+        Key::Enter => 0x0D,
+        Key::Escape => 0x1B,
+        Key::Backspace | Key::Delete => 0x7F,
+        Key::Home => 0x1E,
+        Key::ArrowLeft => 0x08,
+        Key::ArrowDown => 0x0A,
+        Key::ArrowUp => 0x0B,
+        Key::ArrowRight => 0x0C,
+        Key::F1 => 0x80,
+        Key::F2 => 0x81,
+        Key::F3 => 0x82,
+        Key::F4 => 0x83,
+        Key::F5 => 0x84,
+        Key::F6 => 0x85,
+        Key::F7 => 0x86,
+        Key::F8 => 0x87,
+        _ => return None,
+    })
 }
 
 /// Select one controller movement source for this poll. A held D-pad takes
@@ -847,6 +1043,7 @@ struct SharedFrame {
 struct Shared {
     frame: Mutex<SharedFrame>,
     input: Mutex<InputState>,
+    guest_input: Mutex<VecDeque<GuestInputEvent>>,
     command: Mutex<Option<MachineCommand>>,
     status: Mutex<String>,
     /// Name of the loaded disc, shown in the top bar; `None` when empty.
@@ -863,11 +1060,15 @@ struct Shared {
     dvc_status: Mutex<String>,
     dvc_path: Mutex<Option<PathBuf>>,
     dvc_inserted: AtomicBool,
+    keyboard_attached: AtomicBool,
     pal: AtomicBool,
     /// Convert raw interlaced field weave to progressive host presentation.
     deinterlace: AtomicBool,
     /// Match the player's video standard to the disc's region tag on load.
     auto_region: AtomicBool,
+    /// Preferred standard when a filename explicitly names both PAL and NTSC
+    /// markets. Exact disc profiles and per-disc choices take precedence.
+    mixed_region_preference: Mutex<MixedRegionPreference>,
     /// Host-side turbo: run the emulation unthrottled while held.
     fast_forward: AtomicBool,
     /// Freeze emulated device time while the host quick menu is open.
@@ -891,6 +1092,7 @@ enum MachineCommand {
     AttachBundledDvc,
     DetachDvc,
     SetVideoStandard(cdi_core::VideoStandard),
+    SetKeyboardAttached(bool),
     /// Swap the system ROM: rebuilds the machine, restoring disc and DVC.
     SetSystemRom {
         image: Vec<u8>,
@@ -1156,6 +1358,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             frame_no: 0,
         }),
         input: Mutex::new(InputState::default()),
+        guest_input: Mutex::new(VecDeque::new()),
         command: Mutex::new(None),
         status: Mutex::new(String::new()),
         disc_name: Mutex::new(disc_name),
@@ -1166,9 +1369,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dvc_status: Mutex::new(dvc_status),
         dvc_path: Mutex::new(dvc_path),
         dvc_inserted: AtomicBool::new(dvc_inserted),
+        keyboard_attached: AtomicBool::new(false),
         pal: AtomicBool::new(model.video == cdi_core::VideoStandard::Pal),
         deinterlace: AtomicBool::new(true),
         auto_region: AtomicBool::new(true),
+        mixed_region_preference: Mutex::new(MixedRegionPreference::default()),
         fast_forward: AtomicBool::new(false),
         quick_menu_paused: AtomicBool::new(false),
         muted: Arc::new(AtomicBool::new(false)),
@@ -1552,7 +1757,10 @@ fn emu_loop(
                         };
 
                         // Exact user choice, then exact tracked profile, then
-                        // filename region are progressively weaker evidence.
+                        // an unambiguous filename region are progressively
+                        // weaker evidence. Mixed-region filenames use the
+                        // user's explicit preference; unknown names do not
+                        // trigger a standard change.
                         if shared.auto_region.load(Ordering::Relaxed) {
                             let remembered = identity.as_ref().and_then(|identity| {
                                 shared
@@ -1566,10 +1774,14 @@ fn emu_loop(
                                 .as_ref()
                                 .and_then(|identity| identity.profile.as_ref())
                                 .map(|profile| profile.video_standard);
+                            let filename_hint = region_video_hint(&display_name(&path));
+                            let mixed_preference = *shared.mixed_region_preference.lock().unwrap();
                             let pal = remembered
                                 .or(profiled)
                                 .map(VideoStandardRecommendation::is_pal)
-                                .or_else(|| region_is_pal(&display_name(&path)));
+                                .or_else(|| {
+                                    standard_for_region_hint(filename_hint, mixed_preference)
+                                });
                             if let Some(pal) = pal {
                                 if pal != shared.pal.load(Ordering::Relaxed) {
                                     let new_path = configured_nvram_path(
@@ -1653,6 +1865,9 @@ fn emu_loop(
                             };
                             match cdi_core::Machine::with_dvc(&model, image, dvc) {
                                 Ok(mut rebuilt) => {
+                                    rebuilt.bus.keyboard.set_attached(
+                                        shared.keyboard_attached.load(Ordering::Relaxed),
+                                    );
                                     let rebuilt_nvram_path = configured_nvram_path(
                                         model.board.name,
                                         model.video == cdi_core::VideoStandard::Pal,
@@ -1806,6 +2021,15 @@ fn emu_loop(
                         if pal { "PAL (50 Hz)" } else { "NTSC (60 Hz)" }
                     );
                 }
+                MachineCommand::SetKeyboardAttached(attached) => {
+                    machine.set_keyboard_attached(attached);
+                    shared.keyboard_attached.store(attached, Ordering::Relaxed);
+                    *shared.status.lock().unwrap() = if attached {
+                        "K-mode keyboard attached — machine reset".to_owned()
+                    } else {
+                        "K-mode keyboard removed — machine reset".to_owned()
+                    };
+                }
                 MachineCommand::ResetNvram => {
                     match backup_nvram(nvram_path.as_deref(), &machine.bus.nvram) {
                         Ok(backup) => {
@@ -1873,6 +2097,22 @@ fn emu_loop(
         }
 
         // Apply the latest pointer state.
+        for event in shared.guest_input.lock().unwrap().drain(..) {
+            match event {
+                GuestInputEvent::PlayerControl { key, pressed } => {
+                    machine.set_player_control_key(key, pressed);
+                }
+                GuestInputEvent::KeyboardKey {
+                    code,
+                    pressed,
+                    modifiers,
+                } => machine.set_keyboard_key(code, pressed, modifiers),
+                GuestInputEvent::KeyboardModifiers(modifiers) => {
+                    machine.set_keyboard_modifiers(modifiers);
+                }
+            }
+        }
+
         {
             let input = {
                 let mut input = shared.input.lock().unwrap();
@@ -2053,9 +2293,14 @@ fn emu_loop(
 
         // Pace to real time (skip ahead if we fell behind).
         let frame_duration = if shared.pal.load(Ordering::Relaxed) {
-            Duration::from_micros(20_000)
+            Duration::from_nanos(
+                1_000_000_000 * cdi_core::sched::PAL_FIELD_CPU_CYCLES / cdi_core::sched::PAL_CPU_HZ,
+            )
         } else {
-            Duration::from_micros(16_667)
+            Duration::from_nanos(
+                1_000_000_000 * cdi_core::sched::NTSC_FIELD_CPU_CYCLES
+                    / cdi_core::sched::NTSC_CPU_HZ,
+            )
         };
         if fast_forward {
             // Run flat out and keep the deadline anchored to now, so releasing
@@ -2154,6 +2399,8 @@ struct App {
     pad_button1: gilrs::Button,
     pad_button2: gilrs::Button,
     host_menu_binding: HostMenuBinding,
+    start_button_action: StartButtonAction,
+    pck_pause_down: bool,
     /// Previous state of the host L1+R1 chord, used to generate one menu
     /// toggle per deliberate press instead of repeating while held.
     host_menu_chord_down: bool,
@@ -2169,6 +2416,9 @@ struct App {
     kb_frac: egui::Vec2,
     /// Binding slot (index into KB_SLOTS) awaiting a key press to rebind.
     kb_rebind: Option<usize>,
+    keyboard_passthrough: bool,
+    guest_keyboard_keys: Vec<(egui::Key, u8)>,
+    guest_keyboard_modifiers: cdi_core::KeyboardModifiers,
     /// Hold-to-fast-forward key, and whether it is awaiting a rebind press.
     ff_key: egui::Key,
     ff_rebind: bool,
@@ -2264,6 +2514,8 @@ impl App {
             pad_button1: prefs.pad_button1,
             pad_button2: prefs.pad_button2,
             host_menu_binding: prefs.host_menu_shortcut,
+            start_button_action: prefs.start_button_action,
+            pck_pause_down: false,
             host_menu_chord_down: false,
             suppressed_pad_buttons: 0,
             pad_rebind: None,
@@ -2279,6 +2531,9 @@ impl App {
             kb_buttons: 0,
             kb_frac: egui::Vec2::ZERO,
             kb_rebind: None,
+            keyboard_passthrough: prefs.keyboard_passthrough,
+            guest_keyboard_keys: Vec::new(),
+            guest_keyboard_modifiers: cdi_core::KeyboardModifiers::default(),
             ff_key: prefs.ff_key,
             ff_rebind: false,
             capture_frac: egui::Vec2::ZERO,
@@ -2302,10 +2557,16 @@ impl App {
             #[cfg(target_os = "macos")]
             native_menu: NativeMenu::new().expect("initialize native macOS menu"),
         };
+        if app.start_button_action == StartButtonAction::NativePause
+            && app.host_menu_binding == HostMenuBinding::Start
+        {
+            app.host_menu_binding = HostMenuBinding::GuideOrBumpers;
+        }
         // Shared is built before prefs are loaded, so apply stored flags now.
         app.shared
             .auto_region
             .store(prefs.auto_region, Ordering::Relaxed);
+        *app.shared.mixed_region_preference.lock().unwrap() = prefs.mixed_region_preference;
         app.shared
             .deinterlace
             .store(prefs.deinterlace, Ordering::Relaxed);
@@ -2322,6 +2583,9 @@ impl App {
         app.shared
             .audio_suppressed
             .store(app.show_library, Ordering::Relaxed);
+        if app.keyboard_passthrough {
+            *app.shared.command.lock().unwrap() = Some(MachineCommand::SetKeyboardAttached(true));
+        }
         app.library.scan();
         app
     }
@@ -2395,6 +2659,7 @@ impl App {
             // the strip width measured last frame.
             let container_fill = ui.visuals().faint_bg_color;
             const GROUP_GAP: f32 = 8.0;
+            const FRAME_MARGIN: i8 = 4;
             let pad = ((ui.available_width() - self.library.strip_width()) * 0.5).max(0.0);
             let mut strip_w = self.library.strip_width();
             let mut open_clicked = false;
@@ -2403,7 +2668,7 @@ impl App {
                 egui::Frame::new()
                     .fill(container_fill)
                     .corner_radius(egui::CornerRadius::same(10))
-                    .inner_margin(egui::Margin::symmetric(4, 4))
+                    .inner_margin(egui::Margin::symmetric(FRAME_MARGIN, FRAME_MARGIN))
             };
             ui.horizontal(|ui| {
                 ui.add_space(pad);
@@ -2427,9 +2692,14 @@ impl App {
                 });
                 ui.add_space(GROUP_GAP);
                 let refresh = squircle().show(ui, |ui| {
+                    // Match the frame height of the text controls. The fixed
+                    // icon width remains compact, while its background now
+                    // shares the toolbar's vertical bounds.
+                    let refresh_height =
+                        tabs.response.rect.height() - f32::from(FRAME_MARGIN) * 2.0;
                     let response = ui
                         .add_sized(
-                            egui::vec2(23.0, 23.0),
+                            egui::vec2(23.0, refresh_height),
                             egui::SelectableLabel::new(false, egui::RichText::new("↻").size(17.0)),
                         )
                         .on_hover_text("Refresh libraries");
@@ -3119,6 +3389,29 @@ impl App {
                 .auto_region
                 .store(auto_region, Ordering::Relaxed);
         }
+        let mut mixed_region_preference = *self.shared.mixed_region_preference.lock().unwrap();
+        ui.horizontal(|ui| {
+            ui.label("Mixed-region titles:");
+            ui.radio_value(
+                &mut mixed_region_preference,
+                MixedRegionPreference::Ntsc,
+                "Prefer NTSC (60 Hz)",
+            );
+            ui.radio_value(
+                &mut mixed_region_preference,
+                MixedRegionPreference::Pal,
+                "Prefer PAL (50 Hz)",
+            );
+            ui.radio_value(
+                &mut mixed_region_preference,
+                MixedRegionPreference::Current,
+                "Keep current",
+            );
+        });
+        if mixed_region_preference != *self.shared.mixed_region_preference.lock().unwrap() {
+            *self.shared.mixed_region_preference.lock().unwrap() = mixed_region_preference;
+        }
+        ui.weak("Used only when the disc name explicitly includes both PAL and NTSC regions; applies on the next disc load.");
 
         if let Some(identity) = &identity {
             if let Some(profile) = &identity.profile {
@@ -3317,36 +3610,59 @@ impl App {
         egui::CollapsingHeader::new("Keyboard")
             .default_open(true)
             .show(ui, |ui| {
-                ui.add(egui::Slider::new(&mut self.kb_speed, 1.0..=20.0).text("Pointer speed"));
-                for (slot, name) in KB_SLOTS.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{name}:"));
-                        let text = if self.kb_rebind == Some(slot) {
-                            "Press a key… (Esc cancels)".to_owned()
-                        } else {
-                            self.kb_keys[slot].name().to_owned()
-                        };
-                        if ui.button(text).clicked() {
-                            self.kb_rebind = if self.kb_rebind == Some(slot) {
-                                None
-                            } else {
-                                Some(slot)
-                            };
-                        }
-                    });
+                let mut passthrough = self.keyboard_passthrough;
+                if ui
+                    .checkbox(&mut passthrough, "Connect CD-i keyboard (experimental)")
+                    .on_hover_text(
+                        "Attaches a Philips K-mode keyboard and resets for native /kb1 discovery. Transport is emulated, but tested keyboard-aware titles currently leave reports disabled.",
+                    )
+                    .changed()
+                {
+                    self.release_guest_keyboard();
+                    self.keyboard_passthrough = passthrough;
+                    *self.shared.command.lock().unwrap() =
+                        Some(MachineCommand::SetKeyboardAttached(passthrough));
                 }
-                if ui.button("Reset keyboard defaults").clicked() {
-                    let defaults = Prefs::default();
-                    self.kb_speed = defaults.kb_speed;
-                    self.kb_keys = [
-                        defaults.kb_up,
-                        defaults.kb_down,
-                        defaults.kb_left,
-                        defaults.kb_right,
-                        defaults.kb_button1,
-                        defaults.kb_button2,
-                    ];
-                    self.kb_rebind = None;
+                ui.add_enabled_ui(!self.keyboard_passthrough, |ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.kb_speed, 1.0..=20.0)
+                            .text("Pointer speed"),
+                    );
+                    for (slot, name) in KB_SLOTS.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{name}:"));
+                            let text = if self.kb_rebind == Some(slot) {
+                                "Press a key… (Esc cancels)".to_owned()
+                            } else {
+                                self.kb_keys[slot].name().to_owned()
+                            };
+                            if ui.button(text).clicked() {
+                                self.kb_rebind = if self.kb_rebind == Some(slot) {
+                                    None
+                                } else {
+                                    Some(slot)
+                                };
+                            }
+                        });
+                    }
+                    if ui.button("Reset keyboard defaults").clicked() {
+                        let defaults = Prefs::default();
+                        self.kb_speed = defaults.kb_speed;
+                        self.kb_keys = [
+                            defaults.kb_up,
+                            defaults.kb_down,
+                            defaults.kb_left,
+                            defaults.kb_right,
+                            defaults.kb_button1,
+                            defaults.kb_button2,
+                        ];
+                        self.kb_rebind = None;
+                    }
+                });
+                if self.keyboard_passthrough {
+                    ui.weak(
+                        "Experimental: host keys use the native driver, but tested titles currently leave /kb1 reports disabled.",
+                    );
                 }
             });
     }
@@ -3396,11 +3712,37 @@ impl App {
                         });
                     }
                     ui.horizontal(|ui| {
+                        ui.label("Start button:");
+                        let previous = self.start_button_action;
+                        egui::ComboBox::from_id_salt("start_button_action")
+                            .selected_text(self.start_button_action.label())
+                            .show_ui(ui, |ui| {
+                                for action in StartButtonAction::ALL {
+                                    ui.selectable_value(
+                                        &mut self.start_button_action,
+                                        action,
+                                        action.label(),
+                                    );
+                                }
+                            });
+                        if previous != self.start_button_action
+                            && self.start_button_action == StartButtonAction::NativePause
+                            && self.host_menu_binding == HostMenuBinding::Start
+                        {
+                            self.host_menu_binding = HostMenuBinding::GuideOrBumpers;
+                        }
+                    });
+                    ui.horizontal(|ui| {
                         ui.label("E-Di menu:");
                         egui::ComboBox::from_id_salt("host_menu_binding")
                             .selected_text(self.host_menu_binding.label())
                             .show_ui(ui, |ui| {
                                 for binding in HostMenuBinding::ALL {
+                                    if self.start_button_action == StartButtonAction::NativePause
+                                        && binding == HostMenuBinding::Start
+                                    {
+                                        continue;
+                                    }
                                     ui.selectable_value(
                                         &mut self.host_menu_binding,
                                         binding,
@@ -3411,7 +3753,7 @@ impl App {
                     })
                     .response
                     .on_hover_text(
-                        "Host-only shortcut. Start and Select are not used by this menu.",
+                        "Host-only shortcut. When Start is assigned to CD-i Pause, choose another shortcut here.",
                     );
                     if ui.button("Reset controller defaults").clicked() {
                         let defaults = Prefs::default();
@@ -3421,6 +3763,7 @@ impl App {
                         self.pad_button1 = defaults.pad_button1;
                         self.pad_button2 = defaults.pad_button2;
                         self.host_menu_binding = defaults.host_menu_shortcut;
+                        self.start_button_action = defaults.start_button_action;
                         self.host_menu_chord_down = false;
                         self.suppressed_pad_buttons = 0;
                         self.pad_rebind = None;
@@ -3432,9 +3775,109 @@ impl App {
             });
     }
 
+    fn release_guest_keyboard(&mut self) {
+        if self.guest_keyboard_keys.is_empty()
+            && self.guest_keyboard_modifiers == cdi_core::KeyboardModifiers::default()
+        {
+            return;
+        }
+        let modifiers = cdi_core::KeyboardModifiers::default();
+        let mut queue = self.shared.guest_input.lock().unwrap();
+        for (_, code) in self.guest_keyboard_keys.drain(..).rev() {
+            queue.push_back(GuestInputEvent::KeyboardKey {
+                code,
+                pressed: false,
+                modifiers,
+            });
+        }
+        queue.push_back(GuestInputEvent::KeyboardModifiers(modifiers));
+        self.guest_keyboard_modifiers = modifiers;
+    }
+
+    fn poll_guest_keyboard(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input()
+            || !ctx.input(|input| input.focused)
+            || self.photocd.as_ref().is_some_and(|photo| photo.view_photo)
+            || self.show_library
+            || self.quick_menu_open
+        {
+            self.release_guest_keyboard();
+            return;
+        }
+
+        let (host_modifiers, events) = ctx.input(|input| (input.modifiers, input.events.clone()));
+        let modifiers = cdi_keyboard_modifiers(host_modifiers);
+        if modifiers != self.guest_keyboard_modifiers {
+            self.shared
+                .guest_input
+                .lock()
+                .unwrap()
+                .push_back(GuestInputEvent::KeyboardModifiers(modifiers));
+            self.guest_keyboard_modifiers = modifiers;
+        }
+
+        let mut queue = self.shared.guest_input.lock().unwrap();
+        for event in events {
+            let egui::Event::Key {
+                key,
+                pressed,
+                repeat,
+                modifiers: event_modifiers,
+                ..
+            } = event
+            else {
+                continue;
+            };
+            // Keep Command shortcuts owned by macOS/E-Di.
+            if event_modifiers.command && !event_modifiers.ctrl {
+                continue;
+            }
+            let event_modifiers = cdi_keyboard_modifiers(event_modifiers);
+            if pressed {
+                if repeat
+                    || self
+                        .guest_keyboard_keys
+                        .iter()
+                        .any(|(held, _)| *held == key)
+                {
+                    continue;
+                }
+                if let Some(code) = cdi_keyboard_code(key, event_modifiers) {
+                    self.guest_keyboard_keys.push((key, code));
+                    queue.push_back(GuestInputEvent::KeyboardKey {
+                        code,
+                        pressed: true,
+                        modifiers: event_modifiers,
+                    });
+                }
+            } else if let Some(index) = self
+                .guest_keyboard_keys
+                .iter()
+                .position(|(held, _)| *held == key)
+            {
+                let (_, code) = self.guest_keyboard_keys.remove(index);
+                queue.push_back(GuestInputEvent::KeyboardKey {
+                    code,
+                    pressed: false,
+                    modifiers: event_modifiers,
+                });
+            }
+        }
+    }
+
     /// Poll the bindable keyboard controls and translate them onto the CD-i
     /// pointer, mirroring the gamepad path (relative deltas, SLAVE-clamped).
     fn poll_keyboard(&mut self, ctx: &egui::Context) {
+        if self.keyboard_passthrough {
+            self.poll_guest_keyboard(ctx);
+            if self.kb_buttons != 0 {
+                let mut input = self.shared.input.lock().unwrap();
+                input.buttons = self.game_buttons | self.pad_buttons;
+            }
+            self.kb_buttons = 0;
+            self.kb_frac = egui::Vec2::ZERO;
+            return;
+        }
         if ctx.wants_keyboard_input() {
             return;
         }
@@ -3557,22 +4000,35 @@ impl App {
     /// buttons 1/2.
     fn poll_gamepad(&mut self, ctx: &egui::Context) {
         let host_menu_binding = self.host_menu_binding;
+        let start_button_action = self.start_button_action;
         let Some(gilrs) = self.gamepad.as_mut() else {
+            if self.pck_pause_down {
+                self.shared
+                    .guest_input
+                    .lock()
+                    .unwrap()
+                    .push_back(GuestInputEvent::PlayerControl {
+                        key: cdi_core::PlayerControlKey::Pause,
+                        pressed: false,
+                    });
+                self.pck_pause_down = false;
+            }
             return;
         };
         // Drain the event queue so cached gamepad state stays current; a
         // pending rebind captures the first button press seen here.
         // Philips TN 73.2 defines Pause on the optional `/pck` peripheral,
-        // separate from the base two-button pointer. Until `/pck` is
-        // implemented, Start may be assigned to this configurable host
-        // shortcut and must never be emitted as a third pointer button.
+        // separate from the base two-button pointer. Start is either that
+        // native key or a host shortcut; it is never a third pointer button.
         let host_buttons_enabled = self.pad_rebind.is_none();
         let mut menu_pressed = false;
         let mut activate_pressed = false;
         let mut back_pressed = false;
         while let Some(event) = gilrs.next_event() {
             if let gilrs::EventType::ButtonPressed(button, _) = event.event {
-                menu_pressed |= is_quick_menu_button(host_menu_binding, button);
+                menu_pressed |= is_quick_menu_button(host_menu_binding, button)
+                    && !(button == gilrs::Button::Start
+                        && start_button_action == StartButtonAction::NativePause);
                 activate_pressed |= button == self.pad_button1 || button == gilrs::Button::South;
                 back_pressed |= button == self.pad_button2 || button == gilrs::Button::East;
                 match self.pad_rebind {
@@ -3594,8 +4050,10 @@ impl App {
         let mut dpad_deflection = egui::Vec2::ZERO;
         let mut dpad_active = false;
         let mut bumper_chord_down = false;
+        let mut start_down = false;
         let mut buttons = 0u8;
         for (_id, pad) in gilrs.gamepads() {
+            start_down |= pad.is_pressed(gilrs::Button::Start);
             if menu_dpad_y == 0 {
                 menu_dpad_y = library_dpad_direction(
                     pad.value(gilrs::Axis::DPadY),
@@ -3629,6 +4087,18 @@ impl App {
             if pad.is_pressed(self.pad_button2) {
                 buttons |= 2;
             }
+        }
+        let native_pause_down = start_button_action == StartButtonAction::NativePause && start_down;
+        if native_pause_down != self.pck_pause_down {
+            self.shared
+                .guest_input
+                .lock()
+                .unwrap()
+                .push_back(GuestInputEvent::PlayerControl {
+                    key: cdi_core::PlayerControlKey::Pause,
+                    pressed: native_pause_down,
+                });
+            self.pck_pause_down = native_pause_down;
         }
         let chord_pressed = quick_menu_chord_pressed(
             host_menu_binding,
@@ -3735,6 +4205,7 @@ impl eframe::App for App {
             deinterlace: self.shared.deinterlace.load(Ordering::Relaxed),
             capture_mouse_enabled: self.capture_mouse_enabled,
             auto_region: self.shared.auto_region.load(Ordering::Relaxed),
+            mixed_region_preference: *self.shared.mixed_region_preference.lock().unwrap(),
             disc_overrides: self.disc_overrides.clone(),
             ff_key: self.ff_key,
             pad_speed: self.pad_speed,
@@ -3743,6 +4214,8 @@ impl eframe::App for App {
             pad_button1: self.pad_button1,
             pad_button2: self.pad_button2,
             host_menu_shortcut: self.host_menu_binding,
+            start_button_action: self.start_button_action,
+            keyboard_passthrough: self.keyboard_passthrough,
             kb_speed: self.kb_speed,
             kb_up: self.kb_keys[0],
             kb_down: self.kb_keys[1],
@@ -4225,6 +4698,7 @@ impl eframe::App for App {
                 .store(self.show_library, Ordering::Relaxed);
             if self.show_library {
                 self.library.enter();
+                self.release_guest_keyboard();
                 self.pad_buttons = 0;
                 self.pad_frac = egui::Vec2::ZERO;
                 if self.mouse_captured {
@@ -4449,6 +4923,7 @@ impl eframe::App for App {
         // rebind wants the keyboard.
         let fast_forward = !ctx.wants_keyboard_input()
             && !self.ff_rebind
+            && !self.keyboard_passthrough
             && ctx.input(|i| i.key_down(self.ff_key));
         self.shared
             .fast_forward
@@ -4457,6 +4932,7 @@ impl eframe::App for App {
         if !self.quick_menu_open {
             self.poll_keyboard(ctx);
         } else {
+            self.release_guest_keyboard();
             self.kb_buttons = 0;
             self.kb_frac = egui::Vec2::ZERO;
         }
@@ -4470,15 +4946,17 @@ impl eframe::App for App {
 mod tests {
     use super::presentation::{screenshot_dimensions, DisplayAperture};
     use super::{
-        audio_sample_format_preference, backup_nvram, configure_ui, configured_nvram_path,
-        contains_title_string, controller_deflection, controller_dpad_deflection,
-        controller_stick_deflection, disc_load_action, display_aperture,
-        display_diagnostic_field_count, display_name, fill_audio, fit_aspect, is_quick_menu_button,
-        library_dpad_direction, library_pad_action, load_nvram, parental_passcode, pointer_mapping,
-        presentation_aspect, quick_menu_chord_pressed, quick_menu_consumes_controller_poll,
-        region_is_pal, screenshot_image, signed_pcm_to_u8, suppress_guest_buttons_until_release,
-        write_nvram, DiscLoadAction, DiscOverride, HostMenuBinding, LibraryPadAction, Prefs,
-        SharedFrame, MAX_DISPLAY_DIAGNOSTIC_FIELDS, UI_SELECTED_TEXT,
+        audio_sample_format_preference, backup_nvram, cdi_keyboard_code, configure_ui,
+        configured_nvram_path, contains_title_string, controller_deflection,
+        controller_dpad_deflection, controller_stick_deflection, disc_load_action,
+        display_aperture, display_diagnostic_field_count, display_name, fill_audio, fit_aspect,
+        is_quick_menu_button, library_dpad_direction, library_pad_action, load_nvram,
+        parental_passcode, pointer_mapping, presentation_aspect, quick_menu_chord_pressed,
+        quick_menu_consumes_controller_poll, region_video_hint, screenshot_image, signed_pcm_to_u8,
+        standard_for_region_hint, suppress_guest_buttons_until_release, write_nvram,
+        DiscLoadAction, DiscOverride, HostMenuBinding, LibraryPadAction, MixedRegionPreference,
+        Prefs, RegionVideoHint, SharedFrame, StartButtonAction, MAX_DISPLAY_DIAGNOSTIC_FIELDS,
+        UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
 
@@ -4567,6 +5045,34 @@ mod tests {
             HostMenuBinding::Start,
             gilrs::Button::Select
         ));
+    }
+
+    #[test]
+    fn cdi_keyboard_uses_green_book_character_and_cursor_codes() {
+        let plain = cdi_core::KeyboardModifiers::default();
+        let shifted = cdi_core::KeyboardModifiers {
+            shift: true,
+            ..plain
+        };
+        let controlled = cdi_core::KeyboardModifiers {
+            control: true,
+            ..plain
+        };
+        assert_eq!(cdi_keyboard_code(egui::Key::A, plain), Some(b'a'));
+        assert_eq!(cdi_keyboard_code(egui::Key::A, shifted), Some(b'A'));
+        assert_eq!(cdi_keyboard_code(egui::Key::A, controlled), Some(0x01));
+        assert_eq!(cdi_keyboard_code(egui::Key::Num1, shifted), Some(b'!'));
+        assert_eq!(cdi_keyboard_code(egui::Key::ArrowLeft, plain), Some(0x08));
+        assert_eq!(cdi_keyboard_code(egui::Key::ArrowRight, plain), Some(0x0C));
+        assert_eq!(cdi_keyboard_code(egui::Key::F8, plain), Some(0x87));
+        assert_eq!(cdi_keyboard_code(egui::Key::F9, plain), None);
+    }
+
+    #[test]
+    fn input_extensions_are_opt_in_by_default() {
+        let prefs = Prefs::default();
+        assert_eq!(prefs.start_button_action, StartButtonAction::HostMenu);
+        assert!(!prefs.keyboard_passthrough);
     }
 
     #[test]
@@ -4813,14 +5319,65 @@ mod tests {
 
     #[test]
     fn region_tag_selects_video_standard() {
-        assert_eq!(region_is_pal("Windsurfing (USA)"), Some(false));
-        assert_eq!(region_is_pal("Ghost in the Shell (Japan)"), Some(false));
-        assert_eq!(region_is_pal("Akt Aesthetik (Germany)"), Some(true));
         assert_eq!(
-            region_is_pal("Vincent van Gogh Vol. 1, The (Europe)"),
+            standard_for_region_hint(
+                region_video_hint("Windsurfing (USA)"),
+                MixedRegionPreference::Current
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            standard_for_region_hint(
+                region_video_hint("Ghost in the Shell (Japan)"),
+                MixedRegionPreference::Current
+            ),
+            Some(false)
+        );
+        assert_eq!(
+            standard_for_region_hint(
+                region_video_hint("Akt Aesthetik (Germany)"),
+                MixedRegionPreference::Current
+            ),
             Some(true)
         );
-        assert_eq!(region_is_pal("Nobelia (USA, Europe)"), None);
+        assert_eq!(
+            standard_for_region_hint(
+                region_video_hint("Vincent van Gogh Vol. 1, The (Europe)"),
+                MixedRegionPreference::Current
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            standard_for_region_hint(
+                region_video_hint("Nobelia (USA, Europe)"),
+                MixedRegionPreference::Current
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn mixed_region_preference_only_applies_to_explicitly_mixed_names() {
+        assert_eq!(
+            region_video_hint("Beauty & the Beast (USA, Europe)"),
+            RegionVideoHint::Mixed
+        );
+        assert_eq!(
+            standard_for_region_hint(RegionVideoHint::Mixed, MixedRegionPreference::Ntsc),
+            Some(false)
+        );
+        assert_eq!(
+            standard_for_region_hint(RegionVideoHint::Mixed, MixedRegionPreference::Pal),
+            Some(true)
+        );
+        assert_eq!(
+            standard_for_region_hint(RegionVideoHint::Mixed, MixedRegionPreference::Current),
+            None
+        );
+        assert_eq!(
+            standard_for_region_hint(RegionVideoHint::Unknown, MixedRegionPreference::Ntsc),
+            None
+        );
     }
 
     #[test]
@@ -4840,11 +5397,29 @@ mod tests {
     #[test]
     fn later_tags_and_untagged_names_are_handled() {
         // A revision tag after the region must not confuse the scan.
-        assert_eq!(region_is_pal("Alien Gate (Europe) (Rev 2)"), Some(true));
+        assert_eq!(
+            standard_for_region_hint(
+                region_video_hint("Alien Gate (Europe) (Rev 2)"),
+                MixedRegionPreference::Current
+            ),
+            Some(true)
+        );
         // No region tag: leave the current standard alone.
-        assert_eq!(region_is_pal("Some Untagged Disc"), None);
+        assert_eq!(
+            standard_for_region_hint(
+                region_video_hint("Some Untagged Disc"),
+                MixedRegionPreference::Current
+            ),
+            None
+        );
         // Parentheses that are not regions.
-        assert_eq!(region_is_pal("Title (Demo)"), None);
+        assert_eq!(
+            standard_for_region_hint(
+                region_video_hint("Title (Demo)"),
+                MixedRegionPreference::Current
+            ),
+            None
+        );
     }
 
     #[test]

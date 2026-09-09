@@ -16,6 +16,7 @@ const VMPEG_FULL_ROM_SIZE: usize = 256 * 1024;
 const EXTENSION_RAM_SIZE: usize = 1024 * 1024;
 const DECODE_RAM_SIZE: usize = 512 * 1024;
 const MPEG_INPUT_LIMIT: usize = 512 * 1024;
+#[cfg(test)]
 const CLOCK_HZ: u64 = 15_000_000;
 const DCLK_HZ: u64 = 45_000;
 const FMV_TIMER_HZ: u64 = 5_625;
@@ -739,6 +740,7 @@ pub struct Vmpeg {
     decode_ram_visible: bool,
     register_writes: u8,
     pal: bool,
+    host_clock_hz: u64,
     vcd_pixel_clock_13_5: bool,
     fma_regs: Vec<u8>,
     fmv_regs: Vec<u8>,
@@ -820,6 +822,7 @@ impl Vmpeg {
             decode_ram_visible: false,
             register_writes: 0,
             pal: true,
+            host_clock_hz: crate::sched::PAL_CPU_HZ,
             vcd_pixel_clock_13_5: false,
             fma_regs: vec![0; 0x100],
             fmv_regs: vec![0; 0x100],
@@ -858,7 +861,7 @@ impl Vmpeg {
             current_video_frame: None,
             display_generation: 0,
             video_cycle_accum: 0,
-            video_cycles_per_frame: CLOCK_HZ / 25,
+            video_cycles_per_frame: crate::sched::PAL_CPU_HZ / 25,
             last_picture_due_dclk: None,
             video_underflow_reported: false,
             video_sequence_end_seen: false,
@@ -951,7 +954,7 @@ impl Vmpeg {
         self.stats.current_video_frame_hash = 0;
         self.stats.display_generation = 0;
         self.video_cycle_accum = 0;
-        self.video_cycles_per_frame = CLOCK_HZ / 25;
+        self.video_cycles_per_frame = self.host_clock_hz / 25;
         self.last_picture_due_dclk = None;
         self.video_underflow_reported = false;
         self.video_sequence_end_seen = false;
@@ -971,6 +974,8 @@ impl Vmpeg {
     /// continue path divide by zero at firmware `$E536B0`.
     pub fn set_video_standard(&mut self, pal: bool) {
         self.pal = pal;
+        self.host_clock_hz = crate::sched::cpu_clock_hz(pal);
+        self.video_cycles_per_frame = self.host_clock_hz / 25;
         self.refresh_display_period();
     }
 
@@ -1181,7 +1186,7 @@ impl Vmpeg {
                     let rate = self.video_decoder.frame_rate();
                     if rate > 0.0 {
                         self.video_cycles_per_frame =
-                            (CLOCK_HZ as f64 / rate).round().max(1.0) as u64;
+                            (self.host_clock_hz as f64 / rate).round().max(1.0) as u64;
                     }
                     let first = &frames[0];
                     Self::set_word(&mut self.fmv_regs, 0x02, first.width as u16);
@@ -1311,10 +1316,44 @@ impl Vmpeg {
         self.sync_stats();
     }
 
+    /// CPU clocks until the next independently clocked VMPEG boundary.
+    pub(crate) fn cycles_until_next_event(&self) -> u64 {
+        let scaled_edge = |accum: u64, rate: u64| {
+            self.host_clock_hz
+                .saturating_sub(accum)
+                .div_ceil(rate)
+                .max(1)
+        };
+
+        let mut next =
+            scaled_edge(self.dclk_accum, DCLK_HZ).min(scaled_edge(self.timer_accum, FMV_TIMER_HZ));
+        if self.video_update_pending && self.video_update_scroll {
+            next = next.min(
+                (self.host_clock_hz / 50)
+                    .saturating_sub(self.video_update_cycles)
+                    .max(1),
+            );
+        }
+        if self.audio_enabled && self.mp2.pcm.len() >= 2 {
+            next = next.min(scaled_edge(self.audio_sample_accum, 44_100));
+        }
+        if self.playing
+            && self.pending_video_frame.is_none()
+            && !self.last_picture_waiting_for_pts()
+        {
+            next = next.min(
+                self.video_cycles_per_frame
+                    .saturating_sub(self.video_cycle_accum)
+                    .max(1),
+            );
+        }
+        next
+    }
+
     pub fn tick(&mut self, cycles: u64) {
         self.dclk_accum += cycles * DCLK_HZ;
-        while self.dclk_accum >= CLOCK_HZ {
-            self.dclk_accum -= CLOCK_HZ;
+        while self.dclk_accum >= self.host_clock_hz {
+            self.dclk_accum -= self.host_clock_hz;
             self.dclk = self.dclk.wrapping_add(1);
         }
 
@@ -1361,14 +1400,14 @@ impl Vmpeg {
         }
         if self.video_update_pending && self.video_update_scroll {
             self.video_update_cycles = self.video_update_cycles.saturating_add(cycles);
-            if self.video_update_cycles >= CLOCK_HZ / 50 {
+            if self.video_update_cycles >= self.host_clock_hz / 50 {
                 self.complete_video_update();
             }
         }
 
         self.timer_accum += cycles * FMV_TIMER_HZ;
-        while self.timer_accum >= CLOCK_HZ {
-            self.timer_accum -= CLOCK_HZ;
+        while self.timer_accum >= self.host_clock_hz {
+            self.timer_accum -= self.host_clock_hz;
             let compare = Self::word(&self.fmv_regs, FMV_TIMER);
             if self.timer_counter >= compare {
                 self.timer_counter = 0;
@@ -1381,8 +1420,8 @@ impl Vmpeg {
 
         if self.audio_enabled {
             self.audio_sample_accum += cycles * 44_100;
-            while self.audio_sample_accum >= CLOCK_HZ && self.mp2.pcm.len() >= 2 {
-                self.audio_sample_accum -= CLOCK_HZ;
+            while self.audio_sample_accum >= self.host_clock_hz && self.mp2.pcm.len() >= 2 {
+                self.audio_sample_accum -= self.host_clock_hz;
                 if self.stats.audio_first_output_dclk.is_none() {
                     self.stats.audio_first_output_dclk = Some(self.dclk);
                     self.stats.audio_first_output_events += 1;
@@ -2192,6 +2231,18 @@ impl Vmpeg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ntsc_host_clock_preserves_dvc_real_time_rates() {
+        let mut dvc =
+            Vmpeg::new(DvcConfig::new(DvcKind::Vmpeg, vec![0; VMPEG_SPLIT_ROM_SIZE]).unwrap())
+                .unwrap();
+        dvc.set_video_standard(false);
+        Vmpeg::set_word(&mut dvc.fmv_regs, FMV_TIMER, u16::MAX);
+        dvc.tick(crate::sched::NTSC_CPU_HZ);
+        assert_eq!(dvc.dclk, DCLK_HZ as u32);
+        assert_eq!(dvc.timer_counter, FMV_TIMER_HZ as u16);
+    }
 
     fn write_fmv_system_command(dvc: &mut Vmpeg, command: u16) {
         let [high, low] = command.to_be_bytes();

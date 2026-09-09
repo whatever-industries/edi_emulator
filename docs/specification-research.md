@@ -5,7 +5,7 @@ and `docs/reference-inventory.md` for extraction coverage. This file records
 detailed findings and unresolved interpretations rather than redefining those
 boundaries.
 
-Status date: 2026-08-07
+Status date: 2026-08-09
 
 This is the durable research ledger for the local Philips CD-i/ICDIA document
 archive. It records claims that can constrain emulation behavior, their exact
@@ -59,6 +59,9 @@ These hashes pin the exact local editions used for the first priority pass:
 | `docs/mcd251ts.pdf` | `fbf214d5c167459aad69d9e19cf1973358b689203c69e68eb3a09058667d8ba2` |
 | Supplemental `BRIDGE10.pdf` (CD-I Bridge Specification 1.0, February 1995) | `99b6a85352444cb287cae1d4cb5100f37866788d8f4d79f3148728897e5eac4a` |
 | Supplemental `CD-I full-motion video encoding on a parallel computer.pdf` | `290dd3c3967e09643fa245022dba35f2e045e0bbb191acbdfbb2cc4ffe26f437` |
+| Supplemental `CDiDevelopment20210225.pdf` (unofficial secondary guide) | `31aa499caac87e287c89b684706d60a9c4fadf866bd30b7bf7a5e9ba68a858f6` |
+| Supplemental `DSA2IH00106115.pdf` (MCD251 Technical Summary scan) | `d770684e0b489d91aba8c90dd4918cb9c0a426728a567b28973f7af7f198d75f` |
+| Supplemental `Motorolla Multimeda Device Data.pdf` (1995 Motorola collection) | `8e9b04f70aa59748a33471c13aec00fe3d7613b82ed224cb5c44f0a13116fc08` |
 | `docs/scc68070.zip` (`scc68070_apr93.pdf`) | archive `d75ac767121f9a8890d220afba420530de3aa9961c28452e2e4de672a4daf8b8`; PDF `71fbb838b265693bd2b8374fdc73e25c88827f90c7c24c439862bd2990bc57ff` |
 | `svcmanuals/cdi205.pdf` | `43121b5f0e21590f080de070c21ab51f940d2540f8952f5b6c51a283f98c3b42` |
 | `svcmanuals/cdi220.pdf` | `792b3f89274451df69bbd5bbc8a876c9b52d1cd938a980f6f6386517d1138429` |
@@ -113,9 +116,9 @@ These hashes pin the exact local editions used for the first priority pass:
 
 | Subsystem | Documented behavior | Primary evidence | Current assessment | Next device-level evidence |
 |---|---|---|---|---|
-| Global timing | Disc/audio, video field, and 10 ms system tick are asynchronous; continuous A/V normally follows the disc/audio clock. The tick may be fixed anywhere from 99.8 to 100.2 Hz on a given player; it does not fluctuate inside that range. | `notes/technote085.1.pdf`, printed p. 2; `notes/technote094.pdf`, printed pp. 1-5; `notes/technote100.pdf`, printed p. 7 | The nominal 75-sector CDIC cadence, exact 100 Hz tick, and SCC68070 section-6.2 instruction/bus timing are implemented. The first accurate-timing divergence proved to be the CDIC/VMPEG interrupt-chain contract rather than sector cadence or DMA0 completion. The allowed off-nominal tick is not modeled. | Preserve the bounded multi-device timeline when changing scheduler granularity; add a synthetic within-instruction deadline test and fixed 99.8/100.2 Hz tick variants before event slicing. |
+| Global timing | Disc/audio, video field, and 10 ms system tick are asynchronous; continuous A/V normally follows the disc/audio clock. The tick may be fixed anywhere from 99.8 to 100.2 Hz on a given player; it does not fluctuate inside that range. | `notes/technote085.1.pdf`, printed p. 2; `notes/technote094.pdf`, printed pp. 1-5; `notes/technote100.pdf`, printed p. 7 | The nominal 75-sector CDIC cadence, exact 100 Hz tick, SCC68070 section-6.2 instruction/bus timing, and chronological device-to-device advancement are implemented. Opt-in bounded diagnostics correlate CDIC pump edges, MCD212 fields, timer-0 overflows, audio-queue transitions, PCL ownership, and pointer updates on one machine-cycle timeline. Synthetic rational-deadline tests cover 75 Hz and fixed 99.8/100/100.2 Hz rates. A timer deadline 96 cycles into a 154-cycle instruction is serviced in two device slices of 96 and 58 cycles; transition sampling at instruction commit still observes the resulting state at cycle 154. CPU bus accesses for that instruction have already executed, so a multi-access instruction cannot yet observe a device transition between accesses. The first accurate-timing divergence proved to be the CDIC/VMPEG interrupt-chain contract rather than sector cadence or DMA0 completion. The allowed off-nominal tick is not yet selectable at runtime. | Retain chronological device ordering and the bounded timeline. Add a focused multi-access CPU/device test before introducing bus-cycle interleaving. Add fixed per-player 99.8/100.2 Hz tick selection without runtime fluctuation, then compare a long trace against physical-player tick phase. |
 | SCC68070 bus errors | External `BERRN` enters vector 2 and saves a 17-word format-F frame. SSW identifies function code, read/write and transfer attributes; setting SSW.RR suppresses rerunning the failed cycle on long-frame `RTE` | `docs/scc68070.zip` → `scc68070_apr93.pdf`, printed pp. 18 and 21-22, §§5.9-5.10, Figures 14-16; Table 22 for RTE timing | Implemented for the two independently verified Mono-I absent-memory ranges, with exact frame/RR tests. Unknown board holes remain open bus. This removes most of the firmware's bytewise RAM-search cost without a blanket unmapped-page rule. | Complete a physical Mono-I address-response matrix across holes, widths, directions and function codes before expanding fault coverage. |
-| Player clocks | PAL system/CPU clocks are 30/15 MHz; NTSC system clock is 30.2098 MHz, consistent with the MCD212's 30.2097 MHz timing tables | `svcmanuals/cdi205.pdf`, PDF pp. 66 and 96; `svcmanuals/cdi350.pdf`, video specifications; `docs/mcd212rev0.pdf`, Table 5-5 | The scheduler and devices currently use a global 30/15 MHz constant, while MCD212 derives integer line periods from exact 50/60 Hz. This is a confirmed model limitation, but changing it before event-interleaved scheduling could regress verified titles. | Add board-clock values and line/field-period tests, then reconstruct scheduling so CPU and devices share the selected crystal without instruction-boundary lumping. |
+| Player clocks | PAL system/CPU clocks are 30/15 MHz; NTSC system clock is 30.2098 MHz, consistent with the MCD212's 30.2097 MHz timing tables | `svcmanuals/cdi205.pdf`, PDF pp. 66 and 96; `svcmanuals/cdi350.pdf`, video specifications; `docs/mcd212rev0.pdf`, Table 5-5 | Runtime PAL/NTSC selection now configures the shared CPU-relative device clock. MCD212 uses 960 CPU cycles per complete line and the final 480-cycle half-line, yielding 300,000 cycles per PAL field and 252,000 per NTSC field at approximately 59.94 Hz. CDIC and VMPEG use rational accumulators for their independent rates; SLAVE delays and frontend pacing convert the selected clock to bounded integer intervals. One selected-clock second produces 50 PAL or 59 completed NTSC fields and 75 sector ticks; the deterministic Alien Gate, The 7th Guest, and Accused baseline passes. | Manually revalidate regional title cadence, beginning with CD Shoot's PAL flag and skeets, while retaining the synthetic exact-boundary and neighboring-title regressions. Replace repeated integer interval truncation with a carried remainder if long-run SLAVE poll or host-pacing phase becomes observable. |
 | CDFM/PCL | CIL advances to `PCL_Nxt`; a full buffer cannot be reused; PCL signal precedes PCB signal; MPEG uses circular one-sector PCL chains. Balboa independently demonstrates circular per-channel/type buffer lists filled asynchronously in whole 2324-byte Form 2 sectors. | Green Book R2 `docs/cdi_may94_r2.pdf`, VII.4.4.2-VII.4.4.3 and IX.3.3.3; `notes/technote098.pdf`, “PCL Handling by the MPEG Drivers”; `notes/technote099.pdf`, printed pp. 18 and 67-69 | DMA-boundary ownership tracing, bounded guest-write provenance, and a synthetic reuse test are implemented. Current The 7th Guest and Addams runs show no full-PCL overwrite. The lone Addams hash difference is an intentional guest SCR retime, not payload corruption. | Retain these diagnostics when investigating a current visible transport failure; do not alter the nominal 75-sector cadence without a new first-divergence trace. |
 | CDFM error reporting and correction | Non-real-time Form 1 sectors may legally occur inside a real-time file and be delivered asynchronously with ECC, but software correction can interrupt subsequent real-time delivery. Form 2 may carry EDC without ECC. PCL `PL_ERR.Err_Res` can report byte or word resolution, requiring worst-case application buffers of 294 bytes for Form 2 and 256 for Form 1. | `notes/technote054.pdf`, printed pp. 2-5; `notes/technote058.pdf`, printed pp. 1-2 and 4 | Clean image-backed sectors preserve form/real-time/EDC metadata but expose no injected read-error path, correction latency, or guest `PL_ERR` population. Native dirty-disc dialogs therefore cannot yet be tied to a physical-error resolution. | Add project-owned correctable and uncorrectable Form 1/Form 2 sector fixtures, byte/word `PL_ERR` variants, and a timeline proving that software ECC can delay a real-time stream without changing the nominal clean-sector cadence. |
 | CDFM seek contract | `I$Seek` changes only the logical file-position pointer. Disc-reading calls perform an implicit physical seek; `SS_Seek` additionally repositions the head immediately and is useful only when that movement can overlap other presentation. A normal `SS_Seek` followed by a read can therefore move the head twice. | `notes/technote090.pdf`, printed pp. 1-2 | The image-backed drive has logical position and command latency, but does not model a physical head or distance-dependent implicit seek. This is a compatibility timing gap, not a reason to delay every host read. | Add a synthetic SLAVE/CDIC timeline for logical seek, pre-positioned asynchronous seek, near implicit seek, and cross-disc seek before modeling head position or Green Book 1-to-3-second limits. |
@@ -137,7 +140,7 @@ These hashes pin the exact local editions used for the first priority pass:
 | MCD212 cursor | Blink on/off units are 12 TV fields: 200 ms at 60 Hz and 240 ms at 50 Hz | `docs/mcd212rev0.pdf`, §7.6 and cursor-control register description | Implemented with explicit field counting. PAL and NTSC register-level tests prove the state changes on the twelfth field in both standards. | Retain the field-count test when changing display scheduling; do not derive blink from CPU-cycle or nominal-frame accumulators. |
 | Pointer devices | Relative devices report changes; maneuvering devices report continuously while deflected and support at least 16 directions; X/Y coexist in one packet | `docs/pointing_devices.pdf`, protocol sections “Relative” and “Maneuvering” | Relative mouse and simultaneous X/Y are conceptually correct. A fixed 60 Hz HLE polling cadence is not yet justified by this document alone. | Trace SLAVE firmware packet timing before changing `POLL_INTERVAL`; test diagonal and simultaneous-button packets. |
 | Player CSD and device discovery | Titles must discover device names/types through the CSD rather than assume Philips names. The 605 CSD adds player-control and extension devices; `/ptr` and `/pt2` depend on attached pointing devices and port placement, with the remote assumed when no external device is present. | `notes/technote076.pdf`, printed pp. 6-7; `notes/technote085.1.pdf`, printed pp. 4 and addendum | Firmware-supplied CSD data is used by native software, and the consumer remote currently reaches the SLAVE pointer path. Machine-specific CSD contents, alternate input types, two-device ordering, and non-Philips device names are not asserted. | Parse the live CSD after boot with zero, one, and two devices. Verify type, ordering, `/ptr`/`/pt2`, optional `/pck`, and extension entries per player model before adding a second input port. |
-| Keyboard | K-mode uses 1200 baud, 8 data bits, one stop bit and two-byte change packets; T-mode uses 7 data bits, two stop bits and four-byte packets; both report Shift/Caps/Supershift/Control and ISO-8859-1 key codes | `docs/keyboards_1996.pdf`, v0.92, pp. 1-5; `docs/keyboard_drivers.pdf` | Host-keyboard passthrough is not emulated. The documents provide enough device-level protocol to implement K-mode first without mapping keys directly into guest memory. | Add a serial-packet encoder and SLAVE/UART recognition tests for press, release, modifiers, ID request, and idle silence. |
+| Keyboard | K-mode uses 1200 baud, 8 data bits, one stop bit and two-byte change packets; T-mode uses 7 data bits, two stop bits and four-byte packets; both report Shift/Caps/Supershift/Control and ISO-8859-1 key codes. A powered device supplies its ID after 100-500 ms; negating RTS for at least 10 ms and asserting it requests another ID. | `docs/keyboards_1996.pdf`, v0.92, pp. 1-5; CD-i 605/615 input-device and configuration chapters; `docs/keyboard_drivers.pdf` | Mono-I now distinguishes front-input `/kb1` through SLAVE channel 2 from rear-port `/kb` through the SCC68070 UART. Tests cover SLAVE F3 class-5 discovery, native CSD generation, ordered query replies, `$80/$81` report gating, `A0` press/release packets, UART power-on/RTS IDs and pacing, and common host codes. Settings selects `/kb1`, resets for native discovery, and performs no guest-memory injection. Manual title acceptance still fails: Web-i explicitly sends `$81`, never `$80`, and therefore rejects otherwise correctly forwarded host keys. | Defer behavior changes until a native driver/UCM trace or independently validated player run explains why tested titles leave `/kb1` disabled. Do not force reports past `$81`. Add T-mode only with a 450/380 model and its replacement-driver boundary. |
 | SLAVE/SERVO | For drive traffic the SLAVE MC68HC05 transparently forwards four-byte command/data messages to a second drive MC68HC05 over SPI; `A0..A5` report status/time/track/version/echo/errors | `svcmanuals/cdi205.pdf`, PDF pp. 79-81 | Firmware-derived `B0` boot/media HLE works. SERVO B0 byte-2 bit 6 is traced to valid lower-drive-status latch `$77.4`, and SLAVE forwards it unchanged. Diagnostics and device tests now distinguish modeled, queued, and BIOS-visible packets across power-on, insertion, retained PLAY/reset, removal, and replacement. Physical open/close/spin-up timing, intermediate states, replacement ordering, and type-5 failure meaning remain incomplete. | Capture the remaining physical matrix on real hardware or independently validated firmware before replacing the retained-mode HLE abstraction. |
 | DVC memory/hardware | 22ER9141 supplies MPEG-1 decode and 1 MiB extra system RAM; compressed data comes from the 68070 and decoded RGB/audio returns to the base case. Philips' system description independently requires CPU-bus data/control, a CD data clock, base-case pixel/HSYNC/VSYNC inputs, and pixel-by-pixel video selection. | `svcmanuals/22er9141.pdf`, §§4.3-4.5; `notes/technote097.pdf`, printed pp. 25-29; Sijstermans and van der Meer, “CD-I Full-Motion Video Encoding on a Parallel Computer,” printed pp. 81-91 (decoder sidebar p. 90) | The architecture matches the current CDIC/main-RAM/DMA/VMPEG path and base-case video/audio composition. The service diagram also confirms separate audio, video, buffering, and DRAM sections. | Preserve this path in transport fixes; add an initialization test for advertised extension memory and both decoder drivers. Keep the early encoder paper as architectural corroboration, not a later Green Book replacement. |
 | DVC interrupt chain | The FMV extension exposes `INTREQN`/`IACKN`; CDIC and extension requests share IN4 through the base-case daisy chain, while the service glossary marks SCC68070 IN5 unused | `svcmanuals/cdi220.pdf`, PDF p. 66 and signal glossary | Implemented with a latched IN4 owner and owner-routed programmed-vector acknowledge. A focused test first reproduced the incorrect IPL5 request; the corrected bounded 7th Guest trace restores PCL order and eliminates the decoder failure. | Retain simultaneous-request and no-preemption tests; verify later player/DVC models separately rather than assuming the CD-i 220 chain. |
@@ -147,12 +150,12 @@ These hashes pin the exact local editions used for the first priority pass:
 | MPEG events | Events occur at presentation time; last-picture means the first field displaying the last picture, not parser receipt of sequence end. On early cartridges, the PIC signal is raised only after the DV picture has begun displaying, so applications needing a synchronized base-plane matte predict the next picture and update an earlier LCT. | Green Book R2 IX.3.3.5-IX.3.3.7; `notes/technote103.pdf`, printed pp. 2-4 | SCR/PTS anchors, delayed-reference handling, and display-timed final-picture coverage exist. The precise PIC-within-field phase and base-plane line-interrupt relationship remain untested. | Add a display-field timeline test for PIC, next-picture latch, MCD212 line interrupt, and a triple-buffered matte update before supporting picture-synchronous overlays. |
 | MPEG sequence end | Concatenated encodes may introduce extra EOS codes; real cartridges can lose rhythm after some EOS codes. Seamless body streams deliberately omit sequence/program end codes unless parameters change or the whole play ends; an intermediate program end prevents continuation. | `notes/technote102.pdf`, printed pp. 1-2; `notes/technote105.pdf`, printed pp. 4-7 and 25 | The project-owned repeated EOS/SOS transition suite passes, but this does not justify accepting malformed authored branches or stripping codes from media. | Add introductory/body seamless-branch fixtures that distinguish legal same-parameter continuation, parameter-changing EOS+header, intermediate program end, and final end. |
 | MPEG transitions and branching | Pause/continue, rapid abort/restart, EOS+SOS, sequence changes, and PCL flushing have documented edge cases. Truly seamless branching keeps decoders running, preserves VBV/STD boundary state, uses closed GOP entry, keeps PCL ownership until time stamps are patched, and derives the patch delta from PTS rather than SCR. | `notes/technote088.pdf`, printed pp. 1-6; `notes/technote105.pdf`, printed pp. 1-12 and 19-25; Philips FMVDemo `SUN/SRC/APPL/play_control.c` and `multilingual.c` | Synthetic transition rules and native pause/continue and stream-selection gates pass. The current tests cover decoder continuity and selected-PES boundaries, but not a general authored introductory/body branch with matched VBV/STD states or PTS patching across repeated branches. | Retain the native gates and add project-owned TN 105 introductory/body and closed-GOP branch fixtures. Verify PTS-derived delta continuity, buffer states, complete audio-frame boundaries, and PCL release without adding media repair. |
-| CDIC sound maps | `SM_Done` means the last sector reached the audio processor buffer, not that it became inaudible; buffered audio may continue. Sound maps take audible priority over a continuing direct real-time play, and the amount of queued audio is player-dependent. Mono-I captures additionally establish `$ff`/AUDCTL completion behavior. | `notes/technote079.pdf`, printed pp. 1-2; `notes/technote092.pdf`, printed pp. 2-3; `Slamy/CDIC_BlackBoxAnalyzer` `src/test_audiomap.c` | Per-half refill, transfer completion, `$ff` completion, interrupt-masked abort, replacement, direct-audio suppression, and preservation of the queued PCM tail have device-level coverage. The exact physical queue depth remains intentionally abstract. | Investigate exact hardware audio-processor queue depth only if synchronization requires it. Preserve separate transfer-done and audible-done state and do not derive queue depth from one player family. |
+| CDIC sound maps | `SM_Done` means the last sector reached the audio processor buffer, not that it became inaudible; buffered audio may continue. Sound maps take audible priority over a continuing direct real-time play, and the amount of queued audio is player-dependent. Mono-I captures additionally establish `$ff`/AUDCTL completion behavior. Native `cdapdriv` sequencing corroborates that command `$2E` commits ACHAN after a guest-visible register write. | `notes/technote079.pdf`, printed pp. 1-2; `notes/technote092.pdf`, printed pp. 2-3; `Slamy/CDIC_BlackBoxAnalyzer` `src/test_audiomap.c`; CD-i 220 F2 `cdapdriv` disassembly | Per-half refill, transfer completion, `$ff` completion, interrupt-masked abort, replacement, direct-audio suppression, and preservation of the queued PCM tail have device-level coverage. E-Di now tracks live and `$2E`-committed ACHAN separately in diagnostics; the committed value does not yet change playback. The exact physical queue depth remains intentionally abstract. | Preserve the confirmed ACHAN-zero queued-tail behavior. Use a controlled physical-player matrix before modeling whether nonzero committed ACHAN stops at a sound-group boundary or immediately; do not infer it from the existing CDICTEST reset path. |
 | Initialization | Application entry does not guarantee configurable player state; titles must initialize scan, compatibility, cursor, pointer origin, attenuation, and relevant DCP state | `notes/technote057.1.pdf`, printed pp. 1-2 | Different title screens may legitimately retain or program different state. The emulator must not cosmetically normalize it. | Capture reset/entry register state and first title writes in display incidents. |
 | Base and extension memory | Base CD-i provides two 512 KiB colored banks. At application entry, OS structures may consume at most 32 KiB in either bank, leaving at least 480 KiB contiguous per plane. The Philips DVC dynamically inserts 1 MiB system RAM and 0.5 MiB priority-zero MPEG RAM into the live memory list rather than the static init-module list. | `notes/technote087.pdf`, printed pp. 1-3 and 6-9; `notes/technote096.pdf`, printed pp. 9-10 | The physical base/DVC RAM maps exist. Guest-visible CD-RTOS memory-list insertion, priorities, colors, and entry-time contiguity have not been asserted from a boot trace. | Capture the post-DVC `D_FreeMem` list and application-entry free-block map; verify two base colors, dynamic extension nodes, priority-zero decoder RAM, and 480 KiB base-case minima. |
 | NVRAM/timekeeper | The MK48T08B is memory-mapped; TN 068 describes a base-case player as having approximately 8 KiB and documents the native NVRUI deletion/protection policy and deliberately rounded percentage display. The service manual also describes a 32 KiB CPU window and says one configuration permits 31 KiB, so capacity must remain a board/configuration property rather than a universal shell constant. | `notes/technote068.pdf`, printed pp. 1-4; `svcmanuals/cdi205.pdf`, PDF pp. 20 and 96 | The Mono-I core stores 8 KiB of MK48T08 SRAM, maps it on the upper byte lane through the configured 32 KiB window, reserves the final eight device offsets for clock registers, and persists it by board. On `019fb59`, the shell's three rounded entry percentages sum plausibly to its rounded total, but this does not identify the exact filesystem reservation or reconcile every service-manual configuration. | Preserve the current 8 KiB device until a model-specific address probe proves otherwise. Add a native near-capacity filesystem test for percentage rounding, protection, and deletion ordering if shell storage becomes compatibility-relevant. |
 | Disc addressing | Logical block address differs from Q absolute time by 150 frames; physical calibration can add a small disc-specific constant | `notes/technote066.pdf`, printed pp. 1-3 | The 150-frame relationship is implemented. Physical calibration offset is unnecessary for ordinary image-file reads unless hardware evidence requires it. | Add only if a subcode-sensitive title diverges from a hardware trace. |
-| Player control keys | `/pck` Play/Stop/Pause/Next/Previous/Search keys are an optional extension, separate from the base two-button pointer; Pause is code `$82` with distinct key-down/key-up events | `notes/technote073.2.pdf`, printed pp. 1-3 | Start defaults to the configurable host-level E-Di menu because `/pck` is not yet emulated; Guide/Home, L1+R1, and right-stick alternatives are available. The overlay pauses emulation only while visible. Start is never emitted as a third base-pointer button, and Select is unassigned. | Implement `/pck` as an optional advertised device with `KB_Read`/`KB_Rdy`/`KB_SSig` behavior and `ss_enable` gating. Then expose an explicit choice between native Start-to-Pause down/up and host-menu use; titles that do not open `/pck` naturally ignore the native events. |
+| Player control keys | `/pck` Play/Stop/Pause/Next/Previous/Search keys are an optional extension, separate from the base two-button pointer; Pause is code `$82` with distinct key-down/key-up events | `notes/technote073.2.pdf`, printed pp. 1-3; bundled `ckeydriv`/`pck2driv` and CSD | The bundled CSD advertises `/pck2`; SLAVE channel 1 now emits the native driver's exact `$87` Play/Stop/Pause/Next/Previous masks behind its `$8D`/`$8E` gate. The driver retains `KB_Read`/`KB_Rdy`/`KB_SSig`, event-type, and repeat policy. Settings explicitly chooses Start as native Pause or host menu, with Guide/Home and L1+R1 alternatives. Start never enters the pointer packet. | Manually confirm Start-to-Pause in a title which opens `/pck2`; compare another player model's optional CSD before generalizing the device name or channel. |
 | Video CD engine | The engine requires DVC, starts the first PSD item, owns its control bars, and shows the multilingual dirty-disc message on disc errors. Release 4.1 says the control bar initially appears at the bottom, but the application is configurable. | `docs_sw/vcd_on_cdi_41.pdf`, Release 4.1, printed pp. 5-7 | A native dirty-disc screen is affirmative evidence of a CD-i engine transport/play failure, not proof that the image is bad. The documented configurability means a clean, flush bar on one title does not establish a different Video CD standard or a universal compositor boundary. | Correlate the dialog with the first PCL/decoder error and the exact PSD/entry point. Fingerprint the native engine/application and configuration before treating control-bar geometry as a cross-title invariant. |
 | Video CD filesystem and PSD | Philips' reference engine files are `CDI/CDI_VCD.APP;1`, `CDI/CDI_IMAG.RTF;1`, and `CDI/CDI_TEXT.FNT;1`; the PVD application identifier launches `CDI/CDI_VCD.APP;1`. Authored discs may instead use the standard `VCD/INFO.VCD`, `VCD/ENTRIES.VCD`, and `MPEGAV/AVSEQ*.DAT` structure with another native CD-i entry point. White Book 2.0 defines entry addresses plus LOT-indexed selection, play, and end lists whose offsets use the multiplier in `INFO.VCD`. | Video CD 2.0, III.2.5 and VI.1-VI.6; `docs_sw/vcd_on_cdi_41.pdf`, Release 4.1, p. 9; local metadata-only inventories | `DiscInventory` records the XA Bridge signature, PVD identifiers, native `CDI` application presence, `video-cd` classification, entry points, and PSD topology without retaining media. A synthetic Mode-2 Bridge image covers `INFO`/`ENTRIES`/`LOT`/`PSD`; a local 2.0 disc reports 156 valid lists (129 selection, 27 play). Media-panel work preserves the on-disc application instead of bypassing it. | Correlate native engine control failures with the selected PSD list and first transport/decoder error. |
 | CD-I Bridge identity and launch contract | Every session is CD-ROM XA with TOC `PSEC=$20`. The ISO PVD System Identifier is exactly `CD-RTOS CD-BRIDGE` padded with spaces, and its Application Identifier names the CD-I executable in the root `CDI` directory. A player may use the session type and/or System Identifier for startup recognition, but that recognition shortcut does not relax the format's mandatory fields. Multisession discs expose one logical volume: every session repeats the same SVD layout and the player remaps first-session descriptor LSNs to the last session. | CD-I Bridge Specification 1.0, printed pp. 7, 9, 15-17, 19-20, and 23-24 | Inventory schema 4 reports exact 32-byte System-Identifier conformance, ISO 8.3 version-1 Application-Identifier syntax, whether that application resolves in the parsed root `CDI` tree, and `CD-XA001` presence as four independent facts. Synthetic Photo CD and Video CD images cover the complete metadata path. Boot classification intentionally retains its earlier prefix-plus-XA gate: the XA label-record contract and Bridge startup discriminators have not yet been reconciled. Flat images also expose neither session `PSEC` nor last-session SVD remapping. | Resolve the full CD-ROM XA label-record requirement before changing `CD-XA001` behavior. Then extend the disc model with session descriptors and test `$20` versus `$10`, repeated SVD layouts, global LSNs, and last-session remapping. |
@@ -169,6 +172,13 @@ best for smooth visual effects, while a menu may use the system tick. PCL-full,
 file-position, Trigger/EOR, and `SM_Done` are the documented ways for software
 to observe disc/audio progress.
 
+Standard machine diagnostics now correlate the independent CDIC pump counter,
+MCD212 field boundaries, SCC68070 timer-0 overflows, CDIC audio-queue changes,
+PCL ownership, and SLAVE pointer changes by machine cycle. The counters are
+read-only diagnostic state, normal capture uses the existing bounded event
+ring, and milestone-only capture remains the lower-volume option for long
+title runs.
+
 Consequences:
 
 - Do not “fix” CD Shoot animation speed by changing the physical disc rate.
@@ -182,13 +192,32 @@ Consequences:
 The CD-i 205 service manual supplies the physical-clock detail missing from
 the application note: PAL uses a 30.0000 MHz system clock and 15.000 MHz CPU
 clock, while NTSC uses 30.2098 MHz. MCD212 Table 5-5 independently specifies
-the 30.2097 MHz 525-TV sample clock and 63.56 us line. E-Di currently has one
-30/15 MHz scheduler clock and derives integer line cycles from exact 50/60 Hz,
-so region switching does not yet switch the underlying virtual crystal. This
-is a genuine architectural gap, but a direct constant replacement would
-repeat the scheduling rabbit hole documented in
-`docs/core-compatibility-audit.md`. Board clocks and event interleaving need
-to be changed and tested together.
+the 30.2097 MHz 525-TV sample clock and 63.56 us line. Runtime standard
+selection now changes the CPU-relative clock used by MCD212, CDIC, SLAVE, and
+VMPEG, as well as frontend wall pacing. Rational accumulators preserve the
+independent 75 Hz disc rate and VMPEG clocks without integer truncation.
+
+The regional model pins the MCD212's 1,920-master-clock line and 625/525-line
+fields, including the final half-line, while synthetic coverage retains fixed
+99.8/100/100.2 Hz system-tick variants. Device advancement now splits a
+completed CPU instruction at the earliest pending device deadline: a timer
+overflow 96 cycles into a 154-cycle instruction is serviced with 96- and
+58-cycle slices. The externally sampled diagnostic transition remains stamped
+at instruction commit because the CPU cannot react before its next boundary;
+the device state itself advances chronologically. This implementation does not
+by itself prove any reported title symptom fixed. The deterministic Alien
+Gate, The 7th Guest, and Accused baseline passes, and CD Shoot remains a manual
+PAL cadence gate.
+
+The slice is currently device-level rather than fully CPU-cycle-interleaved.
+`Cpu::step()` performs an instruction's bus accesses before the machine uses
+its returned cycle total to advance devices to each internal deadline. That is
+correct for interrupt sampling at the next instruction boundary and preserves
+device-to-device ordering, but it cannot make a later access in one
+multi-access instruction observe a device transition that occurred between
+the instruction's accesses. Require a focused failing register/DMA test before
+expanding the CPU/bus interface; the clock constants and field cadence do not
+depend on that future refinement.
 
 ### Early full-motion architecture
 
@@ -209,6 +238,59 @@ for screen timing and pixel-by-pixel selection between FMV and base-case RGB.
 Printed p. 90. These points corroborate the eventual CDIC/VMPEG/MCD251 path.
 The paper's 360-sample early video example does not override the later
 352-sample Green Book/TN 097 limits.
+
+### Supplemental document assessment
+
+Luc Rooijakkers' *CD-i Development in the 21st Century* was reviewed in full,
+including a visual pass over all 29 pages. It is an unofficial guide dated
+2021-02-25, written from the perspective of a former CD-i title developer, and
+is therefore a navigation and historical source rather than a Philips
+specification.
+
+- Printed pp. 5-10 route low-level development to the Green Book May 1994 R2
+  and the OS-9 2.4 Technical and Technical I/O manuals. The guide also warns
+  that the Green Book specifies services and formats rather than concrete
+  device-register interfaces. That boundary agrees with the primary corpus;
+  claims about a register or board still require a component specification,
+  service manual, firmware trace, or hardware measurement.
+- Printed pp. 11-16 inventory PIM technical notes, 605/605T documentation,
+  processor manuals, and OS-9 references. Every numbered PIM note recommended
+  there is present in the local indexed corpus. The author's SCC68070 timing
+  and player-population observations are useful search leads, not substitutes
+  for the SCC68070 manual and model-specific service evidence already cited in
+  the compliance matrix.
+- Printed pp. 17-28 inventory tool manuals, authoring tools, system disks,
+  Base-Case tests, Final Production Delivery material, and CDISC 4. These
+  pages improve acquisition and provenance routing but do not specify runtime
+  hardware behavior.
+- Printed p. 7's statement that no contemporary emulator fully supported the
+  Full Motion Extension was an ecosystem observation in 2021, not evidence
+  about current E-Di or MAME behavior. It is a concrete example of why the
+  guide cannot be used as current implementation authority.
+
+The other supplemental PDFs were reconciled at the same checkpoint. The
+13-page `DSA2IH00106115.pdf` is another scan of the MCD251 Technical Summary,
+printed pp. 2-226--2-238; its first page explicitly points readers to the
+separate complete `MCD251/D` data sheet. It therefore adds no missing
+coordinate equation. The supplemental 1,000-page Green Book has the same
+SHA-256 as the edition already cited throughout this ledger.
+
+The 1995 Motorola multimedia collection was inventoried in full and reviewed
+through its CD-i device block (PDF pp. 209-269) and the AN1244 single-board
+application note (PDF pp. 300-322). Its MCD212 summary is subordinate to the
+complete MCD212 manual already in the corpus. The MCD214 summary documents a
+later 27 MHz/13.5 MHz, CCIR-656-capable video controller; the MCD221 summary
+documents a later CIAP with two ADPCM buffers and an external MPEG-audio mix
+input; and the MCD270 summary documents an integrated MPEG audio/video path.
+Those are player-generation and M4 research leads, not behavior to transplant
+into the current Mono-I MCD212/CDIC plus VMPEG model. Its MCD251 pages are the
+same technical-summary material described above. AN1244 uses an MC68341 at
+16.67 MHz with MCD212, MCD221, and MCD270 on a Motorola evaluation board; it
+must not be treated as a Philips retail-player schematic.
+
+This assessment changes no compliance row and justifies no emulator behavior
+change. The unresolved MCD251 output-coordinate rule still requires the full
+data sheet or synchronized hardware measurement.
 
 ### CDFM/PCL ownership result
 
@@ -705,10 +787,30 @@ Neither sends packets while state is unchanged. Both carry Shift, Caps Lock,
 Supershift, Control, extension bits, and an ISO-8859-1 key code; an RTS-driven
 recognition sequence requests the one-byte device ID.
 
-This supports the TODO's keyboard feature as an optional emulated peripheral.
-The generalized implementation belongs at the input-device serial boundary,
-not as frontend-only injection into title memory. K-mode should be the first
-fixture because it matches the established two-byte protocol.
+Philips' CD-i 605 and 615 technical documentation identifies two player-side
+routes. A front-input keyboard is received by the SLAVE SCI and exposed through
+the bundled `/kb1` driver; a rear serial-port keyboard can use `/kb` through the
+SCC68070 UART. The consumer frontend toggle now models the first route. Native
+startup consumes the SLAVE F3 class-5 response, and `/kb1` receives channel-C
+`A0` reports only after its `$80` enable command. The separate UART K-mode model
+still schedules the documented power-on ID, RTS-requested re-identification and
+two-byte state changes for `/kb`.
+
+Manual tests of Web-i, CD-Online Issue 02, and both SPC encyclopedia titles did
+not accept host input. The bounded Web-i trace proves that class 5 is consumed,
+host `abc` transitions reach the attached SLAVE keyboard, and the application
+has already sent `$81` to disable `/kb1`; it never sends `$80`. This rules out
+frontend focus and host-key translation for that run but does not explain the
+native driver/UCM decision. E-Di must not synthesize `$80` or deliver reports
+while disabled. Further work is deferred until a native driver/UCM trace or an
+independently validated player comparison supplies that missing prerequisite.
+
+The CD-Online replacement-driver note limits its title-supplied `kb1driv` and
+`pt2driv` modules to CD-i 450, GoldStar 450 and FW380i detection. Those titles
+can use configuration-module CRCs as model identifiers, so the bundled CD-i 220
+configuration module remains untouched; the correction is entirely at the
+hardware boundary beneath it. T-mode remains outside the Mono-I implementation
+and belongs with the later 450/380 player boundary.
 
 ### Photo CD application variants
 
@@ -863,8 +965,9 @@ the corresponding corrections:
    mapping the bit fields.
 3. **MCD212 cursor blink (complete):** PAL and NTSC register-level tests now
    prove one on/off unit lasts twelve fields.
-4. **Three-clock timeline:** expose bounded disc, field, tick, audio-buffer,
-   PCL, and pointer-update events on one diagnostic clock.
+4. **Three-clock timeline (complete):** bounded disc, field, tick,
+   audio-buffer, PCL, and pointer-update events share the machine-cycle
+   diagnostic clock.
 5. **MPEG transition suite:** project-owned EOS/SOS, delayed B-picture,
    last-picture, pause/continue, and abort/restart fixtures.
 6. **DVC CSD/memory:** static firmware descriptors are covered. Capture the
@@ -877,8 +980,12 @@ the corresponding corrections:
    player model is introduced.
 9. **Sound-map completion:** separate transfer-done from audible completion
    and test stop/replacement tails.
-10. **Keyboard peripheral:** K-mode ID, press/release, modifier, and idle-silence
-   packet tests before exposing host passthrough.
+10. **Keyboard peripheral (transport covered; title acceptance deferred):**
+    front-input `/kb1` class discovery, native CSD generation, channel-C
+    enable/disable and `A0` reports join the rear-UART ID/packet and host-code
+    tests. Web-i and three related titles do not enable reports; resume only
+    with evidence for the native driver/UCM prerequisite, before considering
+    T-mode.
 11. **Photo CD Bridge inventory (complete):** the documented filesystem,
     Bridge markers, PVD application identifier, and native `CDI` tree are
     classified without extracting image payloads; host controls continue to

@@ -44,7 +44,10 @@ patches belong in the ignored `tests-data/local/diagnostics/`.
   throttle to compensate. The reporter states that Mario must not flicker;
   macOS now reproduces the lower-half flicker, and manual testing confirmed it is
   also present in E-Di 0.1.0, so treat it as longstanding rather than a recent
-  regression. Prepare a
+  regression. A 2026-08-09 Hotel Mario USA check still shows the blinking
+  after chronological device slicing and the documented NTSC host clock were
+  enabled, so regional board-clock selection is not sufficient to correct it;
+  investigate field/layer composition next. Prepare a
   small field-timed benchmark that can run unchanged on a physical Mono-I
   player and E-Di; another emulator or FPGA core is not sufficient calibration.
 - [ ] Complete the physical output-control side of SLAVE audio: trace commands
@@ -65,8 +68,28 @@ patches belong in the ignored `tests-data/local/diagnostics/`.
   structural similarity to MiSTer's MPEG decoder is expected because both
   descend from `pl_mpeg`, while E-Di's VMPEG device integration is independent.
 
+## To Test with Hardware
+
+- [ ] Determine the Mono-I CDIC audio stop boundary with a controlled test on
+  a physical player. Cross live ACHAN zero/nonzero with command `$2E`
+  omitted/executed, then clear AUDCTL during both a memory sound map and direct
+  XA playback. Capture DBUF completion, ABUF/AUDCTL status and interrupts, and
+  analog-output duration. Preserve the confirmed ACHAN-zero queued-buffer
+  drain; change nonzero committed-ACHAN behavior only if this matrix proves
+  whether stopping occurs at a sound-group boundary or immediately.
+
 ## Documentation research
 
+- [x] Process the locally supplied `CDiDevelopment20210225.pdf` from
+  `Disc Specs/Philips CD-i` (SHA-256
+  `31aa499caac87e287c89b684706d60a9c4fadf866bd30b7bf7a5e9ba68a858f6`).
+  Its 29 pages were text- and visually reviewed on 2026-08-09. It is an
+  unofficial 2021 resource guide and developer retrospective, useful for
+  routing research into the Green Book, OS-9 manuals, technical notes, tools,
+  and support media. Its hardware and emulator-status observations remain
+  secondary and potentially outdated; no emulation behavior was changed from
+  it. The page-level assessment and corroboration boundary are recorded in
+  `docs/specification-research.md`.
 - [ ] Search the indexed corpus systematically for MCD212 display/timing,
   CDIC audio/transport, SLAVE/SERVO, DVC/VMPEG, input, storage, and player-model
   behavior. The first priority pass is recorded in
@@ -76,6 +99,15 @@ patches belong in the ignored `tests-data/local/diagnostics/`.
   focused device test before changing emulation. The initial compliance matrix
   and ordered test queue are in `docs/specification-research.md`; the tests are
   intentionally still pending.
+- [ ] Build a bounded Mono-I CD+Audio driver-service matrix before making
+  further broad CDIC compatibility changes. For each relevant Green Book
+  request (play, pause, continue, stop, seek, options, and sound-map handling),
+  link the supported ROM's native `cdapdriv` path or symbol, observed
+  CDIC/SLAVE transactions, current E-Di implementation and focused tests, and
+  any unresolved evidence gap. Reuse the existing disassembly and
+  `docs/slave-protocol.md` findings; do not turn the public CD-i Bits
+  methodology article into behavioral authority or assume that every title
+  uses only standard drivers.
 
 ## Research-derived device work
 
@@ -83,12 +115,27 @@ These are ordered by compatibility impact and dependency. A checked item
 requires the cited device-level test as well as the implementation change;
 none should be implemented as a title-specific workaround.
 
-- [ ] Add one diagnostic timeline containing the independent 75-sector disc
+- [x] Add one diagnostic timeline containing the independent 75-sector disc
   clock, 50/60-field clock, 10 ms system tick, audio-buffer events, PCL
-  ownership, and pointer updates.
-- [ ] Model PAL's 30.0000 MHz and NTSC's 30.2098 MHz board clocks only as part
+  ownership, and pointer updates. Standard diagnostics now emit these edges on
+  the machine cycle clock into the existing bounded event ring; milestone-only
+  capture remains available for long title runs.
+- [x] Model PAL's 30.0000 MHz and NTSC's 30.2098 MHz board clocks only as part
   of cycle/event-interleaved scheduling. Add line/field and CPU/device cadence
-  tests first; do not replace the global clock constant in isolation.
+  tests first; do not replace the global clock constant in isolation. Runtime
+  PAL/NTSC selection now configures the CPU-relative device clock, exact
+  1,920-master-clock MCD212 lines and half-line field ending, rational 75 Hz
+  CDIC cadence, SLAVE delays, and VMPEG clocks. A synthetic 154-cycle
+  instruction is divided at its timer deadline into 96- and 58-cycle device
+  slices, and one selected-clock second produces the expected 50 PAL or 59
+  completed NTSC fields plus 75 sector ticks without integer drift.
+- [ ] Extend chronological device slicing to CPU bus-cycle interleaving only
+  after a focused test demonstrates guest-visible register or DMA behavior
+  across an in-instruction deadline. The current CPU executes all bus accesses
+  before device catch-up; this preserves device ordering and interrupt
+  visibility at the next instruction boundary, but a multi-access instruction
+  cannot yet observe a device transition between its accesses. Do not describe
+  the current scheduler as fully cycle-interleaved.
 - [ ] Resolve the CDIC register-2 reset state at base + `$3FFA`. Four service
   manuals consistently document `$C7FE` in the PCB test and `$D7FE` in the
   terminal test, while the emulator starts at zero. Trace the BIOS first
@@ -118,9 +165,13 @@ none should be implemented as a title-specific workaround.
 - [ ] Add project-owned MPEG transition fixtures for display-timed first/last
   picture events, EOS+SOS recovery, delayed B-pictures, pause/continue,
   abort/restart, redundant EOS, input errors, and old-PCL release.
-- [ ] Implement the documented keyboard K-mode serial boundary first: device
-  recognition, 1200-baud two-byte state-change packets, modifiers,
-  press/release, and idle silence. Add T-mode only afterward.
+- [ ] Complete Mono-I K-mode title compatibility without guest-memory
+  injection. Rear-port `/kb` recognition and 1200-baud packets are covered;
+  front-input `/kb1` class-5 discovery, native CSD generation, and gated `A0`
+  transport have focused tests. Web-i, CD-Online Issue 02, and the two SPC
+  encyclopedias still reject input: Web-i opens by sending `$81` and never
+  sends `$80`. Defer further behavior changes until native driver/UCM evidence
+  explains that gate. Add T-mode only with the later 450/380 boundary.
 - [ ] Before changing the current `CD-XA001` gate, resolve its full CD-ROM XA
   label-record requirement separately from BRIDGE10's `$20`/System-Identifier
   startup discriminators. Add session `PSEC`, global-LSN, repeated-SVD, and
@@ -205,16 +256,18 @@ none should be implemented as a title-specific workaround.
 - [ ] Continue the behavior-neutral refactoring sequence in
   `docs/code-audit.md`. Keep structural checkpoints separate from emulation
   corrections and verify each extracted responsibility independently.
-- [ ] Implement the optional `/pck` player-control-key peripheral documented
-  by Philips TN 73.2. Advertise it through the CSD, cover `KB_Read`,
-  `KB_Rdy`, `KB_SSig`, and `ss_enable`, then offer an explicit choice between
-  routing Start to native Pause `$82` key-down/key-up events or retaining its
-  current host-menu role. Until then Start defaults to the configurable
-  host-level E-Di menu; Guide/Home, L1+R1, and right-stick alternatives are
-  available, and Select is unassigned. Start must never become a third base
-  pointer button.
-- [ ] Emulate the CD-i keyboard peripheral and expose host-keyboard passthrough
-  behind a Settings toggle after the K-mode serial/device tests above pass.
+- [x] Implement the optional `/pck2` player-control-key peripheral documented
+  by Philips TN 73.2. The bundled CSD already advertises it; SLAVE channel 1
+  now supplies the native driver with Play/Stop/Pause/Next/Previous transitions
+  behind its `$8D`/`$8E` enable gate, preserving native `KB_Read`, `KB_Rdy`,
+  `KB_SSig`, and `ss_enable` behavior. Settings explicitly route Start either
+  to native Pause `$82` down/up or the host menu. Start is never a third base
+  pointer button, and Select remains unassigned.
+- [ ] Resolve optional front-input CD-i K-mode keyboard acceptance. The
+  Settings toggle and native F3/CSD transport exist, but tested keyboard-aware
+  titles do not enable `/kb1`; do not force reports through the title's `$81`
+  disable state. Resume when a native driver/UCM trace or independently
+  validated player behavior identifies the missing prerequisite.
 - [ ] Complete controller navigation and accessibility passes for every
   Library and Settings control.
 - [ ] Keep Settings panels compact at the default window size without
@@ -228,13 +281,15 @@ none should be implemented as a title-specific workaround.
 
 ## Compatibility and automated coverage
 
-- [ ] Model the documented regional board clocks and add a synthetic
-  within-instruction device-deadline test before deciding whether finer event
-  slicing is required. Revalidate the CD Shoot
+- [ ] Revalidate the runtime regional-clock and chronological device-slicing
+  implementation against the CD Shoot
   language-flag/skeet cadence while preserving The 7th Guest transitions,
   Earth Command audio termination, The Naked Gun copyright transition, and
   Alien Gate input plus its real-hardware-matched firing-audio cutoff after the
-  bat-enemy sequence. See
+  bat-enemy sequence. Synthetic ordering/rate tests and the deterministic Alien
+  Gate, The 7th Guest, and Accused baseline pass. The CD Shoot flag remains
+  correctly paced, as it was before this clock work; the skeet sequence and
+  the remaining named title checkpoints are still manual gates. See
   `data/compatibility/incidents/cd-shoot-fast-hover-animation.json`.
 - [ ] Compare The 7th Guest's three brief transition intervals with the same
   sequence on hardware before deciding whether any blank fields are missing

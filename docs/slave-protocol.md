@@ -9,7 +9,8 @@ MC68HC705C8A, 8 KB) — see `slave-zx405042p.disasm.asm`, produced with
 `scripts/hc05dis.py`. These are original notes documenting facts extracted
 from the firmware; see NOTICE.md for the copyright basis.
 
-Status: PARTIAL — the MAME-ch2 immediate-command dispatch, including the
+Status: PARTIAL — the channel-1 player-control-key gate, MAME-ch2
+immediate-command dispatch, including the
 disc-play `0x8A` host reset, is decoded, and the BIOS-side post-reset
 `B0`/`B1` conversation is sufficient to launch a real title. The four shared
 SLAVE flag bytes are now cross-referenced and the matching SERVO 2.1 firmware
@@ -66,7 +67,7 @@ CPU+devices while PRESERVING SlaveHle state.**
 | `$02` bits (A2,A1) | MAME channel | Handler | Notes |
 |---|---|---|---|
 | 00 | ch0 | `0x038F` | table `0x0624` (below) + buffered `0xC0+` (mouse etc.) |
-| 01 | ch1 | `0x03C0` | not yet decoded |
+| 01 | ch1 | `0x03C0` | buffered writes to the physical input side; native `ckeydriv`/`pck2driv` use `$8D`/`$8E` to enable/disable player-control reports |
 | 10 | ch2 | `0x048D` | payloads at `$75`; commands `0x80..0x93` dispatch at `0x0512` (decoded below); `0xC0+` starts a four-byte payload |
 | 11 | ch3 | `0x03DA` | matches MAME's known ch3 command set (see below) |
 
@@ -90,6 +91,61 @@ All are RAM flag toggles consumed by the main loop:
 (Note: these are the *ch0* semantics; the boot flow's observed `0x8A` went
 to MAME-ch2, whose semantics are different.)
 
+### ch1 player-control-key path
+
+The bundled Mono-I ROM already advertises `11:/pck2:KG="8":`. Its `ckeydriv`
+module owns the SLAVE channel-1 byte stream, and `pck2driv` writes `$8D` when
+reports are enabled and `$8E` when disabled. The HLE therefore gates physical
+player-control transitions at this boundary instead of synthesizing UCM
+events or guest-memory writes.
+
+For the driver's `$87` two-byte report family, the second-byte masks are:
+
+| Physical key | ch1 report | Native Green Book code |
+|---|---|---|
+| Play | `87 20` | `$80` |
+| Stop | `87 04` | `$81` |
+| Pause | `87 10` | `$82` |
+| Next | `87 01` | `$83` |
+| Previous | `87 02` | `$84` |
+| Release | `87 00` | prior code, key-up |
+
+`pck2driv` produces the documented UCM down/up event types and its own repeat
+policy after consuming these bytes. The emulator sends state transitions only;
+titles which do not open/enable `/pck2` receive nothing.
+
+### ch2 `/kb1` keyboard path
+
+The consumer keyboard on the front input is distinct from the optional `/kb`
+device on the SCC68070 rear UART. The CD-i 605 and 615 technical documentation
+routes a front-input K-mode keyboard through the SLAVE SCI. The bundled ROM
+contains CRC-valid `kb1driv` and `/kb1` modules, while its startup configuration
+selects the device-class records from the SLAVE's `F3` discovery value.
+
+With a keyboard attached, the HLE returns CPU-visible `F3 05`; without one it
+returns `F3 01` for the ordinary class-C relative pointer. The bundled `config`
+module consumes the class-5 response during native startup. Query replies share
+channel 2 and remain ordered until consumed; later requests must not overwrite
+an earlier F3 response. The `$FF` written by firmware's internal F3 response
+builder is a staging sentinel—the native host path consumes the two-byte
+`F3 class` response.
+
+Opening `/kb1` enables reports with ch2 command `$80`; `$81` disables them.
+Each state change is delivered as `A0 b0 b1`, where `b0 b1` is the documented
+K-mode keyboard packet: control, supershift, caps-lock and shift flags plus the
+key code. `A0 82 00` reports no key pressed. Attachment alone produces no guest
+event, disabled reports remain silent, and queued reports are discarded when
+the driver disables the path.
+
+This transport coverage is not a title-acceptance result. In a bounded Web-i
+run, the ROM consumed class 5 and generated `/kb1`, but the title sent `$81`
+and never `$80`; host `abc` transitions therefore reached the attached device
+while reports were correctly disabled. CD-Online Issue 02 and both SPC
+encyclopedia titles show the same user-visible failure. Do not force `A0`
+packets through the disabled state. Resume only when native driver/UCM tracing
+or independently validated player behavior identifies the missing enable
+prerequisite.
+
 ### ch2 immediate commands (`0x0512`, cmds `0x80-0x93`)
 
 The handler first shifts the command left.  Commands `0x80..0x93` therefore
@@ -99,7 +155,7 @@ table contains a second layer of absolute JMPs at `0x058C..0x05B3`.
 
 | Cmd | Target | Firmware effect |
 |---|---:|---|
-| 0x80 / 0x81 | `0x0545` / `0x0548` | set / clear `$56.1` |
+| 0x80 / 0x81 | `0x0545` / `0x0548` | enable / disable asynchronous `/kb1` keyboard reports by setting / clearing `$56.1` |
 | 0x82 | `0x054B` | if `$56.0` is clear, set it and latch timer byte `$1A` into `$64`; `$53.4` marks the latch valid (with modulo-`0x34` adjustment on an existing latch) |
 | 0x83 / 0x84 | `0x0564` / `0x0578` | if `$56.0` is set, clear it, optionally drive Port C bit 7 low / high when `$5A.1` is set, then update the `$1A`/`$64` timing latch |
 | 0x85 | `0x05B6` | when `$59.1` is set, select the decrement direction in `$D6` (`bit6=1, bit7=0`), decrement its low-six-bit position unless already zero, copy `$D8→$D7`, clear `$55.7`, set work flag `$54.2` |
@@ -511,6 +567,10 @@ measurements before replacing the current digital attenuation model.
   - 0xFA / 0xFB → set / clear `$63` bit 7
   - 0xFC → `$BA=2`, drive PC6 high; 0xFD → release PC6
   - 0xF1/0xF2/0xFF → no-op
+
+`F9`, `FB`, `FC`, and `FD` are controls and produce no channel-2 echo reply.
+Synthesizing replies for them can leave an unread response ahead of F3 and
+prevent native device discovery.
 
 ## Next steps
 

@@ -49,8 +49,40 @@ file/record metadata and no longer cancels an active `$2a` read; only explicit
 SERVO model and does not restore the historical invalid behavior that treated
 an idle `$23` as a new Mode-1 read. The corrected path boots The Lost Ride into
 native VMPEG playback, while the deterministic Alien Gate, The 7th Guest, and
-Accused baseline remains byte-for-byte unchanged. Manual GUI confirmation is
-still pending.
+Accused baseline remains byte-for-byte unchanged. Manual GUI testing had
+already confirmed that the title reaches gameplay; the 2026-08-09 retest
+reconfirmed that gate while identifying separate opening-video artifact,
+crossfade, and gameplay-audio follow-ups.
+
+After each completed SCC68070 instruction, the host scheduler advances
+independent device deadlines chronologically across that elapsed window and
+selects the documented 15.0000 MHz PAL or 15.1049 MHz NTSC CPU-relative clock.
+The instruction's CPU bus accesses are not yet interleaved with those slices.
+VMPEG DCLK, timer, audio, and video rates use the selected host clock, while
+MCD212 includes the documented final half-line. The deterministic Alien Gate,
+sustained The 7th Guest, and native Accused Video CD baseline passes with zero
+DVC decoder errors. This closes the regional-clock prerequisite without
+changing M3.14's next action: establish a perceptual or presentation-overlap
+A/V drift oracle.
+
+A 2026-08-09 supplemental-document checkpoint found no new M3 behavior to
+implement. `DSA2IH00106115.pdf` and the MCD251 section of Motorola's 1995
+multimedia collection contain the same MCD251 Technical Summary already in the
+corpus, not the complete `MCD251/D` data sheet. The collection's MCD270 and
+AN1244 material describes IMPEG and a Motorola MC68341 evaluation board, so it
+belongs to M4/player-generation research. The unofficial 2021 development
+guide is useful for source discovery only. M3.14's next action remains a
+perceptual or presentation-overlap A/V drift oracle.
+
+A separate input-device checkpoint implemented the Mono-I ROM's native
+`/pck2` SLAVE-channel path, front-input `/kb1` keyboard on SLAVE channel 2,
+and the distinct rear-port `/kb` UART boundary. These devices do not bypass
+UCM or alter VMPEG/CDIC timing. Focused transport tests pass, but manual
+`/kb1` acceptance failed in Web-i, CD-Online Issue 02, and the two SPC
+encyclopedias. Web-i explicitly sends `$81` to disable reports and never sends
+`$80`; forcing reports would bypass native policy. This input incident is
+deferred pending a native driver/UCM trace, while M3.14's next action remains
+the perceptual or presentation-overlap A/V drift oracle.
 
 The cake-puzzle gate now passes manually on The 7th Guest USA: entering the
 table and selecting the cake reaches playable puzzle interaction. Separate
@@ -177,6 +209,13 @@ frames, and returns to the same player shell. The source makes the ordering
 important: `abort_bumper()` itself clears `PCB_AChan` during fade-down, before
 `play_bumper()` later calls `ss_abort`; the route change must not be attributed
 to the system call.
+
+A separate, behavior-neutral CDIC checkpoint now distinguishes the live ACHAN
+register from the internal value committed by command `$2E`, and exposes both
+through diagnostics. Live sector filtering and existing queued-audio stop
+behavior are unchanged. The nonzero-ACHAN stop boundary remains a physical
+hardware experiment, so this checkpoint does not change M3.14's next cake-
+puzzle and perceptual A/V-drift actions.
 
 The selected-sector fixture is now complete for the current 220 target.
 `scripts/test-cdfm-pcb-rec-local.sh` uses bounded, explicitly recorded guest-RAM
@@ -440,6 +479,7 @@ by `scripts/fetch-mpeg-refs.sh`.
 | Philips Green Book May 1994 R2 | local `docs/cdi_may94_r2.pdf` | specification/reference | MPEG system/video/audio formats, Form-2 layout, buffers, clocks, synchronization, external A/V |
 | Philips TN 088/094/097/098/101/102/103/105 and IE 96/05 | local ICDIA mirror | specification/reference | Hardware generations, timing bases, extension RAM, EOS bugs, flying mattes, seamless branching |
 | Motorola MCD251 Technical Summary | local ICDIA `docs/mcd251ts.pdf` | specification/reference | VMPEG video register map and C2PIX at twice the decoded-pixel frequency |
+| Motorola *Multimedia Device Data* (1995) | local supplemental PDF, CD-i block PDF pp. 209-269 and AN1244 PDF pp. 300-322 | vendor summaries/reference | Duplicates the MCD251 summary; separates later MCD214/MCD221/MCD270 and Motorola evaluation-board evidence from the current Mono-I/VMPEG boundary |
 | Philips FMVDemo developer disc | local `sw_disc/fmvdemo/fmvdemo.bin` | direct source use; do not redistribute disc | `fmv_tools.c` and `sequence.c` show independent disc, `/mv`, and `/ma` completion; video EOI is followed by video-buffer completion and audio EOI by audio underflow |
 | Philips FPD804/FPD805 developer discs | local `sw_disc/fpd804` and `sw_disc/fpd805` | direct source use; do not redistribute discs | FPD805 `fmav.c` clears distinct video/audio PCL rings, arms distinct asynchronous status blocks, starts `/mv` and `/ma` separately, and aborts both decoders before another play; FPD804 supplies broader CD-RTOS/PCL/display examples |
 | Philips FMV extension/recommendation/features documents | local `docs/fmv_extension.pdf`, `docs/cdi_fmv_rec.pdf`, `authoring/fmv_features.pdf` | specification/reference | Cartridge role, external-plane behavior, title recommendations, and hardware/software division |

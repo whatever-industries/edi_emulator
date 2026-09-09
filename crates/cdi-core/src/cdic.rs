@@ -3,9 +3,9 @@
 //!
 //! Ported from MAME `src/mame/philips/cdicdic.cpp` (BSD-3-Clause,
 //! Ryan Holtz, Vincent Halver) — see NOTICE.md. The CDIC owns 16 KB of
-//! buffer RAM at `$300000`, a register file at `$303C00`/`$303FF4`+, a
-//! 75 Hz sector pump, XA-ADPCM audio decoding, and raises IN4 with its own
-//! programmable vector.
+//! shared RAM at `$300000`, DSP mailbox words in that RAM at `$303C00`,
+//! hardware control registers at `$303FF4`+, a 75 Hz sector pump, XA-ADPCM
+//! audio decoding, and raises IN4 with its own programmable vector.
 //!
 //! CD-fed audio receipt/playback and AUDCTL status semantics are corrected
 //! from independent Mono-I hardware captures in `Slamy/CDIC_BlackBoxAnalyzer`
@@ -60,6 +60,11 @@ const CODING_CHAN_MASK: u8 = 0x03;
 const CODING_MONO: u8 = 0x00;
 const CODING_STEREO: u8 = 0x01;
 
+const DSP_MAILBOX_START: u32 = 0x3C00;
+const DSP_MAILBOX_END: u32 = 0x3C0D;
+// Philips CD-i 205/220/350/360 service manuals, PCB test step 9.
+const SHARED_RAM_END: u32 = 0x3C7F;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
 enum DiscMode {
@@ -81,7 +86,11 @@ pub struct CdicDiagnosticSnapshot {
     pub current_lba: u32,
     pub selected_file: u16,
     pub selected_channels: u32,
+    /// Guest-visible ACHAN register used by the current sector filter.
     pub audio_channel: u16,
+    /// DSP-side ACHAN value committed by CDIC command `$2E`.
+    #[cfg_attr(feature = "savestate", serde(default = "default_audio_channel"))]
+    pub committed_audio_channel: u16,
     pub audio_buffer: u16,
     pub x_buffer: u16,
     pub z_buffer: u16,
@@ -89,6 +98,9 @@ pub struct CdicDiagnosticSnapshot {
     pub interrupt_vector: u16,
     pub interrupt_asserted: bool,
     pub queued_audio_samples: usize,
+    /// Number of independent 75 Hz CDIC pump edges since device reset.
+    #[cfg_attr(feature = "savestate", serde(default))]
+    pub sector_ticks: u64,
 }
 
 /// XA-ADPCM prediction filter coefficients.
@@ -112,6 +124,8 @@ pub struct Cdic {
     file: u16,
     channel: u32,
     audio_channel: u16,
+    #[cfg_attr(feature = "savestate", serde(default = "default_audio_channel"))]
+    committed_audio_channel: u16,
     audio_buffer: u16,
     x_buffer: u16,
     z_buffer: u16,
@@ -156,8 +170,12 @@ pub struct Cdic {
     #[cfg_attr(feature = "savestate", serde(skip))]
     pub audio_out: Vec<i16>,
 
-    // Timing (75 Hz pumps @ 15 MHz CPU clock)
+    // Independent 75 Hz pumps mapped into the selected regional CPU clock.
+    #[cfg_attr(feature = "savestate", serde(default = "default_cpu_clock_hz"))]
+    clock_hz: u64,
     sector_accum: u64,
+    #[cfg_attr(feature = "savestate", serde(default))]
+    sector_ticks: u64,
     audio_accum: u64,
 
     int_line: bool,
@@ -166,12 +184,21 @@ pub struct Cdic {
     write_latch: u8,
 }
 
-#[cfg(feature = "savestate")]
 fn default_ram() -> Vec<u8> {
-    vec![0; 0x4000]
+    let mut ram = vec![0; 0x4000];
+    ram[0x3C08..=0x3C0D].fill(0xFF);
+    ram
 }
 
-const PUMP_PERIOD: u64 = 15_000_000 / 75;
+const PUMP_HZ: u64 = 75;
+
+const fn default_cpu_clock_hz() -> u64 {
+    crate::sched::PAL_CPU_HZ
+}
+
+const fn default_audio_channel() -> u16 {
+    0xFFFF
+}
 
 impl Default for Cdic {
     fn default() -> Self {
@@ -181,13 +208,14 @@ impl Default for Cdic {
 
 impl Cdic {
     pub fn new() -> Self {
-        Self {
-            ram: vec![0; 0x4000],
+        let mut cdic = Self {
+            ram: default_ram(),
             command: 0,
             time: 0,
             file: 0,
             channel: 0xFFFF_FFFF,
-            audio_channel: 0xFFFF,
+            audio_channel: default_audio_channel(),
+            committed_audio_channel: default_audio_channel(),
             audio_buffer: 0,
             x_buffer: 0,
             z_buffer: 0,
@@ -214,22 +242,43 @@ impl Cdic {
             atten: [0; 4],
             xa_last: [0; 4],
             audio_out: Vec::new(),
+            clock_hz: default_cpu_clock_hz(),
             sector_accum: 0,
+            sector_ticks: 0,
             audio_accum: 0,
             int_line: false,
             read_latch: 0,
             write_latch: 0,
-        }
+        };
+        cdic.store_mailbox_fields_in_ram();
+        cdic
     }
 
     pub fn reset(&mut self) {
         let ram = std::mem::take(&mut self.ram);
-        *self = Self { ram, ..Self::new() };
+        let clock_hz = self.clock_hz;
+        let mut reset = Self {
+            ram,
+            clock_hz,
+            ..Self::new()
+        };
+        reset.load_mailbox_fields_from_ram();
+        *self = reset;
     }
 
     /// Remove power from the CD interface, clearing its volatile RAM.
     pub fn power_cycle(&mut self) {
-        *self = Self::new();
+        let clock_hz = self.clock_hz;
+        *self = Self {
+            clock_hz,
+            ..Self::new()
+        };
+    }
+
+    pub fn set_clock_hz(&mut self, clock_hz: u64) {
+        self.clock_hz = clock_hz.max(1);
+        self.sector_accum = 0;
+        self.audio_accum = 0;
     }
 
     pub fn int_line(&self) -> bool {
@@ -252,6 +301,7 @@ impl Cdic {
             selected_file: self.file,
             selected_channels: self.channel,
             audio_channel: self.audio_channel,
+            committed_audio_channel: self.committed_audio_channel,
             audio_buffer: self.audio_buffer,
             x_buffer: self.x_buffer,
             z_buffer: self.z_buffer,
@@ -259,6 +309,7 @@ impl Cdic {
             interrupt_vector: self.interrupt_vector,
             interrupt_asserted: self.int_line,
             queued_audio_samples: self.audio_out.len(),
+            sector_ticks: self.sector_ticks,
         }
     }
 
@@ -300,7 +351,53 @@ impl Cdic {
         self.int_line = self.x_buffer & 0x8000 != 0 || audio_map_irq;
     }
 
-    // --- Register access (16-bit registers at $303C00 / $303FF4+) --------
+    // --- Shared-RAM mailboxes and hardware-register access ----------------
+
+    fn ram_read16(&self, offset: u32) -> u16 {
+        let hi = u16::from(self.ram_read8(offset));
+        let lo = u16::from(self.ram_read8(offset + 1));
+        (hi << 8) | lo
+    }
+
+    fn ram_write16(&mut self, offset: u32, data: u16) {
+        let [hi, lo] = data.to_be_bytes();
+        self.ram_write8(offset, hi);
+        self.ram_write8(offset + 1, lo);
+    }
+
+    fn load_mailbox_word_from_ram(&mut self, offset: u32) {
+        let data = self.ram_read16(offset);
+        match offset {
+            0x3C00 => self.command = data,
+            0x3C02 => self.time = (self.time & 0x0000_FFFF) | (u32::from(data) << 16),
+            0x3C04 => self.time = (self.time & 0xFFFF_0000) | u32::from(data),
+            0x3C06 => self.file = data,
+            0x3C08 => self.channel = (self.channel & 0x0000_FFFF) | (u32::from(data) << 16),
+            0x3C0A => self.channel = (self.channel & 0xFFFF_0000) | u32::from(data),
+            0x3C0C => self.audio_channel = data,
+            _ => {}
+        }
+    }
+
+    fn load_mailbox_fields_from_ram(&mut self) {
+        for offset in (DSP_MAILBOX_START..=DSP_MAILBOX_END).step_by(2) {
+            self.load_mailbox_word_from_ram(offset);
+        }
+    }
+
+    fn store_mailbox_fields_in_ram(&mut self) {
+        for (offset, data) in [
+            (0x3C00, self.command),
+            (0x3C02, (self.time >> 16) as u16),
+            (0x3C04, self.time as u16),
+            (0x3C06, self.file),
+            (0x3C08, (self.channel >> 16) as u16),
+            (0x3C0A, self.channel as u16),
+            (0x3C0C, self.audio_channel),
+        ] {
+            self.ram_write16(offset, data);
+        }
+    }
 
     pub fn read16(&mut self, offset: u32) -> u16 {
         log::trace!("cdic: read16 +{offset:#06x}");
@@ -333,6 +430,7 @@ impl Cdic {
                 value
             }
             0x3FFE => self.data_buffer,
+            _ if (DSP_MAILBOX_START..=SHARED_RAM_END).contains(&offset) => self.ram_read16(offset),
             _ => {
                 log::trace!("cdic: read16 +{offset:#06x} (unknown)");
                 0
@@ -344,6 +442,9 @@ impl Cdic {
     /// access) via [`Cdic::dma_request`].
     pub fn write16(&mut self, offset: u32, data: u16) {
         log::trace!("cdic: write16 +{offset:#06x} = {data:#06x}");
+        if (DSP_MAILBOX_START..=SHARED_RAM_END).contains(&offset) {
+            self.ram_write16(offset, data);
+        }
         match offset {
             0x3C00 => self.command = data,
             0x3C02 => self.time = (self.time & 0x0000_FFFF) | (u32::from(data) << 16),
@@ -404,6 +505,8 @@ impl Cdic {
                 );
                 self.data_buffer = data;
                 if self.data_buffer & 0x8000 != 0 {
+                    // Sample the shared-RAM mailbox at the command boundary.
+                    self.load_mailbox_fields_from_ram();
                     self.handle_command();
                 } else {
                     // CDIC_BlackBoxAnalyzer e861f76,
@@ -416,6 +519,7 @@ impl Cdic {
                         self.data_buffer & 0x4000 != 0 && self.disc_command != 0;
                 }
             }
+            _ if (DSP_MAILBOX_START..=SHARED_RAM_END).contains(&offset) => {}
             _ => log::trace!("cdic: write16 +{offset:#06x} = {data:#06x} (unknown)"),
         }
     }
@@ -423,6 +527,9 @@ impl Cdic {
     /// Byte-lane access: a 68k word access arrives as even (high) then odd
     /// (low) byte; the 16-bit handler fires on the even read / odd write.
     pub fn read8(&mut self, offset: u32) -> u8 {
+        if (DSP_MAILBOX_START..=SHARED_RAM_END).contains(&offset) {
+            return self.ram_read8(offset);
+        }
         if offset & 1 == 0 {
             let v = self.read16(offset);
             self.read_latch = v as u8;
@@ -433,6 +540,14 @@ impl Cdic {
     }
 
     pub fn write8(&mut self, offset: u32, val: u8) -> Option<u16> {
+        if (DSP_MAILBOX_START..=SHARED_RAM_END).contains(&offset) {
+            self.ram_write8(offset, val);
+            let word_offset = offset & !1;
+            if word_offset <= DSP_MAILBOX_END {
+                self.load_mailbox_word_from_ram(word_offset);
+            }
+            return None;
+        }
         if offset & 1 == 0 {
             self.write_latch = val;
             None
@@ -518,10 +633,9 @@ impl Cdic {
                 }
             }
             0x2B => self.cancel_disc_read(), // Stop CDDA
-            // The channel/configuration registers are live. cdapdriv issues
-            // Update after changing them, but no additional CDIC-side latch
-            // is observable (see docs/icdia-archive-assessment.md).
-            0x2E => {}
+            // The guest-visible register remains live for sector filtering.
+            // Update separately commits ACHAN to the internal audio DSP.
+            0x2E => self.committed_audio_channel = self.audio_channel,
             0x27 => self.init_disc_read(DiscMode::Toc),
             0x28 => self.init_disc_read(DiscMode::Cdda),
             0x29 | 0x2C => self.init_disc_read(DiscMode::Mode1), // Read Mode 1 / Seek
@@ -535,19 +649,33 @@ impl Cdic {
 
     /// Advance by `cycles` CPU cycles; needs the loaded disc (if any).
     pub fn tick(&mut self, cycles: u64, disc: Option<&DiscImage>) {
-        self.sector_accum += cycles;
-        while self.sector_accum >= PUMP_PERIOD {
-            self.sector_accum -= PUMP_PERIOD;
+        self.sector_accum += cycles * PUMP_HZ;
+        while self.sector_accum >= self.clock_hz {
+            self.sector_accum -= self.clock_hz;
             self.sector_tick(disc);
         }
-        self.audio_accum += cycles;
-        while self.audio_accum >= PUMP_PERIOD {
-            self.audio_accum -= PUMP_PERIOD;
+        self.audio_accum += cycles * PUMP_HZ;
+        while self.audio_accum >= self.clock_hz {
+            self.audio_accum -= self.clock_hz;
             self.audio_tick();
         }
     }
 
+    /// CPU clocks until the next independent disc or audio pump edge.
+    pub(crate) fn cycles_until_next_event(&self) -> u64 {
+        self.clock_hz
+            .saturating_sub(self.sector_accum)
+            .div_ceil(PUMP_HZ)
+            .min(
+                self.clock_hz
+                    .saturating_sub(self.audio_accum)
+                    .div_ceil(PUMP_HZ),
+            )
+            .max(1)
+    }
+
     fn sector_tick(&mut self, disc: Option<&DiscImage>) {
+        self.sector_ticks = self.sector_ticks.saturating_add(1);
         if self.disc_command == 0 {
             return;
         }
@@ -1161,6 +1289,18 @@ fn crc_ccitt(data: &[u8]) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regional_cpu_clocks_preserve_exact_75_hz_pump_count() {
+        for clock_hz in [crate::sched::PAL_CPU_HZ, crate::sched::NTSC_CPU_HZ] {
+            let mut cdic = Cdic::new();
+            cdic.set_clock_hz(clock_hz);
+            cdic.tick(clock_hz - 1, None);
+            assert_eq!(cdic.diagnostic_snapshot().sector_ticks, 74);
+            cdic.tick(1, None);
+            assert_eq!(cdic.diagnostic_snapshot().sector_ticks, 75);
+        }
+    }
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TRANSPORT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
@@ -1203,6 +1343,27 @@ mod tests {
         c.write16(0x3C04, 0x1600);
         c.write16(0x3C00, 0x0029); // Read Mode 1
         c.write16(0x3FFE, 0xC000); // begin processing, keep disc running
+        assert_eq!(c.disc_command, 0x29);
+        assert_eq!(c.curr_lba, 16);
+        assert_eq!(c.disc_mode, DiscMode::Mode1);
+    }
+
+    #[test]
+    fn command_boundary_samples_the_shared_ram_mailbox() {
+        let mut c = Cdic::new();
+        for (offset, value) in [
+            (0x3C00, 0x00),
+            (0x3C01, 0x29),
+            (0x3C02, 0x00),
+            (0x3C03, 0x02),
+            (0x3C04, 0x16),
+            (0x3C05, 0x00),
+        ] {
+            c.ram_write8(offset, value);
+        }
+
+        c.write16(0x3FFE, 0xC000);
+
         assert_eq!(c.disc_command, 0x29);
         assert_eq!(c.curr_lba, 16);
         assert_eq!(c.disc_mode, DiscMode::Mode1);
@@ -1501,11 +1662,16 @@ mod tests {
     }
 
     #[test]
-    fn aborting_sound_map_preserves_queued_tail_and_skips_next_half() {
+    fn committed_zero_achan_abort_preserves_queued_tail_and_skips_next_half() {
         let mut c = Cdic::new();
         let coding = CODING_18KHZ | CODING_MONO;
         set_sound_map_half(&mut c, 0x2800, coding, 0x11);
         set_sound_map_half(&mut c, 0x3200, coding, 0x22);
+
+        c.audio_channel = 0;
+        c.command = 0x2E;
+        c.handle_command();
+        assert_eq!(c.committed_audio_channel, 0);
 
         c.write16(0x3FFA, 0x2800);
         c.audio_tick();
@@ -1568,7 +1734,7 @@ mod tests {
     }
 
     #[test]
-    fn mode2_filters_are_live_and_update_is_a_noop() {
+    fn mode2_filters_are_live_while_update_commits_dsp_audio_channel() {
         let mut c = Cdic::new();
         c.file = 7 << 8;
         c.channel = 1 << 3;
@@ -1576,10 +1742,21 @@ mod tests {
         assert!(c.is_mode2_sector_selected(&mode2_sector(7, 3, SUBMODE_DATA)));
         assert!(c.is_mode2_audio_selected(&mode2_sector(7, 3, SUBMODE_FORM | SUBMODE_AUDIO,)));
 
-        c.audio_channel = 0;
         c.command = 0x2E;
         c.handle_command();
+        assert_eq!(c.committed_audio_channel, 1 << 3);
+
+        c.audio_channel = 0;
         assert!(!c.is_mode2_audio_selected(&mode2_sector(7, 3, SUBMODE_FORM | SUBMODE_AUDIO,)));
+        assert_eq!(c.committed_audio_channel, 1 << 3);
+
+        let snapshot = c.diagnostic_snapshot();
+        assert_eq!(snapshot.audio_channel, 0);
+        assert_eq!(snapshot.committed_audio_channel, 1 << 3);
+
+        c.command = 0x2E;
+        c.handle_command();
+        assert_eq!(c.committed_audio_channel, 0);
     }
 
     #[test]

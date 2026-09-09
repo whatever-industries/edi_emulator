@@ -1,18 +1,40 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Event scheduler.
 //!
-//! One master time base (30 MHz crystal ticks). The CPU free-runs to the
-//! next event deadline; devices schedule their next interesting moment and
-//! are caught up lazily. Event targets are IDs, not closures, so the queue
-//! serializes for savestates.
+//! Generic event ordering plus the documented regional Mono-I clock constants.
+//! Machine devices express deadlines in CPU-cycle units derived from the
+//! selected PAL or NTSC crystal. Event targets are IDs, not closures, so the
+//! queue serializes for savestates.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
 pub type Ticks = u64;
 
-/// Master crystal frequency (Hz) on Mono-I boards.
-pub const CRYSTAL_HZ: u64 = 30_000_000;
+/// Master crystal frequency (Hz) on PAL Mono-I boards.
+pub const PAL_CRYSTAL_HZ: u64 = 30_000_000;
+
+/// Master crystal frequency (Hz) on NTSC Mono-I boards.
+pub const NTSC_CRYSTAL_HZ: u64 = 30_209_800;
+
+pub const PAL_CPU_HZ: u64 = PAL_CRYSTAL_HZ / 2;
+pub const NTSC_CPU_HZ: u64 = NTSC_CRYSTAL_HZ / 2;
+pub const MCD212_CPU_CYCLES_PER_LINE: u64 = 960;
+pub const MCD212_HALF_LINE_CPU_CYCLES: u64 = 480;
+pub const PAL_FIELD_CPU_CYCLES: u64 = MCD212_CPU_CYCLES_PER_LINE * 625 / 2;
+pub const NTSC_FIELD_CPU_CYCLES: u64 = MCD212_CPU_CYCLES_PER_LINE * 525 / 2;
+
+pub const fn cpu_clock_hz(pal: bool) -> u64 {
+    if pal {
+        PAL_CPU_HZ
+    } else {
+        NTSC_CPU_HZ
+    }
+}
+
+/// Legacy PAL crystal alias retained for callers that require the original
+/// constant. Runtime code must use the selected regional constants above.
+pub const CRYSTAL_HZ: u64 = PAL_CRYSTAL_HZ;
 
 /// Identifies who an event belongs to and what it means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -109,6 +131,74 @@ mod heap_serde {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rational_deadline(
+        clock_hz: u64,
+        edge: u64,
+        rate_numerator: u64,
+        rate_denominator: u64,
+    ) -> u64 {
+        let numerator = edge * clock_hz * rate_denominator;
+        numerator.div_ceil(rate_numerator)
+    }
+
+    #[test]
+    fn regional_crystals_preserve_documented_line_and_field_cadence() {
+        const CPU_DIVIDER: u64 = 2;
+        let pal_cpu_hz = PAL_CPU_HZ;
+        let ntsc_cpu_hz = NTSC_CPU_HZ;
+        let cpu_ticks_per_line = 1_920 / CPU_DIVIDER;
+        let pal_cpu_ticks_per_field = PAL_FIELD_CPU_CYCLES;
+        let ntsc_cpu_ticks_per_field = NTSC_FIELD_CPU_CYCLES;
+
+        assert_eq!(pal_cpu_hz, 15_000_000);
+        assert_eq!(ntsc_cpu_hz, 15_104_900);
+        assert_eq!(cpu_ticks_per_line, 960);
+        assert_eq!(pal_cpu_ticks_per_field, 300_000);
+        assert_eq!(ntsc_cpu_ticks_per_field, 252_000);
+        assert_eq!(pal_cpu_hz / pal_cpu_ticks_per_field, 50);
+
+        // The documented NTSC crystal and 525-line cadence are approximately
+        // 59.94 fields/s rather than an exact 60 Hz integer period.
+        assert_eq!(
+            ntsc_cpu_hz * 1_001 - ntsc_cpu_ticks_per_field * 60_000,
+            4_900
+        );
+    }
+
+    #[test]
+    fn regional_clocks_map_independent_rates_without_integer_drift() {
+        for clock_hz in [PAL_CRYSTAL_HZ / 2, NTSC_CRYSTAL_HZ / 2] {
+            assert_eq!(rational_deadline(clock_hz, 75, 75, 1), clock_hz);
+            assert_eq!(rational_deadline(clock_hz, 100, 100, 1), clock_hz);
+
+            // TN 94 permits a player to have one fixed system-tick rate at
+            // either edge of this range; it must not fluctuate between them.
+            assert_eq!(rational_deadline(clock_hz, 499, 499, 5), clock_hz * 5);
+            assert_eq!(rational_deadline(clock_hz, 501, 501, 5), clock_hz * 5);
+        }
+    }
+
+    #[test]
+    fn deadlines_inside_one_instruction_retain_chronological_order() {
+        let mut scheduler = Scheduler::new();
+        let instruction_start = 1_000;
+        let instruction_end = 1_160;
+        scheduler.advance_to(instruction_start);
+        scheduler.schedule_at(1_096, EventId(1));
+        scheduler.schedule_at(1_120, EventId(2));
+        scheduler.schedule_at(1_140, EventId(3));
+
+        scheduler.advance_to(instruction_end);
+        let due: Vec<(Ticks, u32)> = std::iter::from_fn(|| scheduler.pop_due())
+            .map(|(deadline, event)| (deadline, event.0))
+            .collect();
+
+        assert_eq!(due, vec![(1_096, 1), (1_120, 2), (1_140, 3)]);
+        assert!(due
+            .iter()
+            .all(|(deadline, _)| *deadline > instruction_start && *deadline < instruction_end));
+    }
 
     #[test]
     fn dispatch_order_is_deterministic() {

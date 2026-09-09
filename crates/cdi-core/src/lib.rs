@@ -10,6 +10,7 @@ pub mod boards;
 pub mod cdic;
 pub mod diagnostics;
 pub mod dvc;
+pub mod keyboard;
 pub mod machine;
 pub mod mcd212;
 mod mpeg1_video;
@@ -25,5 +26,7 @@ pub use diagnostics::{
     PcbDiagnosticSnapshot, PcbTransition, PclDataKind, PclDiagnosticSnapshot, PclTransition,
 };
 pub use dvc::{DvcConfig, DvcDiagnosticVideoFrame, DvcKind, DvcStats, Vmpeg};
+pub use keyboard::{KeyboardKMode, KeyboardModifiers};
 pub use machine::{Machine, MachineBus};
 pub use sched::{EventId, Scheduler, Ticks};
+pub use slave::PlayerControlKey;

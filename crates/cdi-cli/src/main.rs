@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Headless harness for E-Di: Emulator Disc Interactive.
 
+use std::io::Read;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -206,6 +207,9 @@ enum Command {
         /// Write deterministic machine snapshots/events for `diagnose run`.
         #[arg(long, hide = true)]
         diagnostics: Option<PathBuf>,
+        /// Enter the boot-ROM VT100 low-level test and forward stdin to UART.
+        #[arg(long, hide = true)]
+        terminal_low_level_test: bool,
     },
     /// Inspect a CUE/BIN disc image: TOC, layout, and CD-i label detection.
     Disc {
@@ -395,6 +399,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dump_dvc_ram,
             hash,
             diagnostics,
+            terminal_low_level_test,
         } => boot(
             &rom,
             model.as_deref(),
@@ -417,6 +422,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dump_dvc_ram.as_deref(),
             hash,
             diagnostics.as_deref(),
+            terminal_low_level_test,
         ),
         Command::Disc {
             cue,
@@ -591,6 +597,7 @@ fn boot(
     dump_dvc_ram: Option<&std::path::Path>,
     hash: bool,
     diagnostics: Option<&std::path::Path>,
+    terminal_low_level_test: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let click_pos: Option<(i32, i32)> = click.map(|s| {
         let mut it = s.split(',');
@@ -634,6 +641,19 @@ fn boot(
         })
         .transpose()?;
     let mut machine = cdi_core::Machine::with_dvc(&model, image, dvc)?;
+    let uart_input = terminal_low_level_test.then(|| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let stdin = std::io::stdin();
+            for byte in stdin.lock().bytes().flatten() {
+                if sender.send(byte).is_err() {
+                    break;
+                }
+            }
+        });
+        receiver
+    });
+    let mut low_level_test_started = false;
     if dump_display_diagnostics.is_some() {
         machine.bus.mcd212.set_diagnostic_plane_capture(true);
     }
@@ -713,6 +733,20 @@ fn boot(
     memory_write_events.sort_by_key(|event| event.at);
     let mut memory_write_event_index = 0usize;
     for i in 0..instructions {
+        if terminal_low_level_test {
+            // The ROM resets and enables the UART before its 5 ms startup
+            // sample. Supplying SPACE on that enable edge faithfully models
+            // holding SPACE on an attached VT100 during player power-on.
+            if !low_level_test_started && machine.bus.periph.uart_receiver_enabled() {
+                machine.bus.periph.uart_rx(b' ');
+                low_level_test_started = true;
+            }
+            if let Some(receiver) = &uart_input {
+                while let Ok(byte) = receiver.try_recv() {
+                    machine.bus.periph.uart_rx(byte);
+                }
+            }
+        }
         if disc_at == Some(i) {
             machine.change_disc(delayed_disc.take());
             println!("Live disc insertion at instruction {i}");

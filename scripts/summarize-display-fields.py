@@ -52,22 +52,45 @@ def change_summary(previous: bytes | None, current: bytes) -> dict[str, int | No
     }
 
 
+def clut_change_summary(
+    previous: list[int] | None, current: list[int]
+) -> dict[str, object]:
+    changed_entries = (
+        None
+        if previous is None
+        else [
+            index
+            for index, (before, after) in enumerate(
+                zip(previous, current, strict=True)
+            )
+            if before != after
+        ]
+    )
+    payload = b"".join(value.to_bytes(4, "big") for value in current)
+    return {
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "changed_entries": changed_entries,
+    }
+
+
 def summarize(directory: Path) -> dict[str, object]:
     fields = sorted(path for path in directory.glob("field-*") if path.is_dir())
     if not fields:
         raise ValueError(f"no field-* directories found in {directory}")
 
     previous_planes: dict[str, bytes | None] = {"plane-a": None, "plane-b": None}
+    previous_clut: list[int] | None = None
     entries = []
     for field in fields:
         snapshot = json.loads((field / "snapshot.json").read_text())
+        mcd212 = snapshot["mcd212"]
         entry: dict[str, object] = {
             "field": field.name,
-            "frame_count": snapshot["mcd212"]["frame_count"],
-            "odd_field": snapshot["mcd212"]["geometry"]["odd_field"],
-            "geometry": snapshot["mcd212"]["geometry"],
+            "frame_count": mcd212["frame_count"],
+            "odd_field": mcd212["geometry"]["odd_field"],
+            "geometry": mcd212["geometry"],
             "registers": {
-                key: snapshot["mcd212"][key]
+                key: mcd212[key]
                 for key in (
                     "csrw",
                     "csrr",
@@ -79,9 +102,18 @@ def summarize(directory: Path) -> dict[str, object]:
                     "image_coding_method",
                     "transparency_control",
                     "plane_order",
+                    "clut_bank",
+                    "transparent_color",
+                    "mask_color",
                     "dyuv_absolute_start",
+                    "matte_control",
+                    "backdrop_color",
+                    "mosaic_hold",
+                    "weight_factor_base",
                 )
             },
+            "clut": clut_change_summary(previous_clut, mcd212["clut"]),
+            "line_states": mcd212.get("line_states", []),
             "rasters": {
                 name: digest(field / name)
                 for name in (
@@ -102,6 +134,7 @@ def summarize(directory: Path) -> dict[str, object]:
             previous_planes[name] = data
         entry["plane_ram"] = planes
         entries.append(entry)
+        previous_clut = mcd212["clut"]
 
     return {
         "schema_version": 1,

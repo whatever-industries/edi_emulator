@@ -4,12 +4,12 @@
   "title": "Addams Family Values UK VCD picture is shifted right",
   "symptom": "Under the correct White Book type-4/13.5 MHz path, the copyright warning and MPEG picture are horizontally biased to the right. The native chapter menu and playback controls remain correctly located.",
   "expected": "The guest-programmed MCD251 output position and 13.5 MHz conversion should reproduce the real-player placement without a title-specific offset.",
-  "status": "reproduced",
+  "status": "guest-window-difference-confirmed-real-hardware-oracle-needed",
   "reported_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:498775b6062053516c5567d09c6db291e19cbe522f1811a44563b09b8130f10f",
-  "last_reproduced_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
+  "last_reproduced_revision": "a7dd51250928450bd5f347a232227d2e260d1640",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "A clean VCD compatibility pass with uniquely imported evidence overturns the earlier resolved observation: the warning remains shifted right and MPEG playback exposes a left black pillar, while Accused Netherlands remains a clean same-standard control. The older post-overscan result is retained as context rather than deleted.",
+  "revalidation_reason": "The clean-memory Accused control is now captured. Addams UK and ZYX both program Xd=16, Xw=0, Ww=352 and produce an exact 32-pixel left border in the current compositor. Accused programs Xd=0, Xw=7, Ww=345 and fills 767 of 768 raster pixels with only one black pixel at the right. All three use Xo/Yo=65/26, Xa/Ya=384/280 and the 13.5 MHz output. This confirms that guest-programmed MCD251 display/window state, not stale settings, the decoder, or the frontend aperture, distinguishes the affected and correct cases. The available MCD251 summary names Xd/Xw/Ww but does not define the complete coordinate equation, so a synchronized real-hardware Addams or ZYX capture/trace is required before changing emulation behavior.",
   "components": [
     "dvc",
     "vcd"
@@ -23,6 +23,27 @@
     "input_events": []
   },
   "hypotheses": [
+    {
+      "id": "saved-native-vcd-position-calibration",
+      "hardware_explanation": "The Philips Video CD engine intentionally lets the user move the DV window for a television and stores that calibration for future use. A non-default value in VCD_SETTINGS.nvri therefore shifts warning and MPEG video from multiple discs without moving their native CD-i menu planes.",
+      "supporting_evidence": [
+        "The exact GUI reproduction uses video_display_x=16, while an otherwise identical run with blank NVRAM uses video_display_x=0.",
+        "Using the saved PAL NVRAM in the deterministic CLI run reproduces video_display_x=16.",
+        "Invalidating only the VCD_SETTINGS.nvri payload restores video_display_x=0; changing the general player-shell preference does not.",
+        "Philips Video CD on CD-i releases 3.11, 4.0, and 4.1 document a Position Video screen whose OK action stores the DV-window position for future use.",
+        "The native menus remain correctly placed because the calibration applies to the external DV window rather than the MCD212 menu planes."
+      ],
+      "contradicting_evidence": [
+        "Earlier clean-memory testing correctly centered Accused, which had made the later shared displacement look like a code regression before persistent NVRAM was controlled.",
+        "Testing deleted all player memory, including VCD settings, and Addams UK plus ZYX still programmed Xd=16 and reproduced the rightward displacement. Saved calibration therefore cannot explain the current clean-memory result by itself."
+      ],
+      "falsifying_test": "Use the native Settings > Position Video screen to restore horizontal centering and save it. If a fresh boot still programs video_display_x=16 or either warning/MPEG picture remains displaced, the saved-calibration explanation is incomplete.",
+      "citations": [
+        "references/spec-text/docs_sw/vcd_on_cdi_311.txt:304",
+        "references/spec-text/docs_sw/vcd_on_cdi_40.txt:202",
+        "references/spec-text/docs_sw/vcd_on_cdi_41.txt:360"
+      ]
+    },
     {
       "id": "mcd251-output-clock-coordinate-units",
       "hardware_explanation": "The 13.5 MHz converter scales horizontal output-clock coordinates by 15/13.5, but the emulator currently widens decoded samples while treating the MCD251 display position as an unscaled 15 MHz coordinate. Output position/origin registers and decoded source-window registers may belong to different coordinate domains.",
@@ -66,7 +87,10 @@
       "supporting_evidence": [
         "Disc architecture analysis identifies Philips cdi_videocd edition 2 with a 53-byte configuration on Addams UK and edition 3 with a 65-byte configuration on Accused Netherlands.",
         "Addams UK programs Xd=16, Xw=0, Ww=352 while Accused programs Xd=0, Xw=7, Ww=345.",
-        "The current clean pass reproduces Addams UK warning/picture displacement while Accused warning, menu, MPEG, and in-video controls remain correct."
+        "The current clean pass reproduces Addams UK warning/picture displacement while Accused warning, menu, MPEG, and in-video controls remain correct.",
+        "The two newest native Position Video endpoint captures show Addams UK switching between Xd=0/Xw=8/Ww=344 and Xd=1/Xw=0/Ww=352 while retaining the same 384x280 active plane, directly demonstrating source-window panning and clipping.",
+        "Accused edition 3 pre-clips its source window to Xw=7/Ww=345, which expands to about 383.3 normal-resolution pixels and fits the 384-pixel active plane; Addams edition 2 can expose the full 352-sample source, which expands to about 391.1 pixels and therefore cannot fit simultaneously.",
+        "The clean-memory Accused control programs Xd=0, Xw=7, Ww=345 and fills 767 of 768 composed-raster pixels, while clean-memory Addams UK and ZYX both program Xd=16, Xw=0, Ww=352 and produce the same exact 32-pixel left border."
       ],
       "contradicting_evidence": [
         "The extra Accused configuration field is INITLAN=DAT and does not specify display geometry.",
@@ -82,6 +106,54 @@
     }
   ],
   "experiments": [
+    {
+      "id": "compare-blank-and-persistent-pal-nvram",
+      "context": {
+        "base_revision": "a7dd512f7c3f10f8c1f7943d470767e64f308f62",
+        "dirty_diff_hash": null,
+        "component_fingerprints": {},
+        "dependencies": {
+          "white_book_type4": "enabled",
+          "mcd251_13_5mhz": "enabled"
+        },
+        "disc_fingerprint": "Accused Netherlands Disc 1 local diagnostic media",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega",
+        "scenario": "deterministic play-click run and exact GUI diagnostic capture",
+        "timing": "native"
+      },
+      "hypothesis_id": "saved-native-vcd-position-calibration",
+      "strategy": "Compare identical runs with blank memory, the frontend's persistent PAL memory, a copy with the player-shell preference cleared, and a copy with only VCD_SETTINGS.nvri invalidated.",
+      "symbols": [],
+      "assumptions": [
+        "The deterministic run reaches the same first warning sequence.",
+        "The frontend and CLI consume the same native NVRAM image format."
+      ],
+      "expected": "Only the native VCD settings item controls the shared horizontal displacement.",
+      "actual": "Blank memory programs video_display_x=0. The exact GUI and CLI with persistent PAL memory program video_display_x=16. Clearing the general player-shell preference leaves x=16, while invalidating only VCD_SETTINGS.nvri restores x=0.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "Separated a persistent native user calibration from the Lost Ride/CDIC correction and from MCD251 coordinate interpretation.",
+        "Identified a hardware-faithful recovery path that preserves unrelated game saves."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "Philips native VCD application uses the shared PAL VCD_SETTINGS.nvri preference"
+        ],
+        "invalidated_by": [
+          "A native position reset that still leaves video_display_x=16",
+          "Changing the guest VCD engine or NVRAM image"
+        ],
+        "repeat_when": [
+          "The native Position Video screen has been recentered and saved"
+        ]
+      }
+    },
     {
       "id": "remove-host-overscan-simulation",
       "context": {
@@ -133,6 +205,161 @@
           "DisplayGeometry or MCD251 positioning changes"
         ]
       }
+    },
+    {
+      "id": "compare-addams-position-video-endpoints",
+      "context": {
+        "base_revision": "a7dd512f7c3f10f8c1f7943d470767e64f308f62",
+        "dirty_diff_hash": null,
+        "component_fingerprints": {},
+        "dependencies": {
+          "white_book_type4": "enabled",
+          "mcd251_13_5mhz": "enabled",
+          "persistent_vcd_settings": "user-repositioned-and-saved"
+        },
+        "disc_fingerprint": "Addams Family Values UK Disc 1 local diagnostic media",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega",
+        "scenario": "native Position Video screen at opposite horizontal endpoints",
+        "timing": "native"
+      },
+      "hypothesis_id": "native-player-edition-or-configuration",
+      "strategy": "Compare only the two newest diagnostic captures while moving the native Position Video control between its horizontal endpoints, then reconcile the programmed MCD251 window with the source MPEG dimensions and 13.5 MHz output conversion.",
+      "symbols": [],
+      "assumptions": [
+        "Both captures represent the same Addams UK native position-calibration screen and active video mode.",
+        "The measured 15/13.5 horizontal conversion applies to both decoded samples and horizontal position/window state."
+      ],
+      "expected": "If the apparent off-screen content is native window panning rather than an emulator origin bug, the endpoints will trade source-window clipping against display position while the active plane and output clock remain fixed.",
+      "actual": "Capture 1786293730678 programs offset 65/26, active 384x280, display 0/0, and source window 8,6 344x280. Capture 1786293738645 keeps the same offset, active plane, and 13.5 MHz clock but programs display 1/0 and source window 0,6 352x280. The source MPEG is 352x288. Thus the native UI is selecting which part of a source larger than the active converted aperture is visible: 352 samples expand to about 391.1 pixels horizontally, and 288 lines exceed the 280-line active height by eight.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "Explains the approximately eight hidden horizontal and vertical source pixels without a title-specific offset or host crop.",
+        "Separates native player/window behavior from an MCD251 geometry defect.",
+        "Identifies the edition-2 versus edition-3 VCD player window programming as useful application-level evidence rather than proof of different White Book revisions."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "PAL Video CD playback uses the 13.5 MHz external VMPEG clock path and a 384x280 active plane",
+          "The guest programs a source window wider or taller than the converted active aperture"
+        ],
+        "invalidated_by": [
+          "A real-hardware trace showing a different conversion or unclipped full 352x288 presentation under the same registers",
+          "A correction to the measured MCD251 register interpretation"
+        ],
+        "repeat_when": [
+          "A synchronized real-hardware Addams UK warning capture or register trace becomes available",
+          "MCD251 source-window or external 13.5 MHz scaling semantics change"
+        ]
+      }
+    },
+    {
+      "id": "compare-clean-memory-addams-and-zyx-register-state",
+      "context": {
+        "base_revision": "a7dd51250928450bd5f347a232227d2e260d1640",
+        "dirty_diff_hash": "5bb4b374177c174961ee0edd575f9e5845a0337b975852bf00444cfb7b7783f4",
+        "component_fingerprints": {},
+        "dependencies": {
+          "white_book_type4": "enabled",
+          "mcd251_13_5mhz": "enabled",
+          "persistent_vcd_settings": "deleted-before-test"
+        },
+        "disc_fingerprint": "Addams Family Values UK and ZYX Dance Hits Germany local diagnostic media",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega",
+        "scenario": "manual clean-memory warning and MPEG playback captures",
+        "timing": "native"
+      },
+      "hypothesis_id": "saved-native-vcd-position-calibration",
+      "strategy": "Delete player memory, reproduce the affected warning and feature/video paths, then compare the bounded MCD251 snapshots and exact composed-raster edge bounds.",
+      "symbols": [],
+      "assumptions": [
+        "Testing deleted both ordinary NVRAM data and persistent VCD settings before launching the three scenarios.",
+        "The diagnostic snapshots correspond to the visibly displaced frames described in the report."
+      ],
+      "expected": "If saved position calibration is the sufficient cause, blank settings should restore the default centered register state and remove the shared displacement.",
+      "actual": "Addams UK warning, Addams UK feature, and ZYX video all program the same MCD251 state: 352x288 source, Xo/Yo=65/26, Xa/Ya=384/280, Xd/Yd=16/0, Xw/Yw=0/5, Ww/Hw=352/280, and the 13.5 MHz output clock. The two moving-video composed rasters contain an exact 32-pixel all-black left border and no right border, matching the emulator's current Xd*2 placement. Addams warning includes additional authored black area but shares the same register state. No decoder or demux error is reported.",
+      "outcome": "hypothesis-falsified",
+      "regressions": [],
+      "improvements": [
+        "Rules out stale VCD_SETTINGS as a sufficient explanation for the clean-memory Addams UK and ZYX displacement.",
+        "Locates the visible pillar at the MCD251 external-video composition boundary rather than the frontend aperture.",
+        "Identifies a centered Accused capture under the same clean-memory state as the smallest remaining discriminating control."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "The three captures were made after deletion of the same persistent player memory used by the frontend"
+        ],
+        "invalidated_by": [
+          "Evidence that another VCD settings store survived the deletion",
+          "A correction to MCD251 register interpretation or external-video composition"
+        ],
+        "repeat_when": [
+          "A centered Accused control is captured in the same clean-memory session",
+          "MCD251 coordinate semantics change"
+        ]
+      }
+    },
+    {
+      "id": "compare-clean-memory-accused-control",
+      "context": {
+        "base_revision": "a7dd51250928450bd5f347a232227d2e260d1640",
+        "dirty_diff_hash": "108bc29dbfa1e80c3ec0dc628f7630d08f86c06bba6a56f9b6697b2142403f49",
+        "component_fingerprints": {},
+        "dependencies": {
+          "white_book_type4": "enabled",
+          "mcd251_13_5mhz": "enabled",
+          "persistent_vcd_settings": "deleted-before-test"
+        },
+        "disc_fingerprint": "Accused Netherlands Disc 1, Addams Family Values UK Disc 1, and ZYX Dance Hits Germany local diagnostic media",
+        "model": "cdi220b",
+        "video_standard": "pal",
+        "dvc": "vmpega",
+        "scenario": "same-session clean-memory MPEG playback comparison",
+        "timing": "native"
+      },
+      "hypothesis_id": "native-player-edition-or-configuration",
+      "strategy": "Capture the known-good Accused feature in the same clean-memory session and compare its bounded MCD251 state and exact composed-raster edges with the affected Addams UK and ZYX captures.",
+      "symbols": [],
+      "assumptions": [
+        "The Accused capture corresponds to feature playback that manual testing reports as correctly centered.",
+        "All compared captures use the same frontend aperture and freshly deleted persistent player memory."
+      ],
+      "expected": "If guest-programmed window state is the discriminator, Accused will differ at MCD251 display/source-window programming before frontend presentation while retaining the same active plane and VCD clock.",
+      "actual": "Addams UK and ZYX use Xo/Yo=65/26, Xa/Ya=384/280, Xd/Yd=16/0, Xw/Yw=0/5, Ww/Hw=352/280 and produce 32/0-pixel left/right all-black edges. Accused retains Xo/Yo=65/26, Xa/Ya=384/280 and 13.5 MHz, but uses Xd/Yd=0/0, Xw/Yw=7/1 and Ww/Hw=345/280; its composed raster has 0/1-pixel left/right all-black edges. None reports demux or video decode errors.",
+      "outcome": "confirmed",
+      "regressions": [],
+      "improvements": [
+        "Confirms that the visible difference exists at the guest-programmed MCD251 display/window boundary rather than in the frontend or decoder.",
+        "Falsifies stale saved VCD calibration as the cause of the current clean-memory difference.",
+        "Narrows the unresolved question to the real-hardware interpretation of Xd and source-window coordinates under the external 13.5 MHz clock."
+      ],
+      "reverted": false,
+      "evidence_quality": "high",
+      "confidence": "high",
+      "applicability": {
+        "conditions": [
+          "The compared captures use the current Xd*2 compositor and the external 13.5 MHz sample expansion",
+          "Accused is the correct-placement control reported during manual testing"
+        ],
+        "invalidated_by": [
+          "A correction to MCD251 register interpretation or external-clock coordinate conversion",
+          "A real-hardware capture showing that Addams UK or ZYX intentionally has the same 32-pixel left border"
+        ],
+        "repeat_when": [
+          "A synchronized real-hardware register/output trace becomes available",
+          "MCD251 positioning semantics change"
+        ]
+      }
     }
   ],
   "manual_verification": [
@@ -150,6 +377,31 @@
       "result": "reproduced-current-clean-pass",
       "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
       "notes": "The warning is visibly shifted right (evidence img-20260802T234154.665329Z-04e9f9243376-e81f40335ac0, SHA-256 e81f40335ac0703c73e808c0c94d199aad5e91c15758a841e7cf3b43bbd7f19f). MPEG playback exposes a black pillar at the left edge (evidence img-20260802T234154.705703Z-aa3bb8e02685-eaf0fa25ac6a, SHA-256 eaf0fa25ac6a93d03a90823939c64c086fb2f685d481ae9cb52ae4a5d0e2361f). Accused Netherlands remains a clean control, including with its native in-video controls visible."
+    },
+    {
+      "result": "root-cause-isolated-pending-manual-reset",
+      "revision": "a7dd512f7c3f10f8c1f7943d470767e64f308f62",
+      "notes": "The current Accused GUI capture programs native video_display_x=16. An identical blank-memory run programs x=0; supplying the frontend PAL NVRAM reproduces x=16. VCD_SETTINGS.nvri, not the player-shell preference or the recent Lost Ride/CDIC change, is the discriminator. Philips documents this as a persistent television-position calibration. Recenter and save through the native Position Video screen, then recheck Accused and Addams UK."
+    },
+    {
+      "result": "native-windowing-characterized-real-hardware-default-unverified",
+      "revision": "a7dd512f7c3f10f8c1f7943d470767e64f308f62",
+      "notes": "After native repositioning and saving, Accused warning/menu/movie all display properly. Addams UK movie and menu display properly, while its warning remains right-shifted. The two newest Addams captures show about eight source pixels/lines outside the visible aperture because Position Video pans and clips a 352x288 MPEG source within a 384x280 active plane under 13.5 MHz horizontal scaling. This is consistent with native guest-programmed windowing, not evidence for another emulator crop. The warning itself is a separate 352x288 MPEG asset in CDI/CDI_BUM.DAT on Track 1 rather than part of the Track 2 feature, a distinction to preserve when debugging other title intros. Direct real-hardware comparison is the remaining oracle for the factory/default warning alignment."
+    },
+    {
+      "result": "related-calibration-state-revalidation-needed",
+      "revision": "a7dd51250928450bd5f347a232227d2e260d1640",
+      "notes": "ZYX Dance Hits was captured with the same persisted native VCD position/window state as the rightward Addams UK Position Video endpoint: MCD251 display 1,0; source window 0,6 352x280; active plane 384x280; and 13.5 MHz VCD output. This makes the previously saved Addams/Accused calibration a plausible cause of ZYX's small displacement. It does not yet prove that the complete left and bottom dark margins are calibration artifacts; some may be authored MPEG content or guest-programmed windowing. Recenter or reset VCD_SETTINGS.nvri and relaunch ZYX before classifying those margins as an emulator defect."
+    },
+    {
+      "result": "saved-calibration-hypothesis-falsified",
+      "revision": "a7dd51250928450bd5f347a232227d2e260d1640+dirty:5bb4b374177c174961ee0edd575f9e5845a0337b975852bf00444cfb7b7783f4",
+      "notes": "After deleting all memory including VCD settings, Accused appears correct throughout, while Addams UK warning/feature and ZYX opening/feature video remain displaced right with a left pillar; their native menus remain correct. The three affected captures all use Xd=16/Yd=0 and Xw=0/Yw=5 at 13.5 MHz. The moving-video rasters have an exact 32-pixel black left border produced at external-video composition. Capture Accused in this same clean-memory state before changing MCD251 geometry."
+    },
+    {
+      "result": "clean-memory-control-confirmed",
+      "revision": "a7dd51250928450bd5f347a232227d2e260d1640+dirty:108bc29dbfa1e80c3ec0dc628f7630d08f86c06bba6a56f9b6697b2142403f49",
+      "notes": "The same-session Accused feature capture is correctly placed and programs Xd=0, Xw=7, Ww=345, leaving only one black raster pixel at the right. Addams UK and ZYX instead program Xd=16, Xw=0, Ww=352 and both produce an exact 32-pixel black left border. The native menus remain unaffected because they are MCD212 planes. Do not change the coordinate equation until the Addams/ZYX placement is checked against real hardware or a synchronized hardware trace."
     }
   ]
 }

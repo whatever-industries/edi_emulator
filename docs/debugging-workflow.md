@@ -20,6 +20,9 @@ System Globals, module-directory, process, scheduler, or path-table layout.
 ## Start and reproduce
 
 1. Search `diagnose history` for the title, symptom, and affected components.
+   For top/bottom bars, vertical padding, or apparent PAL compression, apply
+   the PAL compatibility-framing pre-triage below before defining the expected
+   picture or classifying the observation as a defect.
 2. Create a local ignored incident:
 
    ```sh
@@ -67,6 +70,48 @@ System Globals, module-directory, process, scheduler, or path-table layout.
 
 5. Compare the two `evidence.json` files. If they diverge before the reported
    symptom, first investigate the nondeterminism.
+
+### PAL compatibility-framing pre-triage
+
+Do not initially classify top/bottom bars on a 625/50 title as an emulator
+crop or scaling defect. The familiar 625-versus-525 count describes complete
+television scan structures, not 100 additional drawable CD-i picture lines.
+At the CD-i digital-picture boundary, native 625 authoring commonly uses 280
+lines while cross-standard material uses a 240-line safe picture. Philips TN
+048 explicitly describes adding 20 neutral lines above and below 240-line
+material for PAL presentation. MCD212 625 Compatibility Mode likewise masks
+20 display-file lines at each edge. Neutral lines may be black, gray, or the
+title's programmed backdrop color.
+
+Treat this as the first hypothesis when a PAL disc, a dual-region disc, or a
+title with 525-authored assets shows stable horizontal bars. The developer's
+country is supporting context only; it does not select player timing or prove
+the source standard.
+
+Before opening or promoting a display incident, record:
+
+1. The exact disc fingerprint, selected player standard, and whether the title
+   is PAL-only, NTSC-only, mixed-region, or unknown.
+2. Live MCD212 standard, scan and Compatibility Mode state, hardware aperture,
+   and whether the bars already exist in the individual planes or composed
+   core raster.
+3. Whether the frontend destination preserves that core aperture without
+   adding another inset.
+4. Whether the bars are stable authored/backdrop pixels, compatibility-masked
+   lines, or missing/unstable image data.
+5. A same-disc comparison on physical hardware when available. Current MAME
+   agreement is useful corroboration, but is not by itself a hardware oracle.
+
+If the programmed MCD212 mode, core aperture, and presented output agree, use
+an outcome such as `resolved-as-authored` or `closed-not-a-defect` and retain
+the observation as compatibility evidence. Continue as a geometry incident
+only when E-Di adds an inset, omits programmed lines, disagrees with the
+specification-derived mode, or differs from a stronger same-disc reference.
+Never remove stable bars through title-name rules, content-aware cropping, or
+an assumption that every PAL title should fill all 280 lines.
+
+The normative geometry and authoring evidence is summarized in
+`docs/display-geometry.md` under “Philips evidence.”
 
 ### Import manual screenshots immediately
 

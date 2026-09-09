@@ -111,6 +111,12 @@ pub struct Mcd212 {
     /// memory cost.
     #[cfg_attr(feature = "savestate", serde(skip))]
     diagnostic_plane_framebuffer: [Option<Vec<u32>>; 2],
+    /// Source-pointer state for the field being rendered and the last field
+    /// completed while diagnostics are enabled.
+    #[cfg_attr(feature = "savestate", serde(skip))]
+    diagnostic_line_states: Option<Vec<Mcd212LineDiagnostic>>,
+    #[cfg_attr(feature = "savestate", serde(skip))]
+    diagnostic_completed_line_states: Option<Vec<Mcd212LineDiagnostic>>,
 }
 
 pub const FB_WIDTH: usize = 768;
@@ -141,6 +147,19 @@ pub struct DisplayGeometry {
     pub frame_duration_60hz: bool,
     pub pixel_aspect_num: u16,
     pub pixel_aspect_den: u16,
+}
+
+/// Per-line source state captured immediately around display-file decoding.
+/// This is populated only while decoded-plane diagnostics are enabled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "savestate", derive(serde::Serialize, serde::Deserialize))]
+pub struct Mcd212LineDiagnostic {
+    pub active_line: u16,
+    pub pre_vsr: [u32; 2],
+    pub post_vsr: [u32; 2],
+    pub dca: [u32; 2],
+    pub dcr: [u16; 2],
+    pub ddr: [u16; 2],
 }
 
 /// Expand one CD-i/CCIR-601 internal RGB pixel for presentation on a desktop
@@ -280,14 +299,22 @@ fn geometry(pal: bool) -> (u32, u32) {
     }
 }
 
-/// CPU cycles (15 MHz) per display line.
-fn cycles_per_line(pal: bool) -> u64 {
-    let (fps, (_, total)) = if pal {
-        (50, geometry(true))
-    } else {
-        (60, geometry(false))
-    };
-    15_000_000 / (fps * u64::from(total))
+/// One complete MCD212 line is 1,920 master clocks, or 960 CPU clocks.
+/// The final modeled line includes the standard's otherwise unrepresented
+/// half-line so each 625/525-line field retains its physical duration.
+fn cycles_per_line(_pal: bool) -> u64 {
+    crate::sched::MCD212_CPU_CYCLES_PER_LINE
+}
+
+fn cycles_for_line(pal: bool, line: u32) -> u64 {
+    let (_, total) = geometry(pal);
+    cycles_per_line(pal) + u64::from(line + 1 == total) * crate::sched::MCD212_HALF_LINE_CPU_CYCLES
+}
+
+#[cfg(test)]
+fn cycles_per_field(pal: bool) -> u64 {
+    let (_, total) = geometry(pal);
+    cycles_per_line(pal) * u64::from(total) + crate::sched::MCD212_HALF_LINE_CPU_CYCLES
 }
 
 impl Default for Mcd212 {
@@ -336,6 +363,8 @@ impl Mcd212 {
             framebuffer: vec![0; FB_WIDTH * FB_HEIGHT],
             field_framebuffer: vec![0; FB_WIDTH * FB_HEIGHT],
             diagnostic_plane_framebuffer: [None, None],
+            diagnostic_line_states: None,
+            diagnostic_completed_line_states: None,
         }
     }
 
@@ -364,8 +393,16 @@ impl Mcd212 {
                     *plane = Some(vec![0; FB_WIDTH * FB_HEIGHT]);
                 }
             }
+            self.diagnostic_line_states
+                .get_or_insert_with(Vec::new)
+                .clear();
+            self.diagnostic_completed_line_states
+                .get_or_insert_with(Vec::new)
+                .clear();
         } else {
             self.diagnostic_plane_framebuffer = [None, None];
+            self.diagnostic_line_states = None;
+            self.diagnostic_completed_line_states = None;
         }
     }
 
@@ -375,6 +412,11 @@ impl Mcd212 {
         self.diagnostic_plane_framebuffer
             .get(path)
             .and_then(Option::as_deref)
+    }
+
+    /// Source-pointer state for the most recently completed field.
+    pub fn diagnostic_line_states(&self) -> Option<&[Mcd212LineDiagnostic]> {
+        self.diagnostic_completed_line_states.as_deref()
     }
 
     /// Visible output size for the current video standard.
@@ -1159,8 +1201,28 @@ impl Mcd212 {
         let mut plane_b = [0u32; FB_WIDTH];
         let mut ta = [false; FB_WIDTH];
         let mut tb = [false; FB_WIDTH];
+        let diagnostic_pre_vsr = self
+            .diagnostic_line_states
+            .as_ref()
+            .map(|_| [self.get_vsr(0), self.get_vsr(1)]);
+        let diagnostic_dca = self.dca;
+        let diagnostic_dcr = self.dcr;
+        let diagnostic_ddr = self.ddr;
         self.process_vsr(0, planea, planeb, &mut plane_a, &mut ta);
         self.process_vsr(1, planeb, planea, &mut plane_b, &mut tb);
+        let diagnostic_post_vsr = [self.get_vsr(0), self.get_vsr(1)];
+        if let (Some(pre_vsr), Some(states)) =
+            (diagnostic_pre_vsr, &mut self.diagnostic_line_states)
+        {
+            states.push(Mcd212LineDiagnostic {
+                active_line: active_line as u16,
+                pre_vsr,
+                post_vsr: diagnostic_post_vsr,
+                dca: diagnostic_dca,
+                dcr: diagnostic_dcr,
+                ddr: diagnostic_ddr,
+            });
+        }
 
         let mut line = [0u32; FB_WIDTH];
         self.store_diagnostic_plane_lines(row, duplicate_row, &plane_a, &plane_b);
@@ -1300,6 +1362,11 @@ impl Mcd212 {
         self.tick_with_external(cycles, planea, planeb, None);
     }
 
+    /// CPU clocks until the next MCD212 display-line boundary.
+    pub(crate) fn cycles_until_next_event(&self) -> u64 {
+        (cycles_for_line(self.pal, self.line) - self.line_accum).max(1)
+    }
+
     /// Advance the display while sampling the optional Digital Video
     /// Cartridge plane behind the two base-case graphics planes.
     pub(crate) fn tick_with_external(
@@ -1311,8 +1378,8 @@ impl Mcd212 {
     ) {
         let (ica_height, total_height) = geometry(self.pal);
         self.line_accum += cycles;
-        let per_line = cycles_per_line(self.pal);
-        while self.line_accum >= per_line {
+        while self.line_accum >= cycles_for_line(self.pal, self.line) {
+            let per_line = cycles_for_line(self.pal, self.line);
             self.line_accum -= per_line;
             self.line += 1;
             if self.line >= total_height {
@@ -1328,6 +1395,9 @@ impl Mcd212 {
                 self.frame_count += 1;
                 self.external_generation_this_field = None;
                 self.external_generation_mixed_this_field = false;
+                if let Some(states) = &mut self.diagnostic_line_states {
+                    states.clear();
+                }
                 let mut path_a_ica_matte_writes = 0;
                 let mut path_a_dca_matte_writes = 0;
                 if self.ica_enabled(0) {
@@ -1383,6 +1453,13 @@ impl Mcd212 {
             }
 
             if self.line == total_height - 1 {
+                if let (Some(states), Some(completed)) = (
+                    &self.diagnostic_line_states,
+                    &mut self.diagnostic_completed_line_states,
+                ) {
+                    completed.clear();
+                    completed.extend_from_slice(states);
+                }
                 self.compose_framebuffer();
                 self.csrr[0] ^= CSR1R_PA;
             }
@@ -1504,9 +1581,23 @@ mod tests {
 
     fn advance_fields(mcd212: &mut Mcd212, fields: u32) {
         let plane = vec![0; 0x80000];
-        let field_cycles = cycles_per_line(mcd212.pal) * u64::from(geometry(mcd212.pal).1);
+        let field_cycles = cycles_per_field(mcd212.pal);
         for _ in 0..fields {
             mcd212.tick(field_cycles, &plane, &plane);
+        }
+    }
+
+    #[test]
+    fn regional_fields_include_the_final_half_line() {
+        let plane = vec![0; 0x80000];
+        for (pal, field_cycles) in [(true, 300_000), (false, 252_000)] {
+            let mut mcd212 = Mcd212::new(pal);
+            mcd212.tick(field_cycles - 1, &plane, &plane);
+            assert_eq!(mcd212.frame_count, 0, "pal={pal}");
+            mcd212.tick(1, &plane, &plane);
+            assert_eq!(mcd212.frame_count, 1, "pal={pal}");
+            assert_eq!(mcd212.line, 0, "pal={pal}");
+            assert_eq!(mcd212.line_accum, 0, "pal={pal}");
         }
     }
 
@@ -1835,7 +1926,7 @@ mod tests {
         m.dcr[0] = DCR_DE | DCR_ICA;
         m.dcr[1] = DCR_ICA;
         m.line = geometry(true).1 - 1;
-        m.tick(cycles_per_line(true), &plane_a, &plane_b);
+        m.tick(cycles_for_line(true, m.line), &plane_a, &plane_b);
 
         assert_eq!(m.matte_control[0], path_a_value);
         assert!(!m.matte_flag[0][2]);
@@ -2001,7 +2092,7 @@ mod tests {
 
         // Reaching the next frame start executes ICA and its first linked DCA
         // slot before any active line is rendered.
-        m.tick(cycles_per_line(true) * 312, &plane, &plane);
+        m.tick(cycles_per_field(true), &plane, &plane);
         assert_eq!(m.backdrop_color, 5);
         assert_eq!(m.dca[0], 64);
 
@@ -2036,7 +2127,7 @@ mod tests {
             m.dcr[0] = DCR_DE | DCR_CF | DCR_ICA | DCR_DCA | if interlaced { DCR_SM } else { 0 };
             m.csrw[0] = CSR1W_ST;
             m.line = geometry(true).1 - 1;
-            m.tick(cycles_per_line(true), &plane, &plane); // ICA + first DCA slot.
+            m.tick(cycles_for_line(true, m.line), &plane, &plane); // ICA + first DCA slot.
             m.tick(
                 cycles_per_line(true) * u64::from(geometry(true).1 - 1),
                 &plane,
@@ -2073,7 +2164,7 @@ mod tests {
         let mut m = Mcd212::new(true);
         let plane = vec![0u8; 0x80000];
         let pa0 = m.csrr[0] & CSR1R_PA;
-        m.tick(cycles_per_line(true) * 312, &plane, &plane);
+        m.tick(cycles_per_field(true), &plane, &plane);
         assert_ne!(m.csrr[0] & CSR1R_PA, pa0);
     }
 
@@ -2120,7 +2211,11 @@ mod tests {
             .copy_from_slice(&[0x60, 0, 0, 0, 0x60, 0, 0, 0, 0x00, 0, 0, 0, 0x00, 0, 0, 0]);
         m.dcr[0] |= DCR_DE | DCR_ICA;
         // Advance a full frame so line 0 processing happens.
-        m.tick(cycles_per_line(true) * 313, &plane, &plane);
+        m.tick(
+            cycles_per_field(true) + cycles_per_line(true),
+            &plane,
+            &plane,
+        );
         assert!(m.int_line(), "ICA INTERRUPT must assert INT");
         assert_ne!(m.csrr[1] & CSR2R_IT1, 0);
         // Reading CSR2 clears the flags and drops the line.
@@ -2175,7 +2270,11 @@ mod tests {
             0x78, 0, 0x05, 0x0F, 0x78, 0, 0x05, 0x0F, 0x00, 0, 0, 0, 0x00, 0, 0, 0,
         ]);
         m.dcr[0] |= DCR_DE | DCR_ICA;
-        m.tick(cycles_per_line(true) * 313, &plane, &plane);
+        m.tick(
+            cycles_per_field(true) + cycles_per_line(true),
+            &plane,
+            &plane,
+        );
         assert_eq!(m.ddr[0] & 0x0F00, 0x0F00);
         assert_ne!(m.dcr[0] & DCR_CM, 0);
     }
@@ -2190,7 +2289,11 @@ mod tests {
             0x78, 0x00, 0x05, 0x00, 0x78, 0x00, 0x05, 0x00, 0x00, 0, 0, 0, 0x00, 0, 0, 0,
         ]);
         m.dcr[0] |= DCR_DE | DCR_ICA;
-        m.tick(cycles_per_line(true) * 313, &plane, &plane);
+        m.tick(
+            cycles_per_field(true) + cycles_per_line(true),
+            &plane,
+            &plane,
+        );
         assert_ne!(m.dcr[0] & DCR_CM, 0);
         assert_eq!(m.ddr[0] & 0x0F00, 0);
     }

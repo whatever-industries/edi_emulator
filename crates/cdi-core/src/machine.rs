@@ -18,14 +18,15 @@ use crate::diagnostics::{
     os9_diagnostic_snapshot, CpuDiagnosticSnapshot, DiagnosticProbe, DisplayProvenanceSnapshot,
     DmaChannelDiagnosticSnapshot, DmaDiagnosticSnapshot, InterruptDiagnosticSnapshot,
     MachineDiagnosticEvent, MachineDiagnosticSnapshot, Mcd212DiagnosticSnapshot,
-    PclOwnershipTracker, RamDiagnosticRegion, SlaveDriveStatusProbe,
+    PclOwnershipTracker, PointerDiagnosticProbe, RamDiagnosticRegion, SlaveDriveStatusProbe,
 };
 use crate::dvc::{DvcConfig, DvcKind, DvcStats, Vmpeg};
+use crate::keyboard::{KeyboardKMode, KeyboardModifiers};
 use crate::mcd212::Mcd212;
-use crate::slave::SlaveHle;
+use crate::slave::{PlayerControlKey, SlaveHle};
 
 /// A word transfer in SCC68070 single-address DMA occupies approximately six
-/// 15 MHz CPU clocks. The data sheet specifies 2.98 million transfers/s with
+/// CPU clocks. The data sheet specifies 2.98 million transfers/s with
 /// a 35 MHz crystal (section 8.1), or about twelve crystal clocks per transfer;
 /// CLKOUT is half the crystal rate.
 const DMA_SINGLE_ADDRESS_WORD_CYCLES: u64 = 6;
@@ -299,6 +300,8 @@ pub struct MachineBus {
     pub clock: TimekeeperClock,
     /// SCC68070 on-chip peripherals ($80000000 block).
     pub periph: Peripherals,
+    /// Optional K-mode keyboard connected to SCC68070 UART port 2.
+    pub keyboard: KeyboardKMode,
     /// SLAVE MCU (input/status controller) at $310000.
     pub slave: SlaveHle,
     /// MCD212 video/display controller at $4FFFE0.
@@ -387,6 +390,7 @@ impl MachineBus {
             }
         }
 
+        let pal = model.video == VideoStandard::Pal;
         let mut bus = Self {
             pages: vec![Page::Open; PAGE_COUNT],
             regions,
@@ -395,6 +399,7 @@ impl MachineBus {
             nvram: vec![0u8; 0x2000],
             clock: TimekeeperClock::default(),
             periph: Peripherals::new(),
+            keyboard: KeyboardKMode::new(crate::sched::cpu_clock_hz(pal)),
             slave: SlaveHle::new(model.slave_version, model.video == VideoStandard::Pal),
             mcd212: Mcd212::new(model.video == VideoStandard::Pal),
             cdic: Cdic::new(),
@@ -405,6 +410,9 @@ impl MachineBus {
             dma_diagnostics: None,
             pending_bus_error: None,
         };
+        bus.cdic.set_clock_hz(crate::sched::cpu_clock_hz(
+            model.video == VideoStandard::Pal,
+        ));
         bus.build_page_table();
         Ok(bus)
     }
@@ -456,6 +464,9 @@ impl MachineBus {
         self.periph.in5_line = false;
         self.dvc_dma_cycles = 0;
         self.pending_bus_error = None;
+        // A host reset negates UART RTS but does not remove power from an
+        // external keyboard. Preserve its power-on timer and physical state.
+        self.keyboard.set_rts(false);
         if let Some(capture) = &mut self.dma_diagnostics {
             *capture = DmaDiagnosticCapture::default();
         }
@@ -536,11 +547,6 @@ impl MachineBus {
             }
             DevSlot::OnChip => self.periph.read8(addr),
             DevSlot::Cdic => match addr {
-                // Mono-I quirk: the UART-loopback enable window inside the
-                // CDIC RAM range (MAME maps a 16-bit 0x1234 over
-                // $301400-$301403; the BIOS long-compares 0x12341234).
-                0x1400 | 0x1402 => 0x12,
-                0x1401 | 0x1403 => 0x34,
                 0x0000..=0x3BFF => self.cdic.ram_read8(addr),
                 0x3C00..=0x3FFF => {
                     let v = self.cdic.read8(addr);
@@ -600,6 +606,9 @@ impl MachineBus {
                     }
                 }
                 self.periph.write8(addr, val);
+                if addr == 0x2017 {
+                    self.keyboard.set_rts(self.periph.uart_receiver_enabled());
+                }
             }
             DevSlot::Cdic => match addr {
                 0x0000..=0x3BFF => self.cdic.ram_write8(addr, val),
@@ -797,6 +806,87 @@ impl MachineBus {
             }
         }
         words
+    }
+
+    fn cycles_until_next_device_event(&self) -> u64 {
+        let mut next = self
+            .periph
+            .cycles_until_next_event()
+            .min(self.keyboard.cycles_until_next_event())
+            .min(self.slave.cycles_until_next_event())
+            .min(self.cdic.cycles_until_next_event())
+            .min(self.mcd212.cycles_until_next_event());
+        if self.periph.dma1_active() && self.dvc.as_ref().is_some_and(Vmpeg::dma_requested) {
+            next = next.min(
+                DMA_SINGLE_ADDRESS_WORD_CYCLES
+                    .saturating_sub(self.dvc_dma_cycles)
+                    .max(1),
+            );
+        }
+        if let Some(dvc) = &self.dvc {
+            next = next.min(dvc.cycles_until_next_event());
+        }
+        next.max(1)
+    }
+
+    /// Advance every asynchronous device over one chronological slice.
+    ///
+    /// Device order at a shared deadline follows the physical data path:
+    /// host peripherals and SLAVE, CDIC transport, DMA into VMPEG, VMPEG, then
+    /// the MCD212 display that latches VMPEG output at VSYNC.
+    ///
+    /// The CPU has already completed the instruction's bus accesses when this
+    /// method runs. This preserves device-to-device ordering and next-boundary
+    /// interrupt visibility, but it is not bus-cycle interleaving within a
+    /// multi-access instruction.
+    fn tick_device_slice(&mut self, cycles: u64) -> bool {
+        let mut keyboard_bytes = Vec::new();
+        self.keyboard.tick(cycles, &mut keyboard_bytes);
+        for byte in keyboard_bytes {
+            self.periph.uart_rx(byte);
+        }
+        self.periph.tick(cycles);
+        self.slave.tick(cycles);
+        if self.slave.take_host_reset_request() {
+            return true;
+        }
+        if let Some(attenuation) = self.slave.take_attenuation() {
+            self.cdic.set_attenuation(attenuation);
+        }
+        self.cdic.tick(cycles, self.disc.as_ref());
+        self.service_dvc_dma(cycles);
+        if let Some(dvc) = &mut self.dvc {
+            dvc.tick(cycles);
+        }
+        let planea = self.ram.first().map(Vec::as_slice).unwrap_or(&[]);
+        let planeb = self.ram.get(1).map(Vec::as_slice).unwrap_or(planea);
+        let external = self.dvc.as_ref().and_then(Vmpeg::external_video);
+        let frame_count = self.mcd212.frame_count;
+        self.mcd212
+            .tick_with_external(cycles, planea, planeb, external);
+        if self.mcd212.frame_count != frame_count {
+            if let Some(dvc) = &mut self.dvc {
+                dvc.notify_vsync();
+            }
+        }
+        self.periph.in2_line = self.slave.irq();
+        self.refresh_external_interrupts();
+        self.periph.set_int1(self.mcd212.int_line());
+        false
+    }
+
+    fn advance_devices(&mut self, cycles: u64) -> (bool, u64, u64) {
+        let mut remaining = cycles;
+        let mut slices = 0;
+        while remaining != 0 {
+            let slice = remaining.min(self.cycles_until_next_device_event());
+            slices += 1;
+            if self.tick_device_slice(slice) {
+                return (true, cycles - remaining + slice, slices);
+            }
+            remaining -= slice;
+        }
+        (false, cycles, slices)
     }
 
     fn observe_dvc_dma_word(&mut self, address: u32, word: u16) {
@@ -1110,6 +1200,10 @@ impl Machine {
         let pal = standard == VideoStandard::Pal;
         self.bus.slave.set_video_standard(pal);
         self.bus.mcd212.pal = pal;
+        self.bus.cdic.set_clock_hz(crate::sched::cpu_clock_hz(pal));
+        self.bus
+            .keyboard
+            .set_clock_hz(crate::sched::cpu_clock_hz(pal));
         if let Some(dvc) = &mut self.bus.dvc {
             dvc.set_video_standard(pal);
         }
@@ -1130,6 +1224,28 @@ impl Machine {
         self.cpu.reset(&mut self.bus);
     }
 
+    /// Attach or remove the optional K-mode keyboard and reboot so the native
+    /// configuration module discovers `/kb1` through the Mono-I SLAVE.
+    pub fn set_keyboard_attached(&mut self, attached: bool) {
+        if self.bus.slave.keyboard_attached() == attached {
+            return;
+        }
+        self.bus.slave.set_keyboard_attached(attached);
+        self.reset();
+    }
+
+    pub fn set_keyboard_key(&mut self, code: u8, pressed: bool, modifiers: KeyboardModifiers) {
+        self.bus.slave.set_keyboard_key(code, pressed, modifiers);
+    }
+
+    pub fn set_keyboard_modifiers(&mut self, modifiers: KeyboardModifiers) {
+        self.bus.slave.set_keyboard_modifiers(modifiers);
+    }
+
+    pub fn set_player_control_key(&mut self, key: PlayerControlKey, pressed: bool) {
+        self.bus.slave.set_player_control_key(key, pressed);
+    }
+
     /// Perform a cold player power cycle.
     ///
     /// Battery-backed NVRAM, the timekeeper, inserted media, and cartridge
@@ -1143,6 +1259,7 @@ impl Machine {
         if let Some(dvc) = &mut self.bus.dvc {
             dvc.power_cycle();
         }
+        self.bus.keyboard.reset();
         self.cpu = cdi_scc68070::Cpu::new();
         self.reset();
     }
@@ -1238,10 +1355,24 @@ impl Machine {
                 ddr: self.bus.mcd212.ddr,
                 dcp: self.bus.mcd212.dcp,
                 dca: self.bus.mcd212.dca,
+                clut: self.bus.mcd212.clut.to_vec(),
+                clut_bank: self.bus.mcd212.clut_bank,
                 image_coding_method: self.bus.mcd212.image_coding_method,
                 transparency_control: self.bus.mcd212.transparency_control,
                 plane_order: self.bus.mcd212.plane_order,
+                transparent_color: self.bus.mcd212.transparent_color,
+                mask_color: self.bus.mcd212.mask_color,
                 dyuv_absolute_start: self.bus.mcd212.dyuv_abs_start,
+                matte_control: self.bus.mcd212.matte_control,
+                backdrop_color: self.bus.mcd212.backdrop_color,
+                mosaic_hold: self.bus.mcd212.mosaic_hold,
+                weight_factor_base: self.bus.mcd212.weight_factor_base,
+                line_states: self
+                    .bus
+                    .mcd212
+                    .diagnostic_line_states()
+                    .unwrap_or_default()
+                    .to_vec(),
                 cursor_position: self.bus.mcd212.cursor_position,
                 cursor_control: self.bus.mcd212.cursor_control,
                 frame_count: self.bus.mcd212.frame_count,
@@ -1330,8 +1461,12 @@ impl Machine {
         }
         DiagnosticProbe {
             frame: self.bus.mcd212.frame_count,
+            system_tick: self.bus.periph.timer_diagnostic_snapshot(),
+            cdic_sector_ticks: cdic.sector_ticks,
             cdic_mode: cdic.disc_mode,
             cdic_lba: cdic.current_lba,
+            cdic_read_enabled: cdic.disc_read_enabled,
+            cdic_audio_queue: cdic.queued_audio_samples,
             cdic_state: [
                 cdic.command,
                 cdic.audio_buffer,
@@ -1343,6 +1478,16 @@ impl Machine {
             cdic_selected_channels: cdic.selected_channels,
             cdic_audio_channel: cdic.audio_channel,
             cdic_interrupt: cdic.interrupt_asserted,
+            pointer: PointerDiagnosticProbe {
+                input_x: slave.input_x,
+                input_y: slave.input_y,
+                device_x: slave.device_x,
+                device_y: slave.device_y,
+                buttons: slave.buttons,
+                polling_active: slave.polling_active,
+                interrupt_enabled: slave.pointer_interrupt_enabled,
+                interrupt_asserted: slave.irq_asserted,
+            },
             slave_drive_status: SlaveDriveStatusProbe {
                 modeled_servo_packet: slave.modeled_servo_b0_packet,
                 next_forwarded_packet: slave.next_forwarded_servo_packet,
@@ -1409,6 +1554,52 @@ impl Machine {
             return;
         };
         let previous = *previous;
+        if !self.milestone_only_diagnostics
+            && current.system_tick.overflows != previous.system_tick.overflows
+        {
+            let timer = current.system_tick;
+            self.push_diagnostic_event(MachineDiagnosticEvent::SystemTick {
+                cycle: self.cpu.cycles,
+                tick: timer.overflows,
+                timer0: timer.timer0,
+                reload: timer.reload,
+                interrupt_asserted: timer.interrupt_asserted,
+            });
+        }
+        if !self.milestone_only_diagnostics && current.pointer != previous.pointer {
+            let pointer = current.pointer;
+            self.push_diagnostic_event(MachineDiagnosticEvent::PointerUpdate {
+                cycle: self.cpu.cycles,
+                input_x: pointer.input_x,
+                input_y: pointer.input_y,
+                device_x: pointer.device_x,
+                device_y: pointer.device_y,
+                buttons: pointer.buttons,
+                polling_active: pointer.polling_active,
+                interrupt_enabled: pointer.interrupt_enabled,
+                interrupt_asserted: pointer.interrupt_asserted,
+            });
+        }
+        if !self.milestone_only_diagnostics
+            && current.cdic_sector_ticks != previous.cdic_sector_ticks
+        {
+            self.push_diagnostic_event(MachineDiagnosticEvent::DiscClock {
+                cycle: self.cpu.cycles,
+                tick: current.cdic_sector_ticks,
+                mode: current.cdic_mode,
+                lba: current.cdic_lba,
+                read_enabled: current.cdic_read_enabled,
+            });
+        }
+        if !self.milestone_only_diagnostics && current.cdic_audio_queue != previous.cdic_audio_queue
+        {
+            self.push_diagnostic_event(MachineDiagnosticEvent::AudioBuffer {
+                cycle: self.cpu.cycles,
+                queued_samples: u64::try_from(current.cdic_audio_queue).unwrap_or(u64::MAX),
+                audio_buffer: current.cdic_state[1],
+                z_buffer: current.cdic_state[3],
+            });
+        }
         if !self.milestone_only_diagnostics && current.frame != previous.frame {
             let geometry = self.bus.mcd212.display_geometry();
             let pixel_count = geometry.raster_width * geometry.raster_height;
@@ -1667,40 +1858,16 @@ impl Machine {
     pub fn step(&mut self) -> u64 {
         self.cpu.pending_ipl = self.bus.periph.pending_ipl();
         let cycles = self.cpu.step(&mut self.bus);
-        let bus = &mut self.bus;
-        bus.periph.tick(cycles);
-        bus.slave.tick(cycles);
-        if bus.slave.take_host_reset_request() {
+        let (host_reset, elapsed, _) = self.bus.advance_devices(cycles);
+        if host_reset {
             log::debug!("machine: SLAVE requested host reset");
             self.push_diagnostic_event(MachineDiagnosticEvent::HostReset {
-                cycle: self.cpu.cycles,
+                cycle: self.cpu.cycles - cycles + elapsed,
             });
             self.reset_host_preserving_slave();
             self.sample_diagnostics();
             return cycles;
         }
-        if let Some(atten) = bus.slave.take_attenuation() {
-            bus.cdic.set_attenuation(atten);
-        }
-        bus.cdic.tick(cycles, bus.disc.as_ref());
-        bus.service_dvc_dma(cycles);
-        if let Some(dvc) = &mut bus.dvc {
-            dvc.tick(cycles);
-        }
-        let planea = bus.ram.first().map(Vec::as_slice).unwrap_or(&[]);
-        let planeb = bus.ram.get(1).map(Vec::as_slice).unwrap_or(planea);
-        let external = bus.dvc.as_ref().and_then(Vmpeg::external_video);
-        let frame_count = bus.mcd212.frame_count;
-        bus.mcd212
-            .tick_with_external(cycles, planea, planeb, external);
-        if bus.mcd212.frame_count != frame_count {
-            if let Some(dvc) = &mut bus.dvc {
-                dvc.notify_vsync();
-            }
-        }
-        bus.periph.in2_line = bus.slave.irq();
-        bus.refresh_external_interrupts();
-        bus.periph.set_int1(bus.mcd212.int_line());
         self.sample_diagnostics();
         cycles
     }
@@ -1915,6 +2082,42 @@ mod tests {
     }
 
     #[test]
+    fn cdic_low_level_test_ram_window_round_trips_through_the_cpu_bus() {
+        let mut bus = machine();
+
+        for offset in 0x1400..=0x3C7F {
+            let value = (offset as u8).wrapping_mul(37).wrapping_add(0x5A);
+            bus.raw_write8(0x0030_0000 + offset, value);
+        }
+
+        for offset in 0x1400..=0x3C7F {
+            let expected = (offset as u8).wrapping_mul(37).wrapping_add(0x5A);
+            assert_eq!(
+                bus.raw_read8(0x0030_0000 + offset),
+                expected,
+                "CDIC shared RAM offset {offset:#06x} did not round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn cdic_shared_ram_mailbox_write_retains_command_effect() {
+        let mut bus = machine();
+
+        for (offset, value) in [(0x3C00, 0x00), (0x3C01, 0x29)] {
+            bus.raw_write8(0x0030_0000 + offset, value);
+        }
+        for (offset, value) in [(0x3FFE, 0xC0), (0x3FFF, 0x00)] {
+            bus.raw_write8(0x0030_0000 + offset, value);
+        }
+
+        let snapshot = bus.cdic.diagnostic_snapshot();
+        assert_eq!(snapshot.command, 0x0029);
+        assert_eq!(snapshot.disc_mode, 1);
+        assert!(snapshot.disc_read_enabled);
+    }
+
+    #[test]
     fn rom_maps_and_is_readonly() {
         let mut m = machine();
         assert_eq!(m.read8(0x0040_04B8, FnCode::SupervisorProgram).0, 0xAB);
@@ -1930,6 +2133,55 @@ mod tests {
         assert_eq!(m.read16(0x0000_0002, FnCode::SupervisorData).0, 0x1500);
         assert_eq!(m.read16(0x0000_0004, FnCode::SupervisorData).0, 0x0040);
         assert_eq!(m.read16(0x0000_0006, FnCode::SupervisorData).0, 0x04B8);
+    }
+
+    #[test]
+    fn k_mode_keyboard_crosses_uart_register_boundary() {
+        let mut bus = machine();
+        bus.keyboard.set_attached(true);
+
+        // Native recognition: receiver disabled for 10 ms, then enabled.
+        bus.raw_write8(ONCHIP_BASE + 0x2017, 0x02);
+        bus.advance_devices(150_000);
+        bus.raw_write8(ONCHIP_BASE + 0x2017, 0x01);
+        bus.advance_devices(138_700);
+        assert_ne!(bus.raw_read8(ONCHIP_BASE + 0x2013) & 0x01, 0);
+        assert_eq!(bus.raw_read8(ONCHIP_BASE + 0x201B), 0xCB);
+
+        bus.keyboard.set_key(
+            b'a',
+            true,
+            KeyboardModifiers {
+                shift: true,
+                ..KeyboardModifiers::default()
+            },
+        );
+        bus.advance_devices(126_200);
+        assert_eq!(bus.raw_read8(ONCHIP_BASE + 0x201B), 0x88);
+        bus.advance_devices(126_200);
+        assert_eq!(bus.raw_read8(ONCHIP_BASE + 0x201B), b'a');
+    }
+
+    #[test]
+    fn bundled_rom_adds_keyboard_to_generated_csd() {
+        let rom = include_bytes!("../../../firmware/cdi220b.rom").to_vec();
+        let mut machine = Machine::new(&CDI220B, rom).unwrap();
+        machine.set_keyboard_attached(true);
+
+        let csd_record = b"10:/kb1";
+        for instruction in 0..100_000_000 {
+            machine.step();
+            if instruction % 10_000 == 0
+                && machine
+                    .bus
+                    .nvram
+                    .windows(csd_record.len())
+                    .any(|window| window == csd_record)
+            {
+                return;
+            }
+        }
+        panic!("bundled config did not add /kb1 after class-5 discovery");
     }
 
     #[test]
@@ -2116,6 +2368,111 @@ mod tests {
             plain.bus.mcd212.framebuffer(),
             observed.bus.mcd212.framebuffer()
         );
+    }
+
+    #[test]
+    fn diagnostic_timeline_correlates_independent_clock_and_buffer_edges() {
+        let mut machine = Machine::new(&CDI220B, machine().rom).unwrap();
+        machine.enable_diagnostics(16);
+
+        machine.bus.periph.write8(0x2022, 0xFF);
+        machine.bus.periph.write8(0x2023, 0xFF);
+        machine.bus.periph.write8(0x2024, 0xFF);
+        machine.bus.periph.write8(0x2025, 0xFF);
+        machine.bus.periph.tick(96);
+        machine.bus.slave.set_pointer_absolute(123, 234, 1);
+        machine.bus.cdic.tick(15_000_000 / 75, None);
+        machine.bus.cdic.audio_out.extend_from_slice(&[1, 2, 3, 4]);
+        machine.bus.mcd212.frame_count += 1;
+
+        machine.sample_diagnostics();
+        let events = machine.take_diagnostic_events();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                MachineDiagnosticEvent::SystemTick { tick: 1, .. },
+                MachineDiagnosticEvent::PointerUpdate {
+                    input_x: 123,
+                    input_y: 234,
+                    device_x: 123,
+                    device_y: 234,
+                    buttons: 1,
+                    ..
+                },
+                MachineDiagnosticEvent::DiscClock { tick: 1, .. },
+                MachineDiagnosticEvent::AudioBuffer {
+                    queued_samples: 4,
+                    ..
+                },
+                MachineDiagnosticEvent::Frame { frame: 1, .. },
+            ]
+        ));
+    }
+
+    #[test]
+    fn timer_deadline_inside_long_instruction_records_current_boundary_lateness() {
+        let mut rom = vec![0u8; 512 * 1024];
+        rom[..8].copy_from_slice(&[0x00, 0x00, 0x15, 0x00, 0x00, 0x40, 0x04, 0xB8]);
+        // RESET takes 154 cycles, spanning the timer's next 96-cycle edge.
+        rom[0x4B8..0x4BA].copy_from_slice(&[0x4E, 0x70]);
+        let mut machine = Machine::new(&CDI220B, rom).unwrap();
+        machine.enable_diagnostics(8);
+
+        machine.bus.periph.write8(0x2022, 0xFF);
+        machine.bus.periph.write8(0x2023, 0xFF);
+        machine.bus.periph.write8(0x2024, 0xFF);
+        machine.bus.periph.write8(0x2025, 0xFF);
+
+        let instruction_start = machine.cpu.cycles;
+        let instruction_cycles = machine.step();
+        let observed_cycle = machine
+            .take_diagnostic_events()
+            .into_iter()
+            .find_map(|event| match event {
+                MachineDiagnosticEvent::SystemTick { cycle, tick: 1, .. } => Some(cycle),
+                _ => None,
+            })
+            .expect("timer overflow event");
+
+        assert_eq!(instruction_cycles, 154);
+        assert_eq!(observed_cycle, instruction_start + instruction_cycles);
+        assert_eq!(observed_cycle - (instruction_start + 96), 58);
+    }
+
+    #[test]
+    fn device_advancement_slices_a_long_instruction_at_the_timer_deadline() {
+        let mut bus = machine();
+        bus.periph.write8(0x2022, 0xFF);
+        bus.periph.write8(0x2023, 0xFF);
+        bus.periph.write8(0x2024, 0xFF);
+        bus.periph.write8(0x2025, 0xFF);
+
+        assert_eq!(bus.cycles_until_next_device_event(), 96);
+        let (host_reset, elapsed, slices) = bus.advance_devices(154);
+
+        assert!(!host_reset);
+        assert_eq!(elapsed, 154);
+        assert_eq!(slices, 2);
+        assert_eq!(bus.periph.timer_diagnostic_snapshot().overflows, 1);
+        assert_eq!(bus.cycles_until_next_device_event(), 38);
+    }
+
+    #[test]
+    fn regional_standard_switch_updates_field_and_disc_cadence() {
+        let mut pal = Machine::new(&CDI220B, machine().rom).unwrap();
+        let (host_reset, elapsed, _) = pal.bus.advance_devices(crate::sched::PAL_CPU_HZ);
+        assert!(!host_reset);
+        assert_eq!(elapsed, crate::sched::PAL_CPU_HZ);
+        assert_eq!(pal.bus.mcd212.frame_count, 50);
+        assert_eq!(pal.bus.cdic.diagnostic_snapshot().sector_ticks, 75);
+
+        let mut ntsc = Machine::new(&CDI220B, machine().rom).unwrap();
+        ntsc.set_video_standard(VideoStandard::Ntsc);
+        let (host_reset, elapsed, _) = ntsc.bus.advance_devices(crate::sched::NTSC_CPU_HZ);
+        assert!(!host_reset);
+        assert_eq!(elapsed, crate::sched::NTSC_CPU_HZ);
+        assert_eq!(ntsc.bus.mcd212.frame_count, 59);
+        assert_eq!(ntsc.bus.cdic.diagnostic_snapshot().sector_ticks, 75);
     }
 
     #[test]

@@ -11,6 +11,15 @@ component provenance are summarized in
 
 ```text
 guest software / CD-RTOS
+  |-- UCM /pck2 reads --> bundled pck2 driver --> SLAVE channel 1
+  |                                      ^
+  |                                      `-- player-control keys
+  |-- UCM /kb1 reads --> bundled kb1 driver --> SLAVE channel 2
+  |                                      ^
+  |                                      `-- front-input K-mode keyboard
+  |-- UCM /kb reads --> bundled kb driver --> SCC68070 UART port 2
+  |                                      ^
+  |                                      `-- rear-port K-mode keyboard
   |-- SPI commands and status --> SLAVE --> SERVO --> tray, spindle,
   |                                             seek and media classification
   |
@@ -47,7 +56,8 @@ inferred from the digital mixer alone.
 
 | Boundary | Owns | Does not own | Primary evidence |
 |---|---|---|---|
-| SLAVE/SERVO | CPU-visible drive commands and status; tray/spindle/seek mechanism; media classification; host-reset request; input packets and player output controls | Sector payload delivery, CDFM buffering, MPEG decode, or video composition | CD-i 220 service manual; CD-i 910 training pp. 13-14; SLAVE and SERVO firmware; `docs/slave-protocol.md` |
+| SLAVE/SERVO | CPU-visible drive commands and status; tray/spindle/seek mechanism; media classification; host-reset request; pointer, `/kb1` keyboard, and channel-1 player-control packets; player output controls | Rear UART-port bytes, sector payload delivery, CDFM buffering, MPEG decode, or video composition | CD-i 220 service manual; CD-i 605/615 technical documentation; CD-i 910 training pp. 13-14; SLAVE and SERVO firmware; TN 073.2; `docs/slave-protocol.md` |
+| SCC68070 UART port 2 | Rear serial-port input-device recognition and byte transport; `/kb` K-mode keyboard power-on/RTS ID and 1200-baud state packets | Front-input `/kb1` events, UCM event policy, direct guest-memory injection, or SLAVE pointer/player-control packets | SCC68070 User Manual; CD-i 605 technical documentation chapters 8-9; 1996 keyboard specification |
 | Drive X-Bus, DSP and CDIC | The internal sector path into the player; sector selection and CDIC buffers; CD-DA/XA transport; DMA0 transfer and related interrupts | Tray policy, guest drawmaps, MPEG picture placement, or host audio delivery | Green Book III/VII; CDIC data; CD-i 910 training; TN 092/094; `docs/icdia-archive-assessment.md` |
 | CDFM, PCL and UCM | Guest-visible files, channel selection, PCBs/CILs/PCLs, buffer ownership, real-time records, drawmap creation and transfer | Physical drive timing, decoder registers, final scanout, or frontend cropping | Green Book V.6/VII; CD-RTOS system calls; TN 053/090/099; `docs/debugging-workflow.md` |
 | VMPEG and MCD251 | MPEG system/audio/video decode, decoder FIFO/state, decoded-picture timing, source window, display origin and active-area registers | Disc reads, the White Book output-clock conversion, base-plane composition, or host scaling | 22ER9141 service manual; MCD251 Technical Summary; Green Book IX; TN 097/098/101/103/105; `docs/mpeg-dvc-plan.md` |
@@ -84,4 +94,3 @@ These are research questions, not implementation guidance:
 - Which MCD212 field/half-line transitions explain the remaining transient
   interlace and border incidents? Resolve this in core timing, not by
   content-aware frontend presentation.
-

@@ -73,6 +73,10 @@ source dimensions, live MCD212/MCD251 state, and presentation boundary first.
 The ongoing source ledger and test queue are in
 `docs/specification-research.md`.
 
+Compatibility-report triage must apply this distinction before treating
+stable PAL top/bottom bars as a defect. The operational checklist is in
+`docs/debugging-workflow.md` under “PAL compatibility-framing pre-triage.”
+
 ## The Apprentice diagnosis
 
 The Apprentice USA runs on the NTSC/60 Hz player setting. At its title and

@@ -705,7 +705,7 @@ impl SlaveHle {
             let packet = [byte3, byte2, byte1, byte0];
             let (_, _, button_code) = pointer_packet_fields(packet);
             log::debug!(
-                "slave: queue pointer packet raw={packet:02x?} device=({}, {}) button_code={button_code:#03x} host_buttons={btn:#04x}",
+                "slave: queue pointer packet raw={packet:02x?} device=({}, {}) button_code={button_code:#04x} host_buttons={btn:#04x}",
                 self.device_x,
                 self.device_y
             );
@@ -729,7 +729,7 @@ impl SlaveHle {
         if channel == 0 && ch.index == 0 && ch.count == 4 && ch.cmd == 0xF7 {
             let (x, y, button_code) = pointer_packet_fields(ch.buf);
             log::debug!(
-                "slave: consume pointer packet raw={:02x?} device=({}, {}) button_code={button_code:#03x}",
+                "slave: consume pointer packet raw={:02x?} device=({}, {}) button_code={button_code:#04x}",
                 ch.buf,
                 x,
                 y

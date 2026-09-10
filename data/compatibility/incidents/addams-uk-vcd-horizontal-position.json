@@ -35,7 +35,7 @@
       ],
       "contradicting_evidence": [
         "Earlier clean-memory testing correctly centered Accused, which had made the later shared displacement look like a code regression before persistent NVRAM was controlled.",
-        "Testing deleted all player memory, including VCD settings, and Addams UK plus ZYX still programmed Xd=16 and reproduced the rightward displacement. Saved calibration therefore cannot explain the current clean-memory result by itself."
+        "Testing with all player memory deleted, including VCD settings, still found Addams UK and ZYX programming Xd=16 and reproducing the rightward displacement. Saved calibration therefore cannot explain the current clean-memory result by itself."
       ],
       "falsifying_test": "Use the native Settings > Position Video screen to restore horizontal centering and save it. If a fresh boot still programs video_display_x=16 or either warning/MPEG picture remains displaced, the saved-calibration explanation is incomplete.",
       "citations": [
@@ -73,7 +73,7 @@
       ],
       "contradicting_evidence": [
         "Both the warning and MPEG picture look right-biased while the native menu is correctly placed, matching a shared external-video positioning error.",
-        "Manual testing reports the warning as visibly off-center rather than merely inset."
+        "The warning is visibly off-center rather than merely inset."
       ],
       "falsifying_test": "Compare the same Addams UK warning and MPEG frame against a direct real-player capture. A matching right bias classifies the placement as authored rather than an emulator defect.",
       "citations": [
@@ -182,7 +182,7 @@
         "Analog television overscan is not a guest-programmable CD-i display mode."
       ],
       "expected": "The menu and MPEG picture no longer inherit a host-selected crop or offset while the native White Book clock behavior remains intact.",
-      "actual": "The user confirms both Addams Family Values UK and USA menus are no longer cropped, and both MPEG pictures display properly without pillarboxing or letterboxing.",
+      "actual": "Manual testing confirms both Addams Family Values UK and USA menus are no longer cropped, and both MPEG pictures display properly without pillarboxing or letterboxing.",
       "outcome": "confirmed",
       "regressions": [],
       "improvements": [
@@ -280,7 +280,7 @@
       "strategy": "Delete player memory, reproduce the affected warning and feature/video paths, then compare the bounded MCD251 snapshots and exact composed-raster edge bounds.",
       "symbols": [],
       "assumptions": [
-        "Testing deleted both ordinary NVRAM data and persistent VCD settings before launching the three scenarios.",
+        "Both ordinary NVRAM data and persistent VCD settings were deleted before launching the three scenarios.",
         "The diagnostic snapshots correspond to the visibly displaced frames described in the report."
       ],
       "expected": "If saved position calibration is the sufficient cause, blank settings should restore the default centered register state and remove the shared displacement.",
@@ -331,7 +331,7 @@
       "strategy": "Capture the known-good Accused feature in the same clean-memory session and compare its bounded MCD251 state and exact composed-raster edges with the affected Addams UK and ZYX captures.",
       "symbols": [],
       "assumptions": [
-        "The Accused capture corresponds to feature playback that manual testing reports as correctly centered.",
+        "The Accused capture corresponds to feature playback judged correctly centered during manual comparison.",
         "All compared captures use the same frontend aperture and freshly deleted persistent player memory."
       ],
       "expected": "If guest-programmed window state is the discriminator, Accused will differ at MCD251 display/source-window programming before frontend presentation while retaining the same active plane and VCD clock.",
@@ -349,7 +349,7 @@
       "applicability": {
         "conditions": [
           "The compared captures use the current Xd*2 compositor and the external 13.5 MHz sample expansion",
-          "Accused is the correct-placement control reported during manual testing"
+          "Accused is the manually verified correct-placement control"
         ],
         "invalidated_by": [
           "A correction to MCD251 register interpretation or external-clock coordinate conversion",

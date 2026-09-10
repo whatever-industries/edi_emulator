@@ -179,12 +179,12 @@
     {
       "result": "reproduced",
       "revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
-      "notes": "Two Dark Chaser Japan native-CD-i screenshots show the magenta far-right column and stationary field-like edge artifacts. Manual testing reports comparable interlace-like artifacts on other Photo CDs and confirms View Raw Images was not used."
+      "notes": "Two Dark Chaser Japan native-CD-i screenshots show the magenta far-right column and stationary field-like edge artifacts. Manual testing found comparable interlace-like artifacts on other Photo CDs and confirms View Raw Images was not used."
     },
     {
       "result": "reproduced",
       "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty:651f85e505403bacf9014f9799240abe2f93bbd0b510be9ae558d2afd2bb6b1b",
-      "notes": "A second native Photo CD capture shows stationary field-like detail. The paired source is a clean 768x512 Base image (SHA-256 5c6d5bb484cea54ca999367b04d7f7bf675cbdb8b3ad1c0eb6a52a05f596e0a0), while the captured presented raster is 768x588 (SHA-256 d5c5c70b1f67c4a8214260a5a0a5fbc8db9cd437f7c2f0ff2428665d0846d700). Pixel inspection measures 76 near-black rows above, 34 below, and two magenta-like final columns over 382 rows. Manual testing reproduced native horizontal bars in PAL and NTSC titles and noted similar-sized bars in some European CD-i titles. Photo CD v0.9 explains why 3:2-to-4:3 fitting may create padding, but not this asymmetric placement or the field/final-column artifacts."
+      "notes": "A second native Photo CD capture shows stationary field-like detail. The paired source is a clean 768x512 Base image (SHA-256 5c6d5bb484cea54ca999367b04d7f7bf675cbdb8b3ad1c0eb6a52a05f596e0a0), while the captured presented raster is 768x588 (SHA-256 d5c5c70b1f67c4a8214260a5a0a5fbc8db9cd437f7c2f0ff2428665d0846d700). Pixel inspection measures 76 near-black rows above, 34 below, and two magenta-like final columns over 382 rows. Manual testing reproduced native horizontal bars in PAL and NTSC titles and found similar-sized bars in some European CD-i titles. Photo CD v0.9 explains why 3:2-to-4:3 fitting may create padding, but not this asymmetric placement or the field/final-column artifacts."
     },
     {
       "result": "presentation-distinction-confirmed",
@@ -209,7 +209,7 @@
     {
       "result": "right-edge-fix-manually-confirmed",
       "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty",
-      "notes": "Manual testing repeated Dark Chaser Japan through the native CD-i Photo CD application and confirmed that the magenta far-right line is gone. The stationary interlaced boundary remains a separate open symptom."
+      "notes": "A repeat run of Dark Chaser Japan through the native CD-i Photo CD application confirmed that the magenta far-right line is gone. The stationary interlaced boundary remains a separate open symptom."
     },
     {
       "result": "retained-row-phase-offline-composite-confirmed",

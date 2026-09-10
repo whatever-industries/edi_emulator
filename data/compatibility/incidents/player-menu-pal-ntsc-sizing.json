@@ -61,7 +61,7 @@
     {
       "result": "reported-unconfirmed",
       "revision": "ac20dcd",
-      "notes": "Reference evidence includes PAL and NTSC player-menu screenshots and explicitly marked the possible NTSC stretching as uncertain."
+      "notes": "Paired PAL and NTSC player-menu screenshots show possible NTSC stretching, but the classification remains uncertain."
     }
   ]
 }

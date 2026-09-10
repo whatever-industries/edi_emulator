@@ -33,7 +33,7 @@
         "The disc contains separate PAL and NTSC bumper assets, demonstrating deliberate standard-specific authoring."
       ],
       "contradicting_evidence": [
-        "Manual testing reports that the picture also appears vertically squashed, which may indicate incorrect presentation rather than intentional masking.",
+        "The picture also appears vertically squashed, which may indicate incorrect presentation rather than intentional masking.",
         "No real-hardware Laser Lords Europe capture or live CF/ST trace has yet confirmed the selected mode."
       ],
       "falsifying_test": "Trace CF, ST, FD, SM, field parity, DCA start lines, and core DisplayGeometry during both submitted scenes. A standard 625 mode request with no compatibility mask would falsify the authored-compatibility explanation.",
@@ -65,7 +65,7 @@
       "id": "frontend-pal-pixel-aspect",
       "hardware_explanation": "The frontend applies the wrong PAL pixel-aspect or treats a 480-line compatibility picture as though its content fills all 560 picture rows, making correctly masked guest output look vertically compressed.",
       "supporting_evidence": [
-        "Manual comparison finds both letterboxing and vertical squashing in the final saved presentation."
+        "The final saved presentation shows both letterboxing and apparent vertical squashing."
       ],
       "contradicting_evidence": [
         "Screenshots, window aspect, and mouse mapping share the same core-provided DisplayGeometry.",
@@ -83,7 +83,7 @@
     {
       "result": "reported-current",
       "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:a5d6cb19a338f68b171c107085263ed37b1703ae87519e0fed6213b0127f5fde",
-      "notes": "Reference evidence includes two Laser Lords Europe screenshots showing prominent horizontal bars and perceived vertical compression in distinct menu/gameplay scenes. The report is current, but correctness versus authored PAL compatibility mode remains unclassified."
+      "notes": "Two Laser Lords Europe screenshots show prominent horizontal bars and apparent vertical compression in distinct menu/gameplay scenes. The evidence is current, but correctness versus authored PAL compatibility mode remains unclassified."
     },
     {
       "result": "separated-from-bottom-row-artifact",

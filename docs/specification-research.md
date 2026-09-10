@@ -915,7 +915,7 @@ stepped backward by one `$480`-byte source line at PA boundaries in both
 planes. Retaining PA=0 in the first row of each progressive pair and PA=1 in
 the second makes the source order monotonic without changing the Table 5-8 ICA
 entry points. An offline composite made with only that row-phase swap was
-identified during manual comparison as correct and exactly matched the returned reference
+identified during manual comparison as correct and exactly matched the reference
 screenshot by SHA-256. A device-level regression now covers the phase while
 preserving noninterlaced row duplication. Live native-application verification
 confirmed that the startup, stable menu, and displayed photograph are clean.

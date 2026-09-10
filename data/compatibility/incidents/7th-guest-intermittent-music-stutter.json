@@ -50,7 +50,7 @@
     {
       "result": "reported",
       "revision": "42fe2b5+dirty:cf2a064eb5d7d1db114873227674338482b2fad6",
-      "notes": "Manual testing reports a pre-existing intermittent fault: music occasionally has a small stutter glitch during otherwise working The 7th Guest playback. The exact scene and audio source have not yet been isolated."
+      "notes": "A pre-existing intermittent fault has been reported: music occasionally has a small stutter glitch during otherwise working The 7th Guest playback. The exact scene and audio source have not yet been isolated."
     }
   ]
 }

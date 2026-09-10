@@ -236,7 +236,7 @@
     {
       "result": "neighboring-regressions-pass",
       "revision": "42fe2b5+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
-      "notes": "Manual testing reports the requested checks other than the save-skipped The 7th Guest opening work well. The 7th Guest seven-stage manual check remains pending after NVRAM clearance."
+      "notes": "Manual checks other than the save-skipped The 7th Guest opening work well. The 7th Guest seven-stage manual check remains pending after NVRAM clearance."
     },
     {
       "result": "accepted",

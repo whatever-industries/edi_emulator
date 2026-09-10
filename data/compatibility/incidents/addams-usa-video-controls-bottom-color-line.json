@@ -90,7 +90,7 @@
     {
       "result": "reproduced-current-clean-pass",
       "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
-      "notes": "The thin colored line is visible below the native controls in evidence img-20260802T234154.747285Z-61a0caeb9148-0fae9a062200 (SHA-256 0fae9a062200c238aab993810666f79d4ea9773d728c26a62be87e6f877a3c0b). Manual testing reports no other issue in Addams Family Values USA during this pass."
+      "notes": "The thin colored line is visible below the native controls in evidence img-20260802T234154.747285Z-61a0caeb9148-0fae9a062200 (SHA-256 0fae9a062200c238aab993810666f79d4ea9773d728c26a62be87e6f877a3c0b). No other issue was observed in Addams Family Values USA during this pass."
     },
     {
       "result": "intermittent-counterexample",

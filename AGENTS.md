@@ -54,8 +54,8 @@ framebuffer pixels. MCD212 interlace now retains odd/even field rows instead
 of bobbing each field over the whole output, and CCIR RGB 16..235 remains
 internal until the frontend/PNG presentation boundary expands it to 0..255.
 The live MCD212 hardware cursor is composited after that weave so animated
-cursor patterns do not remain baked into retained fields, although the user
-still sees combing on The 7th Guest hand and that visual issue is deferred.
+cursor patterns do not remain baked into retained fields, although combing
+remains visible on The 7th Guest hand and that visual issue is deferred.
 CDIC sound maps interrupt after every consumed half so CD-RTOS can
 refill/terminate them (Earth Command regression).
 VMPEG FMV status now latches VSYNC (`ISR $0800`) on every MCD212 frame even

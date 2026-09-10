@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Local, media-gated integration tests.
 //!
-//! These run only when the private Photo CD disc library exists on this
-//! machine; on any other machine (including CI) they skip silently. Disc
-//! media is never committed to the repository.
+//! These run only when `CDI_PHOTOCD_LIBRARY` points to a Photo CD disc
+//! library; when it is unset (including in CI) they skip silently. Disc media
+//! is never committed to the repository.
 
 use std::path::PathBuf;
 
-const LIBRARY: &str = "${CDI_PHOTOCD_LIBRARY}";
-
 fn cue_for(disc_dir: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(LIBRARY)
+    let path = std::env::var_os("CDI_PHOTOCD_LIBRARY")
+        .map(PathBuf::from)?
         .join(disc_dir)
         .join(format!("{disc_dir}.cue"));
     path.is_file().then_some(path)

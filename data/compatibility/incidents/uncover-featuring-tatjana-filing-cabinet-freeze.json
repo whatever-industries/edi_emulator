@@ -33,7 +33,7 @@
       "id": "filing-cabinet-transition-waits-for-missing-device-event",
       "hardware_explanation": "Opening the cabinet may start a guest transition that waits for a CDIC/CDFM transfer, interrupt, SLAVE input response, or MCD212 display event that the current emulation does not complete.",
       "supporting_evidence": [
-        "Manual testing reports that the title freezes specifically when the filing cabinet opens on the current build."
+        "The title reportedly freezes specifically when the filing cabinet opens on the current build."
       ],
       "contradicting_evidence": [
         "The report has not yet been reproduced in two bounded diagnostic runs.",
@@ -67,7 +67,7 @@
     {
       "result": "reported",
       "revision": "cf61267+dirty:b331d974edf66ed1f04e5bb34a528b79000bb0ce0338d19dc541e3396fd3f765",
-      "notes": "Manual testing reported that Uncover featuring Tatjana freezes when the filing cabinet opens. This has not yet been reproduced with diagnostics."
+      "notes": "Uncover featuring Tatjana reportedly freezes when the filing cabinet opens. This has not yet been reproduced with diagnostics."
     }
   ]
 }

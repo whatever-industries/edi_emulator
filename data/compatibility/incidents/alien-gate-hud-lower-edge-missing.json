@@ -31,7 +31,7 @@
       "hardware_explanation": "The missing HUD edge may originate in guest drawing or transfer, MCD212 line origin/clipping, plane composition, or final aperture presentation. No stage is preferred until provenance is captured.",
       "supporting_evidence": [
         "The current screenshot lacks the lower portions of HUD lettering.",
-        "The reference real-console video shows the full HUD, authored windowboxing and bottom bar, and projectile sprites crossing outside the playfield."
+        "The real-console reference video shows the full HUD, authored windowboxing and bottom bar, and projectile sprites crossing outside the playfield."
       ],
       "contradicting_evidence": [
         "No current individual-plane, composed-raster, or frontend-stage capture exists.",
@@ -39,7 +39,7 @@
       ],
       "falsifying_test": "Capture the source drawmap, both MCD212 planes, composed hardware raster/aperture, and frontend output at the same gameplay frame. The first stage missing the HUD pixels identifies whether this is source drawing, transfer, clipping, composition, or presentation.",
       "citations": [
-        "Reference real-CD-i gameplay reference: https://www.youtube.com/watch?v=Vj0GFhxTsi0",
+        "Real-CD-i gameplay reference: https://www.youtube.com/watch?v=Vj0GFhxTsi0",
         "docs/debugging-workflow.md display provenance stages"
       ]
     }

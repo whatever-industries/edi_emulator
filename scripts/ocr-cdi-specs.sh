@@ -3,12 +3,18 @@
 # Reproducibly extract/OCR CD-i PDF references into ignored local storage.
 set -eu
 
-source_root=${1:-"<local-spec-library>"}
+source_root=${1:-${CDI_SPEC_LIBRARY:-}}
 output_root=${2:-"references/spec-text"}
 
 if [ "$source_root" = "--help" ] || [ "$source_root" = "-h" ]; then
-    echo "usage: scripts/ocr-cdi-specs.sh [SOURCE_ROOT] [OUTPUT_ROOT]"
+    echo "usage: scripts/ocr-cdi-specs.sh SOURCE_ROOT [OUTPUT_ROOT]"
+    echo "       CDI_SPEC_LIBRARY=SOURCE_ROOT scripts/ocr-cdi-specs.sh"
     exit 0
+fi
+
+if [ -z "$source_root" ]; then
+    echo "missing CD-i reference root; pass SOURCE_ROOT or set CDI_SPEC_LIBRARY" >&2
+    exit 2
 fi
 
 for tool in pdftotext pdfinfo shasum; do

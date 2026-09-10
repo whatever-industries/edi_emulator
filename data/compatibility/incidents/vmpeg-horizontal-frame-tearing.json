@@ -32,7 +32,7 @@
         "The discontinuity is a single horizontal boundary inside an otherwise coherent MPEG picture.",
         "The artifact usually disappears as soon as screenshot capture freezes live presentation.",
         "FMVDemo's own on-screen VMPEG Pause control also removes the slice, independently of host screenshot UI timing.",
-        "Manual testing has observed the same class of slicing in several VMPEG titles."
+        "The same class of slicing has been observed in several VMPEG titles."
       ],
       "contradicting_evidence": [
         "No diagnostic trace yet proves that a presentation event occurs between the two affected raster regions.",
@@ -106,7 +106,7 @@
       "expected": "No active MCD212 field samples more than one VMPEG picture; native FMVDemo pause/continue and decoding remain functional.",
       "actual": "The 1.03-billion-instruction native FMVDemo pause/continue scenario presented 302 pictures, resumed disc DMA and presentation after Continue, reported zero demux/video/audio errors, and recorded zero mixed-generation fields. Core tests prove due pictures remain pending until VSYNC and the provenance detector catches a synthetic generation change within one field.",
       "outcome": "partial",
-      "outcome_reason": "The device-level defect and automated native-title path are corrected, but the exact moving scene where manual testing observed the slice still requires manual visual revalidation.",
+      "outcome_reason": "The device-level defect and automated native-title path are corrected, but the exact moving scene that exhibited the slice still requires manual visual revalidation.",
       "implementation_reverted": false,
       "evidence_quality": "high-device-medium-visual",
       "applicability": {
@@ -124,7 +124,7 @@
     {
       "result": "reproduced-current",
       "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
-      "notes": "A 768x574 screenshot with SHA-256 2abb299775fa774e4154a08065c0f7521742abc58bd7c8b530df05692abc1ac9 captures a horizontal displacement across the actor's upper arm in Philips FMVDemo. The local image remains diagnostic-only and is not tracked. Manual testing reports that the same slicing has long appeared in multiple FMV titles and usually vanishes when screenshot capture freezes presentation."
+      "notes": "A 768x574 screenshot with SHA-256 2abb299775fa774e4154a08065c0f7521742abc58bd7c8b530df05692abc1ac9 captures a horizontal displacement across the actor's upper arm in Philips FMVDemo. The local image remains diagnostic-only and is not tracked. The same slicing has long appeared in multiple FMV titles and usually vanishes when screenshot capture freezes presentation."
     },
     {
       "result": "pause-clears-artifact",

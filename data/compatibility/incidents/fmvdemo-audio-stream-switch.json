@@ -208,7 +208,7 @@
       "status": "verified",
       "steps": "Use FMVDemo Edit Room > Multilingual and switch among the authored language controls during uninterrupted playback.",
       "expected": "Picture and audio continue through each language change without a repeated stutter or loss of synchronization.",
-      "notes": "Manual testing confirmed that language switching works well in the release GUI."
+      "notes": "Manual testing confirms that language switching works well in the release GUI."
     }
   ]
 }

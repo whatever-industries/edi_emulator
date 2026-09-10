@@ -36,7 +36,7 @@
       "supporting_evidence": [
         "The artifact is confined to the moving transition line or area.",
         "The settled source and destination pictures are clean after the retained-row phase correction.",
-        "Other CD-i transitions tested by the user, including Philips FMVDemo's VMPEG path, do not show this interlacing.",
+        "Other manually tested CD-i transitions, including Philips FMVDemo's VMPEG path, do not show this interlacing.",
         "CD-i applications can update display files and drawmaps incrementally while the display remains active."
       ],
       "contradicting_evidence": [
@@ -109,7 +109,7 @@
     {
       "result": "reported-current",
       "revision": "a960c14949348ffd75773c920c4d8d22f8292cac+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
-      "notes": "Manual testing confirmed the corrected stable Photo CD output looks good and clarified that remaining interlace lines are visible only in the transition line or area while it moves. Other tested CD-i transitions, including Philips FMVDemo, do not show the same effect; FMVDemo is an external VMPEG path rather than the native Photo CD base-plane path."
+      "notes": "Manual testing confirmed the corrected stable Photo CD output looks good and that remaining interlace lines are visible only in the transition line or area while it moves. Other tested CD-i transitions, including Philips FMVDemo, do not show the same effect; FMVDemo is an external VMPEG path rather than the native Photo CD base-plane path."
     },
     {
       "result": "unchanged",

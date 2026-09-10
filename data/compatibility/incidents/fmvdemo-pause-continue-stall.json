@@ -179,7 +179,7 @@
     {
       "result": "accepted",
       "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
-      "notes": "Manual testing exercised the PAL Philips FMVDemo Play Control panel in the release GUI. The title's on-screen Pause stops presentation and clears the transient horizontal slice; Continue resumes both video and audio normally. The slicing itself remains open as a separate presentation-timing incident."
+      "notes": "Manual testing of the PAL Philips FMVDemo Play Control panel in the release GUI found that the title's on-screen Pause stops presentation and clears the transient horizontal slice; Continue resumes both video and audio normally. The slicing itself remains open as a separate presentation-timing incident."
     }
   ]
 }

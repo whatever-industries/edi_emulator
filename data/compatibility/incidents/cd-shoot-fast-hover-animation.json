@@ -9,7 +9,7 @@
   "last_reproduced_revision": "775ab2a",
   "last_verified_revision": null,
   "evidence_status": "needs-revalidation",
-  "revalidation_reason": "The changed scheduling prerequisite is now implemented and neighboring automated baselines pass. A 2026-08-09 manual check confirms that the hovered language flag remains correctly paced, but historical testing established that this had already been corrected before the regional-clock change. The skeet sequence was not rechecked, so the incident remains open and no causal credit is assigned to the new scheduler.",
+  "revalidation_reason": "The changed scheduling prerequisite is now implemented and neighboring automated baselines pass. A 2026-08-09 manual check confirms that the hovered language flag remains correctly paced, but historical testing places that correction before the regional-clock change. The skeet sequence was not rechecked, so the incident remains open and no causal credit is assigned to the new scheduler.",
   "components": [
     "cpu",
     "timing",
@@ -105,12 +105,12 @@
     {
       "result": "regression-reported",
       "revision": "775ab2a",
-      "notes": "Manual testing reported that the previously corrected fast language-flag animation had returned."
+      "notes": "The previously corrected fast language-flag animation reportedly returned."
     },
     {
       "result": "partial-confirmation-current-dirty",
       "revision": "b98537fddf3b6199554b2d289840a6704c344c81+dirty-regional-clock-build",
-      "notes": "Manual testing confirmed that the hovered CD Shoot flag remains correctly paced, while clarifying that this behavior was already corrected before the regional-clock work. The skeet sequence was not checked, so this is regression evidence only and not proof that the new scheduler fixed the title."
+      "notes": "Manual testing confirms that the hovered CD Shoot flag remains correctly paced; historical testing places this correction before the regional-clock work. The skeet sequence was not checked, so this is regression evidence only and not proof that the new scheduler fixed the title."
     }
   ]
 }

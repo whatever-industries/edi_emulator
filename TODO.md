@@ -42,7 +42,7 @@ patches belong in the ignored `tests-data/local/diagnostics/`.
   cycles per field, instruction/bus timing, mapped-device wait states, and BERR
   probes before changing pacing. Do not use host sleep or a title-specific
   throttle to compensate. The reporter states that Mario must not flicker;
-  macOS now reproduces the lower-half flicker, and manual testing confirmed it is
+  macOS now reproduces the lower-half flicker, and manual testing confirms it is
   also present in E-Di 0.1.0, so treat it as longstanding rather than a recent
   regression. A 2026-08-09 Hotel Mario USA check still shows the blinking
   after chronological device slicing and the documented NTSC host clock were

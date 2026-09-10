@@ -36,7 +36,7 @@
       "hardware_explanation": "The flash is most likely an authored transition or authored non-atomic drawmap update because it occurs across all tested drawing representations, including modes with clean stable output. The stable destination frame argues against a persistent weave defect.",
       "supporting_evidence": [
         "The effect appears only briefly while changing modes.",
-        "The visual evidence during the flash is of alternating field content.",
+        "The flash visually resembles alternating field content.",
         "The destination still frame does not alternate or shimmer.",
         "The validation program exercises UCM drawing and display operations that may intentionally reveal update order.",
         "The flash occurs in all tested modes rather than only CLUT 4 High Res."

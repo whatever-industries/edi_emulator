@@ -48,7 +48,7 @@
     {
       "result": "reported-unclassified",
       "revision": "42fe2b5+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
-      "notes": "Reference evidence includes a windowboxed MPEG screenshot. Next: confirm whether the inset stays constant across shots and whether base-graphics menus use the full aperture. Do not classify as a defect until programmed-window or hardware evidence is available."
+      "notes": "A supplied MPEG screenshot shows windowboxing. Next: confirm whether the inset stays constant across shots and whether base-graphics menus use the full aperture. Do not classify as a defect until programmed-window or hardware evidence is available."
     },
     {
       "result": "reproduced-clean-nvram",

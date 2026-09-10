@@ -51,7 +51,7 @@
     {
       "result": "reported",
       "revision": "42fe2b5+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
-      "notes": "During a clean-NVRAM seven-stage opening pass, manual listening detected one or two brief audio hits near the start of the opening Philips logo. The remainder of the title/post-title/gameplay sequence proceeded."
+      "notes": "Manual listening during a clean-NVRAM seven-stage opening pass detected one or two brief audio hits near the start of the opening Philips logo. The remainder of the title/post-title/gameplay sequence proceeded."
     }
   ]
 }

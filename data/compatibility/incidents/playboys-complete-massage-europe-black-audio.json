@@ -52,7 +52,7 @@
     {
       "result": "accepted",
       "revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
-      "notes": "With all PAL/NTSC/legacy NVRAM stores cleared, testing booted the Europe pressing first and it played normally. This confirms persistence affected the prior black-with-audio boot, but because PAL and NTSC stores were separate it does not prove the USA save itself was read by Europe. Windowboxing remains a separate presentation observation."
+      "notes": "With all PAL/NTSC/legacy NVRAM stores cleared, booting the Europe pressing first played normally. This confirms persistence affected the prior black-with-audio boot, but because PAL and NTSC stores were separate it does not prove the USA save itself was read by Europe. Windowboxing remains a separate presentation observation."
     }
   ]
 }

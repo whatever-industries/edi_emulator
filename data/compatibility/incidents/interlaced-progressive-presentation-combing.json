@@ -36,7 +36,7 @@
         "The VMPEG picture generation changes only at VSYNC, remains fixed for two fields, and records zero mixed-generation fields within any single field.",
         "The first field after each progressive MPEG picture change retains complementary rows from the prior picture; the next field replaces that parity and becomes coherent.",
         "The capture reports zero demux, video, audio, underflow, and overflow errors.",
-        "Manual testing reproduced the same visual behavior in E-Di 0.1.0, so it is not a recent regression."
+        "The same visual behavior was manually reproduced in E-Di 0.1.0, so it is not a recent regression."
       ],
       "contradicting_evidence": [
         "A real-hardware digital field capture is not available to establish the intended progressive-host presentation policy.",
@@ -163,7 +163,7 @@
     {
       "result": "accepted-with-limitation",
       "revision": "uncommitted stable-phase hysteresis frontend build",
-      "notes": "Temporal hysteresis made no clear additional visual improvement. Manual comparison rated the default-enabled result as better than any prior presentation, with minor residual hand and fade jitter; raw weave remains selectable. Further work would require a substantially larger edge-directed or motion-compensated deinterlacer and is deferred."
+      "notes": "Temporal hysteresis made no clear additional visual improvement. Manual comparison rated the default-enabled result better than prior presentations, with minor residual hand and fade jitter; raw weave remains selectable. Further work would require a substantially larger edge-directed or motion-compensated deinterlacer and is deferred."
     }
   ]
 }

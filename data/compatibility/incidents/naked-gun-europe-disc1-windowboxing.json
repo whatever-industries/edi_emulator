@@ -5,8 +5,8 @@
   "symptom": "The MPEG presentation is inset on all four sides. It is not yet classified as authored framing or an incorrect MCD251/MCD212 window/aperture interaction.",
   "expected": "Presentation should match the title-programmed VMPEG window and real-player framing, preserving authored margins but adding no emulator-side inset.",
   "status": "reproduced",
-  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
-  "last_reproduced_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "reported_revision": "dc7540fad5d9c9a0772bbe4ab9e3b305abd69957",
+  "last_reproduced_revision": "dc7540fad5d9c9a0772bbe4ab9e3b305abd69957",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": null,
@@ -47,12 +47,12 @@
   "manual_verification": [
     {
       "result": "reported-unclassified",
-      "revision": "42fe2b5+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
+      "revision": "dc7540f+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
       "notes": "A supplied MPEG screenshot shows windowboxing. Next: confirm whether the inset stays constant across shots and whether base-graphics menus use the full aperture. Do not classify as a defect until programmed-window or hardware evidence is available."
     },
     {
       "result": "reproduced-clean-nvram",
-      "revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+      "revision": "dc7540fad5d9c9a0772bbe4ab9e3b305abd69957",
       "notes": "Naked Gun Europe Disc 1 windowboxing remains after all current and backup player NVRAM stores were cleared. Persistence is therefore not the cause; authored MCD251 windowing versus an extra composition/aperture inset remains unresolved."
     }
   ]

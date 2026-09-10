@@ -5,8 +5,8 @@
   "symptom": "The lower pixels of the elevated gameplay HUD are absent, removing the bottoms of labels such as SHIELD. The cause could be source drawing, transfer, origin, clipping, or plane composition; it is not yet classified as a layering defect.",
   "expected": "Real-hardware footage shows authored windowboxed gameplay with a bottom black bar and a complete elevated HUD. Projectile sprites may cross the playfield boundary, but the background and enemy face remain below the HUD.",
   "status": "reproduced",
-  "reported_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
-  "last_reproduced_revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+  "reported_revision": "09cd103+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+  "last_reproduced_revision": "09cd103+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": "The missing HUD pixels were manually reproduced on the current diagnostic working tree. The real-hardware reference establishes presentation expectations but does not identify the faulty emulation stage.",
@@ -48,7 +48,7 @@
   "manual_verification": [
     {
       "result": "reproduced",
-      "revision": "ac20dcd+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
+      "revision": "09cd103+dirty:fdfe4f486288cfedbbb5888d096b024ff34e9171eee48d777165870eba509d20",
       "notes": "The lower HUD pixels are missing in current gameplay. Windowboxing, the bottom black bar, the elevated HUD position, and projectile spill are retained as expected behavior from the real-hardware reference."
     }
   ]

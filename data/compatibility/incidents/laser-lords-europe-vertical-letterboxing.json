@@ -5,8 +5,8 @@
   "symptom": "Gameplay and menu scenes appear vertically compressed with prominent horizontal letterboxing compared with their expected 4:3 presentation",
   "expected": "The title uses the hardware-selected PAL raster and compatibility mode without unintended vertical compression or frontend-added letterboxing",
   "status": "reproduced",
-  "reported_revision": "52013394225572beb9346dbefea136cf8f92596c",
-  "last_reproduced_revision": "52013394225572beb9346dbefea136cf8f92596c",
+  "reported_revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967",
+  "last_reproduced_revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": null,
@@ -82,12 +82,12 @@
   "manual_verification": [
     {
       "result": "reported-current",
-      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:a5d6cb19a338f68b171c107085263ed37b1703ae87519e0fed6213b0127f5fde",
+      "revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967+dirty:a5d6cb19a338f68b171c107085263ed37b1703ae87519e0fed6213b0127f5fde",
       "notes": "Two Laser Lords Europe screenshots show prominent horizontal bars and apparent vertical compression in distinct menu/gameplay scenes. The evidence is current, but correctness versus authored PAL compatibility mode remains unclassified."
     },
     {
       "result": "separated-from-bottom-row-artifact",
-      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:a5d6cb19a338f68b171c107085263ed37b1703ae87519e0fed6213b0127f5fde",
+      "revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967+dirty:a5d6cb19a338f68b171c107085263ed37b1703ae87519e0fed6213b0127f5fde",
       "notes": "This incident tracks vertical geometry only. Laser Lords USA and Kether bottom-row corruption remain separate display-provenance incidents."
     }
   ]

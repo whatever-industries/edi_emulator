@@ -5,7 +5,7 @@
   "symptom": "Music occasionally contains a brief stutter or repetition glitch during otherwise working playback.",
   "expected": "Music remains continuous and correctly synchronized without intermittent repeated or stalled samples.",
   "status": "reported",
-  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "reported_revision": "dc7540fad5d9c9a0772bbe4ab9e3b305abd69957",
   "last_reproduced_revision": null,
   "last_verified_revision": null,
   "evidence_status": "reported-current",
@@ -49,7 +49,7 @@
   "manual_verification": [
     {
       "result": "reported",
-      "revision": "42fe2b5+dirty:cf2a064eb5d7d1db114873227674338482b2fad6",
+      "revision": "dc7540f+dirty:cf2a064eb5d7d1db114873227674338482b2fad6",
       "notes": "A pre-existing intermittent fault has been reported: music occasionally has a small stutter glitch during otherwise working The 7th Guest playback. The exact scene and audio source have not yet been isolated."
     }
   ]

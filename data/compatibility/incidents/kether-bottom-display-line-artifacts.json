@@ -5,8 +5,8 @@
   "symptom": "Animated scenes expose a thin multicolored artifact row along the bottom edge; its pattern changes with the animation above",
   "expected": "The displayed active picture ends at the authored lower boundary without exposing content-correlated decoded or drawmap data from an extra row",
   "status": "reproduced",
-  "reported_revision": "52013394225572beb9346dbefea136cf8f92596c",
-  "last_reproduced_revision": "c5ac422185774c8e2e16f207812ccf2588259550",
+  "reported_revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967",
+  "last_reproduced_revision": "0c7671dae89928a56cf8c831f4ac3ab946ec4466",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": null,
@@ -84,27 +84,27 @@
   "manual_verification": [
     {
       "result": "reported-current",
-      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
+      "revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
       "notes": "Manual testing reproduced a thin content-correlated bottom artifact line in two Kether Europe scenes. The pattern moves or changes with animation in the valid image above. Screenshots are diagnostic-only and are not tracked."
     },
     {
       "result": "cross-title-corroboration",
-      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
+      "revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
       "notes": "Kether uses CLUT8/RL7/DYUV RTF video and no DVC, while Laser Lords uses QHY. Their shared content-correlated lower-edge symptom weakens a codec-specific explanation and prioritizes common RTF destination, drawmap, or MCD212 boundary stages."
     },
     {
       "result": "related-different-path",
-      "revision": "c5ac422185774c8e2e16f207812ccf2588259550",
+      "revision": "0c7671dae89928a56cf8c831f4ac3ab946ec4466",
       "notes": "Women of the World - Brazilian Girls Europe shows a thin changing multicolored pattern at the bottom of a VCD MPEG frame. Because this uses VMPEG external video rather than the base-plane RTF drawmap path, it weakens common CDFM/RTF transfer as the sole explanation and raises the shared MCD212/aperture boundary while preserving the possibility of two independent upstream final-line defects."
     },
     {
       "result": "related-but-materially-different",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:323d24aa6e6872558cdcb94922b0f00652111f283ce00cfc637a5127029476f8",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:323d24aa6e6872558cdcb94922b0f00652111f283ce00cfc637a5127029476f8",
       "notes": "The thin bottom line visible in the paired Forrest Gump Full-signal/CRT captures occurs while the title's native Video CD control overlay is open and is also seen with RoboCop's corresponding controls. It is not direct evidence for Kether's Green Book real-time-record decode or transfer path. However, both the native VCD overlay and Kether's decoded base-plane drawmap ultimately pass through MCD212, so a shared lower-boundary presentation rule remains possible and must be distinguished with plane/raster provenance captures."
     },
     {
       "result": "vcd-bottom-pattern-revalidated",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
       "notes": "Women of the World - Brazilian Girls Europe still shows its dotted bottom-edge pattern during the clean VCD pass but has no other observed issue. Its former right-edge column is not reproduced. The external-video path remains related but materially different from Kether's base-plane RTF path."
     }
   ]

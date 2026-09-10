@@ -5,7 +5,7 @@
   "symptom": "The NTSC CD-i 220 player menu appears vertically larger or more stretched than the PAL player menu when each is presented at 4:3.",
   "expected": "Each player ROM uses its hardware-correct 525/60 or 625/50 raster and pixel aspect; any remaining layout difference is attributable to the corresponding BIOS artwork rather than frontend distortion.",
   "status": "reported-unconfirmed",
-  "reported_revision": "ac20dcd",
+  "reported_revision": "09cd103",
   "last_reproduced_revision": null,
   "last_verified_revision": null,
   "evidence_status": "reported-current",
@@ -60,7 +60,7 @@
   "manual_verification": [
     {
       "result": "reported-unconfirmed",
-      "revision": "ac20dcd",
+      "revision": "09cd103",
       "notes": "Paired PAL and NTSC player-menu screenshots show possible NTSC stretching, but the classification remains uncertain."
     }
   ]

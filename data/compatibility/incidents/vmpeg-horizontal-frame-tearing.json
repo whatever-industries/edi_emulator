@@ -5,9 +5,9 @@
   "symptom": "A horizontal discontinuity can divide a moving MPEG picture into vertically displaced regions. It has been observed across multiple FMV titles and is captured in Philips FMVDemo across the actor's upper arm. Freezing presentation to take a screenshot usually makes the discontinuity disappear immediately.",
   "expected": "Each displayed VMPEG picture is published atomically at the programmed display event, without mixing lines or fields from different picture positions.",
   "status": "fixed",
-  "reported_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
-  "last_reproduced_revision": "1c16bb72a64f9d94986486ab34b97237b61d2bce",
-  "last_verified_revision": "1c16bb72a64f9d94986486ab34b97237b61d2bce+dirty:5183024a9588f1f50f77681270dae4ce1a7ea1b9bafe450dba018b425f2ac3aa",
+  "reported_revision": "91a46fb028147942d77b31d6c3535d3822be0400",
+  "last_reproduced_revision": "5f1713618e694b1d946ea7b1bc439d583119b1ce",
+  "last_verified_revision": "5f1713618e694b1d946ea7b1bc439d583119b1ce+dirty:5183024a9588f1f50f77681270dae4ce1a7ea1b9bafe450dba018b425f2ac3aa",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": [
@@ -83,7 +83,7 @@
   "experiments": [
     {
       "id": "latch-mcd251-picture-at-vsync",
-      "base_revision": "1c16bb72a64f9d94986486ab34b97237b61d2bce",
+      "base_revision": "5f1713618e694b1d946ea7b1bc439d583119b1ce",
       "dirty_diff_hash": "5183024a9588f1f50f77681270dae4ce1a7ea1b9bafe450dba018b425f2ac3aa",
       "component_state": {
         "dvc": "current_video_frame was replaced at CPU-instruction deadlines during active display",
@@ -123,18 +123,18 @@
   "manual_verification": [
     {
       "result": "reproduced-current",
-      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "revision": "91a46fb028147942d77b31d6c3535d3822be0400+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
       "notes": "A 768x574 screenshot with SHA-256 2abb299775fa774e4154a08065c0f7521742abc58bd7c8b530df05692abc1ac9 captures a horizontal displacement across the actor's upper arm in Philips FMVDemo. The local image remains diagnostic-only and is not tracked. The same slicing has long appeared in multiple FMV titles and usually vanishes when screenshot capture freezes presentation."
     },
     {
       "result": "pause-clears-artifact",
-      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "revision": "91a46fb028147942d77b31d6c3535d3822be0400+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
       "notes": "Manual testing confirmed that selecting Pause in FMVDemo's own Play Control panel removes the horizontal slice. This is stronger than the earlier screenshot-freeze observation: it prioritizes external-picture publication or field-pair timing and weakens a host-only copy race."
     },
     {
       "result": "accepted-current-dirty",
-      "revision": "1c16bb72a64f9d94986486ab34b97237b61d2bce+dirty:5183024a9588f1f50f77681270dae4ce1a7ea1b9bafe450dba018b425f2ac3aa",
-      "notes": "Manual testing confirmed the moving FMVDemo scene no longer shows the horizontal slice with VSYNC-latched picture publication. An exact A/B run of base revision 1c16bb72 restored the slice while retaining the same A/V offset, separating the tearing fix from the pre-existing synchronization issue."
+      "revision": "5f1713618e694b1d946ea7b1bc439d583119b1ce+dirty:5183024a9588f1f50f77681270dae4ce1a7ea1b9bafe450dba018b425f2ac3aa",
+      "notes": "Manual testing confirmed the moving FMVDemo scene no longer shows the horizontal slice with VSYNC-latched picture publication. An exact A/B run of base revision 5f171361 restored the slice while retaining the same A/V offset, separating the tearing fix from the pre-existing synchronization issue."
     }
   ]
 }

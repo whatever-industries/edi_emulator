@@ -6,10 +6,10 @@
   "expected": "The native CDIC to main-RAM/PCL to VMPEG path delivers every selected sector once and in order at hardware-correct timing.",
   "status": "investigating",
   "reported_revision": null,
-  "last_reproduced_revision": "53165b3+dirty:d31d7747017baf0e5dd5de49bffc1b89991eac9db2310bf3d6ce133293540362",
+  "last_reproduced_revision": "eccb7cf+dirty:d31d7747017baf0e5dd5de49bffc1b89991eac9db2310bf3d6ce133293540362",
   "last_verified_revision": null,
   "evidence_status": "current",
-  "revalidation_reason": "Two deterministic 53165b3-plus-diagnostic runs prove the Addams 647-byte count is legal Layer-II synchronization, not a transport or decoder error. The dirty-disc symptom was already closed; the latest GUI run merely reconfirms that it remains absent. Other historical sustained-stream symptoms remain separately scoped.",
+  "revalidation_reason": "Two deterministic eccb7cf-plus-diagnostic runs prove the Addams 647-byte count is legal Layer-II synchronization, not a transport or decoder error. The dirty-disc symptom was already closed; the latest GUI run merely reconfirms that it remains absent. Other historical sustained-stream symptoms remain separately scoped.",
   "components": [
     "cdic",
     "dvc",
@@ -41,7 +41,7 @@
         "Current DMA-boundary tracing observes no full-PCL overwrite in either The 7th Guest or Addams Family Values USA.",
         "Bounded guest-write provenance proves the lone Addams hash difference is an intentional two-byte SCR retime; the old 647-error count exactly equals the legal MP2 frame-sync prefix."
       ],
-      "falsifying_test": "Trace CDFM PCB/CIL/PCL ownership and drive completion timing on ac20dcd, then compare the first missing payload against a working sustained-MPEG title.",
+      "falsifying_test": "Trace CDFM PCB/CIL/PCL ownership and drive completion timing on 09cd103, then compare the first missing payload against a working sustained-MPEG title.",
       "citations": [
         "Green Book VII CDFM SS_Play PCB/CIL/PCL",
         "White Book Figure III.2",
@@ -53,7 +53,7 @@
     {
       "id": "historical-payload-loss",
       "context": {
-        "base_revision": "unknown-pre-ac20dcd",
+        "base_revision": "unknown-pre-09cd103",
         "dirty_diff_hash": "unknown",
         "component_fingerprints": {},
         "dependencies": {},
@@ -84,20 +84,20 @@
       "confidence": "medium",
       "applicability": {
         "conditions": [
-          "Historical pre-ac20dcd CDIC/CDFM scheduling"
+          "Historical pre-09cd103 CDIC/CDFM scheduling"
         ],
         "invalidated_by": [
           "CDIC, scheduler, CDFM/PCL, or replacement power-state changes"
         ],
         "repeat_when": [
-          "Reproducing on ac20dcd or later with exact revision capture"
+          "Reproducing on 09cd103 or later with exact revision capture"
         ]
       }
     },
     {
       "id": "current-pcl-and-payload-comparison",
       "context": {
-        "base_revision": "ac20dcd",
+        "base_revision": "09cd103",
         "dirty_diff_hash": "82e0cb0e0028605d9af685221d1e3c485c38e249d3878c5cb17bd41f3e011773",
         "component_fingerprints": {
           "addams_disc_sha1": "dd9adb80a89378d97acfecaf50ce20d0f769c442",
@@ -139,7 +139,7 @@
       "confidence": "high",
       "applicability": {
         "conditions": [
-          "ac20dcd device behavior with the diagnostic-only dirty diff",
+          "09cd103 device behavior with the diagnostic-only dirty diff",
           "The exact Addams and The 7th Guest disc fingerprints recorded above"
         ],
         "invalidated_by": [
@@ -156,7 +156,7 @@
     {
       "id": "addams-guest-write-and-mp2-sync-classification",
       "context": {
-        "base_revision": "53165b3",
+        "base_revision": "eccb7cf",
         "dirty_diff_hash": "d31d7747017baf0e5dd5de49bffc1b89991eac9db2310bf3d6ce133293540362",
         "component_fingerprints": {
           "addams_disc_sha1": "dd9adb80a89378d97acfecaf50ce20d0f769c442"
@@ -215,7 +215,7 @@
   "manual_verification": [
     {
       "result": "accepted",
-      "revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+      "revision": "eccb7cf+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
       "notes": "Additional confirmation of the already-closed Addams result: the title plays correctly in the GUI and the dirty-disc dialog remains absent."
     }
   ]

@@ -6,7 +6,7 @@ patches belong in the ignored `tests-data/local/diagnostics/`.
 
 ## Evidence checkpoint
 
-- [ ] Revalidate unresolved compatibility reports against `ac20dcd` or a later
+- [ ] Revalidate unresolved compatibility reports against `09cd103` or a later
   clean commit before presenting them as current behavior. Reports and
   experiments from earlier builds are potentially stale: they remain useful
   evidence, but may or may not apply after the 2026-07-25 cold-power-cycle,

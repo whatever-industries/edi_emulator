@@ -1,6 +1,6 @@
 # Code Audit and Refactoring Roadmap
 
-Audit baseline: `31005f1` on 2026-07-26.
+Audit baseline: `8997e3d` on 2026-07-26.
 
 This roadmap separates structural changes from compatibility corrections.
 Refactors must preserve observable behavior and remain small enough that a

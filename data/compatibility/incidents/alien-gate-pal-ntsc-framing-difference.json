@@ -5,8 +5,8 @@
   "symptom": "Alien Gate Europe presents gameplay with four-sided windowboxing and a bottom black bar, while Alien Gate USA Rev 1 retains the top and side margins but its playfield reaches the bottom of the active picture.",
   "expected": "Each pressing preserves the aperture and drawmap placement programmed by its guest software and player standard. The emulator must not force the USA and Europe releases into identical framing without register traces or real-hardware evidence showing that they should match.",
   "status": "reported-unconfirmed",
-  "reported_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
-  "last_reproduced_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+  "reported_revision": "e375abe276882dc5fc08dd9c0127cbe6d7bced53+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+  "last_reproduced_revision": "e375abe276882dc5fc08dd9c0127cbe6d7bced53+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
   "last_verified_revision": null,
   "evidence_status": "reported-current",
   "revalidation_reason": null,
@@ -65,7 +65,7 @@
   "manual_verification": [
     {
       "result": "comparative-observation",
-      "revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+      "revision": "e375abe276882dc5fc08dd9c0127cbe6d7bced53+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
       "notes": "Alien Gate USA Rev 1 displays with a top inset and side borders but no bottom black bar. The previously tested Europe Rev 2 release displays full windowboxing. Neither presentation is classified as incorrect without exact-register or hardware evidence."
     }
   ]

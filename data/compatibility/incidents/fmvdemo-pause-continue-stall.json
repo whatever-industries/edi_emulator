@@ -5,9 +5,9 @@
   "symptom": "The Play Control sample accepts Continue after a paused MPEG sequence, then enters the VMPEG firmware divide-by-zero vector before disc DMA and presentation can resume",
   "expected": "Continue resumes the paused MPEG sequence from retained state",
   "status": "resolved",
-  "reported_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
-  "last_reproduced_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
-  "last_verified_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+  "reported_revision": "9504c635d4b6a9942d67df8af64fc5efcf59fe38",
+  "last_reproduced_revision": "91a46fb028147942d77b31d6c3535d3822be0400",
+  "last_verified_revision": "91a46fb028147942d77b31d6c3535d3822be0400+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": ["dvc", "cdic", "disc-cdfm", "audio"],
@@ -71,7 +71,7 @@
     {
       "id": "native-play-control-original-stall",
       "context": {
-        "base_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+        "base_revision": "9504c635d4b6a9942d67df8af64fc5efcf59fe38",
         "dirty_diff_hash": "89aa7263d56789fe6114a377f936b9127fa9cf2692c0cc623e72047f3101e332",
         "component_fingerprints": {
           "dvc": "66eee56771d5988b98250e3d4cb1d698c4522264677c00000789d119f29af6ca",
@@ -109,7 +109,7 @@
     {
       "id": "pause-retry-exposes-display-period-divide",
       "context": {
-        "base_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+        "base_revision": "91a46fb028147942d77b31d6c3535d3822be0400",
         "dirty_diff_hash": "f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
         "disc_fingerprint": "3894216cfd12b428e2d7d49a810ed38dfb63a2bc",
         "model": "cdi220b",
@@ -139,7 +139,7 @@
     {
       "id": "display-period-native-gate",
       "context": {
-        "base_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+        "base_revision": "91a46fb028147942d77b31d6c3535d3822be0400",
         "dirty_diff_hash": "f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
         "component_fingerprints": {
           "cdic": "677626799a7ffa659634580e7ab1dccf97cc17034122fe1f03870804db814075",
@@ -178,7 +178,7 @@
   "manual_verification": [
     {
       "result": "accepted",
-      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "revision": "91a46fb028147942d77b31d6c3535d3822be0400+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
       "notes": "Manual testing of the PAL Philips FMVDemo Play Control panel in the release GUI found that the title's on-screen Pause stops presentation and clears the transient horizontal slice; Continue resumes both video and audio normally. The slicing itself remains open as a separate presentation-timing incident."
     }
   ]

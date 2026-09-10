@@ -5,9 +5,9 @@
   "symptom": "The original full five-play VMPEG run accumulated five rejected pictures; two captured failures followed a runtime elementary-stream divergence during the branched third play",
   "expected": "The native CDIC/PCL/VMPEG path delivers complete MPEG pictures across repeated plays without decoder errors or a title-specific recovery path",
   "status": "resolved",
-  "reported_revision": "191eebb58859f2e18ef0ef268dc8b804e78bbba3",
-  "last_reproduced_revision": "191eebb58859f2e18ef0ef268dc8b804e78bbba3",
-  "last_verified_revision": "019fb5913e60d50bcf2ede6049e47376ecb5af39",
+  "reported_revision": "9c8449d06d5cdec07b959a698188e05025edb420",
+  "last_reproduced_revision": "9c8449d06d5cdec07b959a698188e05025edb420",
+  "last_verified_revision": "427ef194567640071c071d366378a2507fd04763",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": [
@@ -68,7 +68,7 @@
     {
       "id": "current-shared-in4-five-play-repeat",
       "context": {
-        "base_revision": "019fb5913e60d50bcf2ede6049e47376ecb5af39",
+        "base_revision": "427ef194567640071c071d366378a2507fd04763",
         "dirty_diff_hash": "6be0aaba301ad71128ad219e5732261382acad90226200e8e0a119f693d6bc64",
         "component_fingerprints": {
           "cdic": "514757a341f2b6da6e657f995a762d88ab67d888227a810120e202561bc4ba45",
@@ -126,7 +126,7 @@
   "manual_verification": [
     {
       "result": "automated-revalidation",
-      "revision": "019fb5913e60d50bcf2ede6049e47376ecb5af39",
+      "revision": "427ef194567640071c071d366378a2507fd04763",
       "notes": "Two exact headless full runs and their final hashes/counters match. No additional manual visual check is required to close the obsolete decoder-error count; separate visual transition incidents remain open."
     }
   ]

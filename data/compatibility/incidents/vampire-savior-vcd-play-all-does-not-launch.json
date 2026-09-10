@@ -5,8 +5,8 @@
   "symptom": "Vampire Savior - Disc Teleca - Darkstalkers I reaches its main menu. Pressing CD-i button 1 on PLAY ALL makes the selection flash but launches no video, and neither mouse nor controller navigation moves to another menu item.",
   "expected": "The standard Video CD 2.0 PBC selection menu accepts navigation and PLAY ALL starts the referenced play list.",
   "status": "reproduced",
-  "reported_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
-  "last_reproduced_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+  "reported_revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+  "last_reproduced_revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": null,
@@ -53,7 +53,7 @@
     {
       "id": "inspect-disc-structure",
       "context": {
-        "base_revision": "30135d037898ed096169165d3335e1e2a64d652f",
+        "base_revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2",
         "dirty_diff_hash": "cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
         "component_fingerprints": {
           "disc_inventory": "a8e36a3065729d8ae7e207a53107ea0d306090ae"
@@ -100,7 +100,7 @@
   "manual_verification": [
     {
       "result": "reproduced-current-clean-pass",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
       "notes": "The main menu appears, PLAY ALL flashes when activated, but no video launches. Mouse and controller cannot navigate the menu."
     }
   ]

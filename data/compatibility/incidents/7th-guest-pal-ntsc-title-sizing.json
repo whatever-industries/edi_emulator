@@ -5,7 +5,7 @@
   "symptom": "The NTSC title image appears taller and reaches both horizontal edges, while the PAL image appears less vertically stretched and retains narrow side columns.",
   "expected": "Each regional disc reproduces its real-hardware MPEG framing, VMPEG display window, and player pixel aspect; PAL and NTSC output need not be identical if their streams or guest programming differ.",
   "status": "reported-unconfirmed",
-  "reported_revision": "ac20dcd",
+  "reported_revision": "09cd103",
   "last_reproduced_revision": null,
   "last_verified_revision": null,
   "evidence_status": "reported-current",
@@ -67,7 +67,7 @@
   "manual_verification": [
     {
       "result": "reported-unconfirmed",
-      "revision": "ac20dcd",
+      "revision": "09cd103",
       "notes": "Paired NTSC 720x539 and PAL 768x574 screenshots show that either or both presentations may be correct."
     }
   ]

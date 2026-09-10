@@ -5,9 +5,9 @@
   "symptom": "Replacing a running PAL title with another PAL title could leave the old application active or repeatedly return to the player shell after Play.",
   "expected": "First insertion reaches an empty player through a live media-change event; replacing mounted media cold-boots the new disc once while preserving battery-backed saves.",
   "status": "resolved",
-  "reported_revision": "c4af7cc",
-  "last_reproduced_revision": "775ab2a",
-  "last_verified_revision": "ac20dcd",
+  "reported_revision": "468b1b1",
+  "last_reproduced_revision": "d75c4c9",
+  "last_verified_revision": "09cd103",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": [
@@ -53,10 +53,10 @@
     {
       "id": "cold-replacement-with-persistent-nvram",
       "context": {
-        "base_revision": "ac20dcd",
+        "base_revision": "09cd103",
         "dirty_diff_hash": "clean",
         "component_fingerprints": {
-          "machine-power-cycle": "ac20dcd"
+          "machine-power-cycle": "09cd103"
         },
         "dependencies": {
           "frontend-load-policy": "first-live-replacement-cold"
@@ -105,12 +105,12 @@
   "manual_verification": [
     {
       "result": "verified-fixed",
-      "revision": "ac20dcd",
+      "revision": "09cd103",
       "notes": "PAL-to-PAL replacement boots the second title after Play; the cyan startup screen is expected for a cold replacement."
     },
     {
       "result": "verified-persistent",
-      "revision": "ac20dcd",
+      "revision": "09cd103",
       "notes": "A newly created title save remained after quitting and relaunching E-Di."
     }
   ]

@@ -5,9 +5,9 @@
   "symptom": "The Philips Validation Disc 1 Visual Examples > Drawing > CLUT 4 High Res screen shows stable thin horizontal discontinuities around cloud, roof, window, house, and label edges. They persist in Filled Solid, Patterned, and Outlined frames, and do not shimmer or alternate while stationary. Standard CLUT 4, CLUT 8, and RGB versions of the same scene appear clean.",
   "expected": "The high-resolution CLUT 4 scene faithfully presents the authored 768-pixel field-separated drawmaps. Static one-pixel horizontal contours present in those drawmaps remain visible in a pixel-perfect progressive capture and may be softened on a CRT.",
   "status": "resolved",
-  "reported_revision": "883e90e",
-  "last_reproduced_revision": "883e90e",
-  "last_verified_revision": "883e90e+dirty:9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
+  "reported_revision": "e5c04ab",
+  "last_reproduced_revision": "e5c04ab",
+  "last_verified_revision": "e5c04ab+dirty:9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
   "evidence_status": "current",
   "revalidation_reason": "A four-field provenance capture established that the decoded planes, base raster, and composed raster are bit-identical across consecutive fields. Plane-A raw RAM contains the same one-pixel contours: every high and low CLUT4 nibble in the two field-separated 384-byte source lines maps one-to-one to the presented RGB value. The emulator therefore preserves rather than introduces this detail. Reopen only if a real-hardware digital capture or a specification-defined expected image contradicts the Philips-authored source.",
   "components": [
@@ -62,7 +62,7 @@
     {
       "id": "four-field-display-provenance",
       "context": {
-        "base_revision": "883e90e",
+        "base_revision": "e5c04ab",
         "dirty_diff_hash": "9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
         "component_fingerprints": {
           "mcd212-diagnostic-capture": "opt-in decoded planes plus raw plane RAM",
@@ -120,27 +120,27 @@
   "manual_verification": [
     {
       "result": "reproduced",
-      "revision": "883e90e",
+      "revision": "e5c04ab",
       "notes": "The Filled Solid high-resolution CLUT 4 scene shows thin horizontal edge discontinuities not seen in the standard CLUT 4, CLUT 8, or RGB comparison screens."
     },
     {
       "result": "motion-classified",
-      "revision": "883e90e",
+      "revision": "e5c04ab",
       "notes": "The high-resolution discontinuities are stationary. No alternating fields, vertical movement, or shimmer is visible."
     },
     {
       "result": "mode-independent",
-      "revision": "883e90e",
+      "revision": "e5c04ab",
       "notes": "The same stationary discontinuities persist in the high-resolution Patterned and Outlined frames, so the observation is not limited to Filled Solid."
     },
     {
       "result": "transition-separated",
-      "revision": "883e90e",
+      "revision": "e5c04ab",
       "notes": "A brief click-transition flash occurs across all drawing representations, including clean modes. Only CLUT 4 High Res retains stationary artifacts after the transition."
     },
     {
       "result": "resolved-as-authored",
-      "revision": "883e90e+dirty:9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
+      "revision": "e5c04ab+dirty:9c261e35fc0744b90b5b6871dad2af8e6265403a8ed5808537544eec81e6a6e1",
       "notes": "Command-Shift-D captured four stable fields and their provenance stages. Raw field-separated CLUT4 nibbles contain the observed one-pixel contours exactly; no emulator stage introduced or alternated them."
     }
   ]

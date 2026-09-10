@@ -5,9 +5,9 @@
   "symptom": "Photo CDs played through their native CD-i application show stationary field-like horizontal artifacts throughout the picture, with horizontal boundaries merely making the defect easiest to see. Dark Chaser Japan also showed a magenta vertical line at the far right of the active raster. Similar interlace-like detail is visible on other Photo CDs in both PAL and NTSC testing. On Cosplay Night, the non-PCD startup graphic and displayed photographs show the artifacts while the intervening CD-i application menu appears clean. A supplied 768x512 Base source image does not contain these artifacts. Its paired 768x588 native capture has 76 near-black rows above the image, 34 below, and two magenta-like output columns at the right edge over 382 rows.",
   "expected": "The native CD-i Photo CD path displays the guest-produced still without an emulator-generated final-column line. A stationary still should weave into a stable picture unless the guest drawmaps themselves contain different odd/even field samples.",
   "status": "resolved",
-  "reported_revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
-  "last_reproduced_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty:651f85e505403bacf9014f9799240abe2f93bbd0b510be9ae558d2afd2bb6b1b",
-  "last_verified_revision": "a960c14949348ffd75773c920c4d8d22f8292cac+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
+  "reported_revision": "e375abe276882dc5fc08dd9c0127cbe6d7bced53+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+  "last_reproduced_revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0+dirty:651f85e505403bacf9014f9799240abe2f93bbd0b510be9ae558d2afd2bb6b1b",
+  "last_verified_revision": "528f4f6af08765f10fc998dd9da27408ac9f5ebd+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
   "evidence_status": "current",
   "revalidation_reason": "The screenshots are from the native CD-i application, not the frontend's View Raw Images mode, so the affected path includes disc delivery, guest drawmaps, MCD212 field composition, aperture, and frontend presentation. Photo CD v0.9 establishes that a Base source is 768x512 square pixels (3:2) and shows informative standard/overscan-dependent 4:3 mappings; bars must therefore be separated from field and final-column corruption by live register evidence.",
   "components": ["photocd", "mcd212", "ucm", "display-provenance", "frontend"],
@@ -91,7 +91,7 @@
   "experiments": [
     {
       "id": "specification-and-current-weave-audit",
-      "base_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "base_revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0",
       "outcome": "inconclusive",
       "hypothesis": "A simple odd/even parity or ICA entry-address inversion creates the stationary Photo CD artifacts.",
       "implementation_strategy": "Read MCD212 section 5.2.2 and Table 5-8, Green Book V.4.5.1 and V.5.14, and TN 042; then audit Mcd212::process_ica, Mcd212::output_rows, field parity toggling, and the existing table-driven tests without changing emulation behavior.",
@@ -108,7 +108,7 @@
     },
     {
       "id": "native-photocd-four-field-provenance",
-      "base_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "base_revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0",
       "outcome": "partial",
       "hypothesis": "The stationary Photo CD artifacts or magenta edge are first introduced by odd/even composition, hardware-aperture extraction, or frontend presentation.",
       "implementation_strategy": "Capture four consecutive fields from the non-PCD startup graphic and from an actual photograph displayed by the native CD-i application. Compare raw plane RAM, decoded plane images, base raster, composed raster, field parity, ICA/DCA programs, coding method, source addresses, and image-boundary rows without changing emulation behavior.",
@@ -125,7 +125,7 @@
     },
     {
       "id": "clean-menu-rendering-mode-control",
-      "base_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "base_revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0",
       "outcome": "confirmed",
       "hypothesis": "The clean Photo CD menu avoids the affected interlaced dual-DYUV rendering path by selecting a materially different MCD212 mode.",
       "implementation_strategy": "Capture four consecutive fields on the visually clean native Photo CD menu and compare geometry, coding methods, decoded planes, field hashes, and control-table state against the affected startup and photograph captures.",
@@ -142,7 +142,7 @@
     },
     {
       "id": "dyuv-final-chroma-repeat",
-      "base_revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "base_revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0",
       "outcome": "confirmed",
       "hypothesis": "The magenta right edge is caused by the MCD212 DYUV decoder interpolating the line's final missing chroma sample from bytes beyond the end of that line.",
       "implementation_strategy": "Add a device-level test that decodes identical 768-pixel DYUV lines followed by different bytes. Confirm the old decoder changes the final output pixels, then implement MCD212 section 7.1's rule that the last missing U/V component repeats the last U/V component.",
@@ -159,7 +159,7 @@
     },
     {
       "id": "interlaced-retained-row-phase",
-      "base_revision": "a960c14",
+      "base_revision": "528f4f6",
       "outcome": "confirmed",
       "hypothesis": "The interlaced ICA programs are selected correctly, but PA=0 and PA=1 are retained in the opposite host-row phase, displacing successive source lines throughout dual-plane pictures.",
       "implementation_strategy": "Reconstruct each plane's visible VSR sequence from the captured ICA/DCA programs, compare the current and parity-swapped decoded planes and hardware composite, and add a device-level test for the retained PA row phase before changing output_rows.",
@@ -178,47 +178,47 @@
   "manual_verification": [
     {
       "result": "reproduced",
-      "revision": "3bfb46d4b8075d53dbde27f7771f9f545720efae+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
+      "revision": "e375abe276882dc5fc08dd9c0127cbe6d7bced53+dirty:b61ddff90db63237adf49be799be9391b9db07a6d5686b3c0d1f8492e83f6670",
       "notes": "Two Dark Chaser Japan native-CD-i screenshots show the magenta far-right column and stationary field-like edge artifacts. Manual testing found comparable interlace-like artifacts on other Photo CDs and confirms View Raw Images was not used."
     },
     {
       "result": "reproduced",
-      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty:651f85e505403bacf9014f9799240abe2f93bbd0b510be9ae558d2afd2bb6b1b",
+      "revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0+dirty:651f85e505403bacf9014f9799240abe2f93bbd0b510be9ae558d2afd2bb6b1b",
       "notes": "A second native Photo CD capture shows stationary field-like detail. The paired source is a clean 768x512 Base image (SHA-256 5c6d5bb484cea54ca999367b04d7f7bf675cbdb8b3ad1c0eb6a52a05f596e0a0), while the captured presented raster is 768x588 (SHA-256 d5c5c70b1f67c4a8214260a5a0a5fbc8db9cd437f7c2f0ff2428665d0846d700). Pixel inspection measures 76 near-black rows above, 34 below, and two magenta-like final columns over 382 rows. Manual testing reproduced native horizontal bars in PAL and NTSC titles and found similar-sized bars in some European CD-i titles. Photo CD v0.9 explains why 3:2-to-4:3 fitting may create padding, but not this asymmetric placement or the field/final-column artifacts."
     },
     {
       "result": "presentation-distinction-confirmed",
-      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty:6ae80f9a13b2c75b3e51a8be641adc5cc5dd9a2448be9581a04fb5b663694614",
+      "revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0+dirty:6ae80f9a13b2c75b3e51a8be641adc5cc5dd9a2448be9581a04fb5b663694614",
       "notes": "A supplied Photo CD image pack (SHA-256 2bf00609459dd6e40c3d5242fbc678510fc3adef0f19b02c79d0b71799248de1) decodes to the specified 768x512 Base canvas. Its warm-content horizontal position/width normalize to 0.2891/0.4258 in the decoded source and 0.2884/0.4264 in View Raw Images, confirming that the host viewer preserves the complete 3:2 source rather than squashing it. The same feature measures 0.2604/0.4844 in native E-Di output and 0.2648/0.4762 in a reference analog hardware capture. A centered 3:2-to-4:3 crop predicts 0.2627/0.4790 by retaining 682 2/3 source pixels and removing about 42 2/3 from each side. The raw-viewer bars and native television fill are therefore both expected presentations; neither explains the separate native field artifacts or magenta final column."
     },
     {
       "result": "provenance-narrowed-to-guest-plane-or-dyuv-decode",
-      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0",
       "notes": "Two four-field diagnostic saves cover a non-PCD startup graphic and an actual photograph displayed in native CD-i mode. Both are stable across four alternating fields and use guest-programmed dual-DYUV planes. The thin top/bottom boundary and magenta right-edge samples already exist in the decoded planes before composition and frontend presentation. The clean intervening CD-i menu remains the requested control capture."
     },
     {
       "result": "clean-menu-mode-control-confirmed",
-      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b",
+      "revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0",
       "notes": "The clean menu's four fields are byte-identical and use non-interlaced output with a CLUT4 icon plane over a DYUV background plane. This differs materially from the affected startup and photograph, which use interlaced dual-DYUV visible regions. The next device-level experiment is an independent raw-line decode of the affected interlaced DYUV payload, not a frontend deinterlacer."
     },
     {
       "result": "right-edge-dyuv-boundary-corrected",
-      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty",
+      "revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0+dirty",
       "notes": "A synthetic device-level test proved that the old DYUV decoder let bytes following a 768-pixel line influence its final two pixels. MCD212 section 7.1 requires the final missing U/V component to repeat the line's last U/V component. The corrected test passes. Native Photo CD manual verification remains required; this does not resolve the separate stationary top/bottom interlaced boundary."
     },
     {
       "result": "right-edge-fix-manually-confirmed",
-      "revision": "fc1b0b585f22fb7cab403c5f52e15db5b950867b+dirty",
+      "revision": "ee0358dc3a8dbe9fc1d0b29c7a1f0fdaa84ed4b0+dirty",
       "notes": "A repeat run of Dark Chaser Japan through the native CD-i Photo CD application confirmed that the magenta far-right line is gone. The stationary interlaced boundary remains a separate open symptom."
     },
     {
       "result": "retained-row-phase-offline-composite-confirmed",
-      "revision": "a960c14+dirty",
+      "revision": "528f4f6+dirty",
       "notes": "Plane A alone appeared vertically reduced/blocky and plane B alone showed finer horizontal slicing; neither was correct in isolation. Swapping only the retained PA host-row phase in the captured hardware composite produced /tmp/base-raster-parity-swapped.png. Manual comparison identified that composite as correct, and the supplied Inspected image.png has the exact same SHA-256 027aa68e77b290ecc181a6accc1544118ebbb33307dbeb59362b59e66e8af7b3. Live-emulator verification remains pending."
     },
     {
       "result": "live-native-photocd-confirmed",
-      "revision": "a960c14949348ffd75773c920c4d8d22f8292cac+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
+      "revision": "528f4f6af08765f10fc998dd9da27408ac9f5ebd+dirty:49ba5ef37064b4ada5bf95ffd15f6d13bccaaf07ad91b5423da6b37eace6dfe2",
       "notes": "Manual testing confirmed that the native Photo CD startup, stable menu, and displayed photograph look correct in the live corrected build. A separate transient line/area can still show field structure while a transition is moving; that symptom is tracked independently and does not remain in stable pictures."
     }
   ]

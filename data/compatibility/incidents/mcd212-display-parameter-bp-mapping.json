@@ -5,9 +5,9 @@
   "symptom": "Philips cp_dprm(BP_DOUBLE) emits 0x78000500, but E-Di masks the command to its low five bits. The captured Validation Disc CLUT 4 High Res state therefore leaves DCR.CM clear even though the guest explicitly requests four-bit double/high-resolution pixels.",
   "expected": "The load-display-parameters instruction maps the Philips Green Book BP, PRF, and RMS fields to MCD212 color mode, mosaic factor, and file type without disc-specific inference. BP_DOUBLE selects the four-bit double/high-resolution channel mode.",
   "status": "resolved",
-  "reported_revision": "883e90e+dirty:4c62707d6a57a1869db9ef1e174c88dd45bfac323d18e7414fe531eb6f0cb1ff",
-  "last_reproduced_revision": "883e90e+dirty:4c62707d6a57a1869db9ef1e174c88dd45bfac323d18e7414fe531eb6f0cb1ff",
-  "last_verified_revision": "883e90e+dirty:92d44ea51bd8035450a95061bced051be014a3e1a2c4d6928b5b952aa0ba75b6",
+  "reported_revision": "e5c04ab+dirty:4c62707d6a57a1869db9ef1e174c88dd45bfac323d18e7414fe531eb6f0cb1ff",
+  "last_reproduced_revision": "e5c04ab+dirty:4c62707d6a57a1869db9ef1e174c88dd45bfac323d18e7414fe531eb6f0cb1ff",
+  "last_verified_revision": "e5c04ab+dirty:92d44ea51bd8035450a95061bced051be014a3e1a2c4d6928b5b952aa0ba75b6",
   "evidence_status": "current",
   "revalidation_reason": "The Philips Validation Disc capture contains the exact command 0x78000500 and ICM CLUT4, while the pre-correction MCD212 snapshot recorded DCR.CM clear. Green Book Figure V.49 and Philips' ucm.h cp_dprm macro place BP at bits 9:8, PRF at 3:2, and RMS at 1:0. ICA and DCA tests now exercise those Philips-authored fields: BP_DOUBLE sets DCR.CM, BP_NORMAL clears it, and PRF/RMS populate DDR independently. Revalidate if the command decoder, color-mode use, or extended BP_HIGH support changes.",
   "components": [
@@ -57,7 +57,7 @@
     {
       "id": "green-book-field-mapping",
       "context": {
-        "base_revision": "883e90e",
+        "base_revision": "e5c04ab",
         "dirty_diff_hash": "92d44ea51bd8035450a95061bced051be014a3e1a2c4d6928b5b952aa0ba75b6",
         "component_fingerprints": {
           "mcd212-control-program": "Green Book cp_dprm field decoder"
@@ -114,12 +114,12 @@
   "manual_verification": [
     {
       "result": "reproduced",
-      "revision": "883e90e+dirty:4c62707d6a57a1869db9ef1e174c88dd45bfac323d18e7414fe531eb6f0cb1ff",
+      "revision": "e5c04ab+dirty:4c62707d6a57a1869db9ef1e174c88dd45bfac323d18e7414fe531eb6f0cb1ff",
       "notes": "The opt-in capture records command 0x78000500 at plane-A RAM offset 0x23cf0, ICM CLUT4, and DCR.CM clear. This incident concerns register/command fidelity, not the authored static lines, which were independently resolved as correct."
     },
     {
       "result": "automated-device-test",
-      "revision": "883e90e+dirty:92d44ea51bd8035450a95061bced051be014a3e1a2c4d6928b5b952aa0ba75b6",
+      "revision": "e5c04ab+dirty:92d44ea51bd8035450a95061bced051be014a3e1a2c4d6928b5b952aa0ba75b6",
       "notes": "A failing ICA test reproduced the stale CM bit before correction. ICA and DCA now pass Philips cp_dprm field tests, and the full cdi-core suite passes 100 tests."
     }
   ]

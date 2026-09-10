@@ -5,8 +5,8 @@
   "symptom": "Under the correct White Book type-4/13.5 MHz path, the copyright warning and MPEG picture are horizontally biased to the right. The native chapter menu and playback controls remain correctly located.",
   "expected": "The guest-programmed MCD251 output position and 13.5 MHz conversion should reproduce the real-player placement without a title-specific offset.",
   "status": "guest-window-difference-confirmed-real-hardware-oracle-needed",
-  "reported_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:498775b6062053516c5567d09c6db291e19cbe522f1811a44563b09b8130f10f",
-  "last_reproduced_revision": "a7dd51250928450bd5f347a232227d2e260d1640",
+  "reported_revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:498775b6062053516c5567d09c6db291e19cbe522f1811a44563b09b8130f10f",
+  "last_reproduced_revision": "625fb8fb7acc5762ed7fbc579bcc5caf802abbdd",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": "The clean-memory Accused control is now captured. Addams UK and ZYX both program Xd=16, Xw=0, Ww=352 and produce an exact 32-pixel left border in the current compositor. Accused programs Xd=0, Xw=7, Ww=345 and fills 767 of 768 raster pixels with only one black pixel at the right. All three use Xo/Yo=65/26, Xa/Ya=384/280 and the 13.5 MHz output. This confirms that guest-programmed MCD251 display/window state, not stale settings, the decoder, or the frontend aperture, distinguishes the affected and correct cases. The available MCD251 summary names Xd/Xw/Ww but does not define the complete coordinate equation, so a synchronized real-hardware Addams or ZYX capture/trace is required before changing emulation behavior.",
@@ -157,7 +157,7 @@
     {
       "id": "remove-host-overscan-simulation",
       "context": {
-        "base_revision": "30135d037898ed096169165d3335e1e2a64d652f",
+        "base_revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2",
         "dirty_diff_hash": "e54baeefba88eae948e5779399f26dd0821b47d75e771d106e3bbdb5e3633715",
         "component_fingerprints": {},
         "dependencies": {
@@ -261,7 +261,7 @@
     {
       "id": "compare-clean-memory-addams-and-zyx-register-state",
       "context": {
-        "base_revision": "a7dd51250928450bd5f347a232227d2e260d1640",
+        "base_revision": "625fb8fb7acc5762ed7fbc579bcc5caf802abbdd",
         "dirty_diff_hash": "5bb4b374177c174961ee0edd575f9e5845a0337b975852bf00444cfb7b7783f4",
         "component_fingerprints": {},
         "dependencies": {
@@ -312,7 +312,7 @@
     {
       "id": "compare-clean-memory-accused-control",
       "context": {
-        "base_revision": "a7dd51250928450bd5f347a232227d2e260d1640",
+        "base_revision": "625fb8fb7acc5762ed7fbc579bcc5caf802abbdd",
         "dirty_diff_hash": "108bc29dbfa1e80c3ec0dc628f7630d08f86c06bba6a56f9b6697b2142403f49",
         "component_fingerprints": {},
         "dependencies": {
@@ -365,17 +365,17 @@
   "manual_verification": [
     {
       "result": "reproduced",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:498775b6062053516c5567d09c6db291e19cbe522f1811a44563b09b8130f10f",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:498775b6062053516c5567d09c6db291e19cbe522f1811a44563b09b8130f10f",
       "notes": "The copyright warning and MPEG picture are shifted right. The chapter menu has no new zoom and its native controls are properly located. Accused Netherlands is the known-good same-path control: its warning, menu, MPEG placement and width, and playback all appear correct with no pillars or other observed error."
     },
     {
       "result": "resolved",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:e54baeefba88eae948e5779399f26dd0821b47d75e771d106e3bbdb5e3633715",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:e54baeefba88eae948e5779399f26dd0821b47d75e771d106e3bbdb5e3633715",
       "notes": "After removing the frontend overscan simulation, Addams Family Values UK and USA both show uncropped menus and properly presented MPEG pictures with no pillarboxing or letterboxing."
     },
     {
       "result": "reproduced-current-clean-pass",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
       "notes": "The warning is visibly shifted right (evidence img-20260802T234154.665329Z-04e9f9243376-e81f40335ac0, SHA-256 e81f40335ac0703c73e808c0c94d199aad5e91c15758a841e7cf3b43bbd7f19f). MPEG playback exposes a black pillar at the left edge (evidence img-20260802T234154.705703Z-aa3bb8e02685-eaf0fa25ac6a, SHA-256 eaf0fa25ac6a93d03a90823939c64c086fb2f685d481ae9cb52ae4a5d0e2361f). Accused Netherlands remains a clean control, including with its native in-video controls visible."
     },
     {
@@ -390,17 +390,17 @@
     },
     {
       "result": "related-calibration-state-revalidation-needed",
-      "revision": "a7dd51250928450bd5f347a232227d2e260d1640",
+      "revision": "625fb8fb7acc5762ed7fbc579bcc5caf802abbdd",
       "notes": "ZYX Dance Hits was captured with the same persisted native VCD position/window state as the rightward Addams UK Position Video endpoint: MCD251 display 1,0; source window 0,6 352x280; active plane 384x280; and 13.5 MHz VCD output. This makes the previously saved Addams/Accused calibration a plausible cause of ZYX's small displacement. It does not yet prove that the complete left and bottom dark margins are calibration artifacts; some may be authored MPEG content or guest-programmed windowing. Recenter or reset VCD_SETTINGS.nvri and relaunch ZYX before classifying those margins as an emulator defect."
     },
     {
       "result": "saved-calibration-hypothesis-falsified",
-      "revision": "a7dd51250928450bd5f347a232227d2e260d1640+dirty:5bb4b374177c174961ee0edd575f9e5845a0337b975852bf00444cfb7b7783f4",
+      "revision": "625fb8fb7acc5762ed7fbc579bcc5caf802abbdd+dirty:5bb4b374177c174961ee0edd575f9e5845a0337b975852bf00444cfb7b7783f4",
       "notes": "After deleting all memory including VCD settings, Accused appears correct throughout, while Addams UK warning/feature and ZYX opening/feature video remain displaced right with a left pillar; their native menus remain correct. The three affected captures all use Xd=16/Yd=0 and Xw=0/Yw=5 at 13.5 MHz. The moving-video rasters have an exact 32-pixel black left border produced at external-video composition. Capture Accused in this same clean-memory state before changing MCD251 geometry."
     },
     {
       "result": "clean-memory-control-confirmed",
-      "revision": "a7dd51250928450bd5f347a232227d2e260d1640+dirty:108bc29dbfa1e80c3ec0dc628f7630d08f86c06bba6a56f9b6697b2142403f49",
+      "revision": "625fb8fb7acc5762ed7fbc579bcc5caf802abbdd+dirty:108bc29dbfa1e80c3ec0dc628f7630d08f86c06bba6a56f9b6697b2142403f49",
       "notes": "The same-session Accused feature capture is correctly placed and programs Xd=0, Xw=7, Ww=345, leaving only one black raster pixel at the right. Addams UK and ZYX instead program Xd=16, Xw=0, Ww=352 and both produce an exact 32-pixel black left border. The native menus remain unaffected because they are MCD212 planes. Do not change the coordinate equation until the Addams/ZYX placement is checked against real hardware or a synchronized hardware trace."
     }
   ]

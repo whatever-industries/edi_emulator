@@ -5,9 +5,9 @@
   "symptom": "Selecting Player 1 removes the menu text but never advances from the title background",
   "expected": "Selecting Player 1 opens the NEW / RESTORE submenu",
   "status": "resolved",
-  "reported_revision": "36b46f758770de53c4846419beffb9bb022c4615",
-  "last_reproduced_revision": "36b46f758770de53c4846419beffb9bb022c4615",
-  "last_verified_revision": "9b1eacb34cc1e361ad2a0f8c2083f5bfa52e3c37",
+  "reported_revision": "4843b93916097a63f1f7808e1bc1980c73ee3154",
+  "last_reproduced_revision": "4843b93916097a63f1f7808e1bc1980c73ee3154",
+  "last_verified_revision": "e646a6101607ba8ff041604d40f90682cf21fa7a",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": [
@@ -30,8 +30,8 @@
       "id": "scripted-click-reanchor-overrides-title-pointer",
       "hardware_explanation": "The CLI re-anchored the relative CD-i pointer at the press boundary after the title had changed its position, producing a different guest input packet from the intended hover-then-click sequence.",
       "supporting_evidence": [
-        "c012d17 stalls with the press-boundary re-anchor and reaches NEW / RESTORE when that re-anchor is removed.",
-        "04cc43b, 019fb59, and 7dc46a9 all reach NEW / RESTORE with the original hover-then-click behavior."
+        "7984f95 stalls with the press-boundary re-anchor and reaches NEW / RESTORE when that re-anchor is removed.",
+        "ca2d181, 427ef19, and 9504c63 all reach NEW / RESTORE with the original hover-then-click behavior."
       ],
       "contradicting_evidence": [],
       "falsifying_test": "Restore only the press-boundary absolute-pointer write while holding the ROM, disc, timing, and core revision fixed; the terminal framebuffer should remain unchanged if re-anchoring is irrelevant.",
@@ -43,8 +43,8 @@
       "id": "cdic-audio-sector-routing-regression",
       "hardware_explanation": "Selected XA sectors must update the ordinary data-buffer header while also placing a complete post-sync sector image in ADPCM buffer 4/5. Routing only the complete image to 0x2800/0x3200 deprived CD-RTOS of the data-buffer header it inspects during the transition.",
       "supporting_evidence": [
-        "With normalized input, c012d17 reaches NEW / RESTORE while 3e02bf4 stalls.",
-        "Changing only the 3e02bf4 delivery layout restores the known-good framebuffer hash.",
+        "With normalized input, 7984f95 reaches NEW / RESTORE while b596ef7 stalls.",
+        "Changing only the b596ef7 delivery layout restores the known-good framebuffer hash.",
         "Mono-I test_xa_play captures show timestamp/mode words changing in the ordinary buffers while DBUF reports audio buffer 4/5.",
         "The CDIC manual places coding at ADPCM-buffer offset 11 and the 2304-byte payload at offset 12."
       ],
@@ -74,9 +74,9 @@
   ],
   "experiments": [
     {
-      "id": "superseded-c012d17-versus-36b46f7-comparison",
+      "id": "superseded-7984f95-versus-4843b93-comparison",
       "context": {
-        "base_revision": "36b46f758770de53c4846419beffb9bb022c4615",
+        "base_revision": "4843b93916097a63f1f7808e1bc1980c73ee3154",
         "dirty_diff_hash": "clean",
         "component_fingerprints": {},
         "dependencies": {},
@@ -88,7 +88,7 @@
         "timing": "710000000 instructions; 498000000:588,265,1,300000 and 660000000:300,247,1,300000"
       },
       "hypothesis_id": "cdic-audio-sector-routing-regression",
-      "strategy": "Compare c012d17 and 36b46f7 before normalizing the scripted input harness.",
+      "strategy": "Compare 7984f95 and 4843b93 before normalizing the scripted input harness.",
       "symbols": [
         "Cdic::deliver_sector",
         "boot"
@@ -119,7 +119,7 @@
     {
       "id": "normalized-boundary-and-sector-routing",
       "context": {
-        "base_revision": "36b46f758770de53c4846419beffb9bb022c4615",
+        "base_revision": "4843b93916097a63f1f7808e1bc1980c73ee3154",
         "dirty_diff_hash": "pending-commit",
         "component_fingerprints": {},
         "dependencies": {
@@ -168,7 +168,7 @@
   ],
   "manual_verification": [
     {
-      "revision": "9b1eacb34cc1e361ad2a0f8c2083f5bfa52e3c37",
+      "revision": "e646a6101607ba8ff041604d40f90682cf21fa7a",
       "result": "accepted",
       "notes": "Frontend test confirmed that selecting Hotel Mario Player 1 reaches the NEW / RESTORE submenu. Neighboring Earth Command and CD-BGM audio checks also passed; Alien Gate firing audio worked and its one transient freeze did not recur after a clean relaunch."
     }

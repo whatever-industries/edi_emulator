@@ -5,8 +5,8 @@
   "symptom": "The 7th Guest hand animation, moving VMPEG scenes, and the Philips-logo fade can show alternating horizontal field structure. In the captured mansion animation this is easiest to see around the yellow lamp-post lights. The behavior also occurs in E-Di 0.1.0 and may affect other interlaced CD-i and VMPEG motion.",
   "expected": "Preserve the authentic odd/even CD-i field signal while presenting it coherently on a progressive host display. Any deinterlacing policy must remain outside guest-visible MCD212 and VMPEG state and must not discard legitimate still-field detail without evidence.",
   "status": "resolved-with-known-limitation",
-  "reported_revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
-  "last_reproduced_revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
+  "reported_revision": "0fddb5cb95baa0357238b4dae4de1e4ef2a350d8",
+  "last_reproduced_revision": "0fddb5cb95baa0357238b4dae4de1e4ef2a350d8",
   "last_verified_revision": null,
   "evidence_status": "current-and-historical",
   "revalidation_reason": null,
@@ -68,7 +68,7 @@
   "experiments": [
     {
       "id": "thirty-field-hand-and-vmpeg-captures",
-      "base_revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
+      "base_revision": "0fddb5cb95baa0357238b4dae4de1e4ef2a350d8",
       "dirty_diff_hash": null,
       "component_state": {
         "mcd212": "PAL interlaced retained odd/even rows; diagnostic plane capture enabled",
@@ -104,7 +104,7 @@
     },
     {
       "id": "frontend-motion-adaptive-bob-weave",
-      "base_revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
+      "base_revision": "0fddb5cb95baa0357238b4dae4de1e4ef2a350d8",
       "dirty_diff_hash": "e3f0a4c97088ff1f9c699365d461428d8ea60b6f343eb5956e23e17c59de06ae",
       "component_state": {
         "mcd212": "unchanged raw retained odd/even field framebuffer",
@@ -142,7 +142,7 @@
   "manual_verification": [
     {
       "result": "reproduced-current",
-      "revision": "2f3d053437625369a1e35370767ad350ea0c96b7",
+      "revision": "0fddb5cb95baa0357238b4dae4de1e4ef2a350d8",
       "notes": "Manual testing observed combing on The 7th Guest hand, lamp-post lights in moving video, and the Philips-logo fade. Two local 30-field diagnostic captures preserve the evidence without tracking media payloads."
     },
     {

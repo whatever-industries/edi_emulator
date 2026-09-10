@@ -5,8 +5,8 @@
   "symptom": "The hovered language flag and later skeets animate much too quickly.",
   "expected": "Guest animation cadence remains synchronized with the 50 Hz player.",
   "status": "needs-revalidation",
-  "reported_revision": "775ab2a",
-  "last_reproduced_revision": "775ab2a",
+  "reported_revision": "d75c4c9",
+  "last_reproduced_revision": "d75c4c9",
   "last_verified_revision": null,
   "evidence_status": "needs-revalidation",
   "revalidation_reason": "The changed scheduling prerequisite is now implemented and neighboring automated baselines pass. A 2026-08-09 manual check confirms that the hovered language flag remains correctly paced, but historical testing places that correction before the regional-clock change. The skeet sequence was not rechecked, so the incident remains open and no causal credit is assigned to the new scheduler.",
@@ -28,8 +28,8 @@
       "id": "instruction-timing-and-device-scheduling",
       "hardware_explanation": "Legacy SCC68070 instruction timing lets guest animation logic perform too much work per MCD212 frame. Restoring section-6.2 timings without cycle/event-interleaved device advancement is insufficient because that historical combination regressed The 7th Guest.",
       "supporting_evidence": [
-        "The section-6.2 timing implementation in 191eebb corrected this cadence.",
-        "Commit 18beb7f restored legacy timing to preserve The 7th Guest under the current instruction-boundary scheduler.",
+        "The section-6.2 timing implementation in 9c8449d corrected this cadence.",
+        "Commit db54f6e restored legacy timing to preserve The 7th Guest under the current instruction-boundary scheduler.",
         "The bounded three-clock timeline characterized a timer deadline at cycle 96 being observed at cycle 154, 58 cycles late under instruction-boundary lumping.",
         "The replacement scheduler services that timer in 96- and 58-cycle slices while retaining the 154-cycle instruction total.",
         "Runtime regional cadence tests pin the documented PAL 30.0000 MHz and NTSC 30.2098 MHz crystals, exact MCD212 line/field boundaries, 75 Hz CDIC cadence, SLAVE delays, and VMPEG clocks.",
@@ -51,7 +51,7 @@
     {
       "id": "chronological-device-slicing-and-regional-runtime-clocks",
       "context": {
-        "base_revision": "b98537fddf3b6199554b2d289840a6704c344c81",
+        "base_revision": "6fb6260f00bf4857359dea32a5ace5332afe7950",
         "dirty_diff_hash": "ab66bfe0c8384120820981f3b6327e4365166d1af99b08233f963af183616dde",
         "component_fingerprints": {},
         "dependencies": {
@@ -104,12 +104,12 @@
   "manual_verification": [
     {
       "result": "regression-reported",
-      "revision": "775ab2a",
+      "revision": "d75c4c9",
       "notes": "The previously corrected fast language-flag animation reportedly returned."
     },
     {
       "result": "partial-confirmation-current-dirty",
-      "revision": "b98537fddf3b6199554b2d289840a6704c344c81+dirty-regional-clock-build",
+      "revision": "6fb6260f00bf4857359dea32a5ace5332afe7950+dirty-regional-clock-build",
       "notes": "Manual testing confirms that the hovered CD Shoot flag remains correctly paced; historical testing places this correction before the regional-clock work. The skeet sequence was not checked, so this is regression evidence only and not proof that the new scheduler fixed the title."
     }
   ]

@@ -5,8 +5,8 @@
   "symptom": "Shot-dependent black/white and magenta/green line patterns appear along the bottom of the post-logo video and crossfade with each shot; later menu/gameplay screens may also appear overscanned",
   "expected": "Decoded video and base graphics follow the authored source and live hardware aperture without exposing unintended final-line data or clipping authored edges",
   "status": "reproduced",
-  "reported_revision": "52013394225572beb9346dbefea136cf8f92596c",
-  "last_reproduced_revision": "52013394225572beb9346dbefea136cf8f92596c",
+  "reported_revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967",
+  "last_reproduced_revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": null,
@@ -78,12 +78,12 @@
   "manual_verification": [
     {
       "result": "reported-current",
-      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:52f9474f4fb4ca328bb894fc697c174c0e728cb711c8af4502370ee7e1b1f293",
+      "revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967+dirty:52f9474f4fb4ca328bb894fc697c174c0e728cb711c8af4502370ee7e1b1f293",
       "notes": "User screenshots reproduce shot-dependent bottom-row patterns during QHY video and possible edge clipping in later screens. A future pass should capture the same stable frames through all six display-provenance stages; the former host overscan simulation is no longer present."
     },
     {
       "result": "cross-title-corroboration",
-      "revision": "52013394225572beb9346dbefea136cf8f92596c+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
+      "revision": "1929208e93f8de73d8ebeeadc28836fa63ddc967+dirty:c765d06522a442233f7ca3af62988e9f9a0a8736468bfb677f321e3a87193417",
       "notes": "Kether Europe reproduces a content-correlated bottom artifact line with CLUT8/RL7/DYUV RTF data. This weakens a QHY-only explanation and raises common RTF destination/drawmap or MCD212 lower-boundary handling."
     }
   ]

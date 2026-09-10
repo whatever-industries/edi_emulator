@@ -5,9 +5,9 @@
   "symptom": "Bullet sound effects are audible earlier in gameplay and then stop after the bat enemies fly, while firing and gameplay continue.",
   "expected": "Match the title's real-hardware behavior: bullet sound effects stop after the bat-enemy sequence and must not be forced to continue by an emulator-side audio workaround.",
   "status": "resolved-as-authored",
-  "reported_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
-  "last_reproduced_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
-  "last_verified_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "reported_revision": "91a46fb028147942d77b31d6c3535d3822be0400",
+  "last_reproduced_revision": "91a46fb028147942d77b31d6c3535d3822be0400",
+  "last_verified_revision": "91a46fb028147942d77b31d6c3535d3822be0400",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": [
@@ -47,7 +47,7 @@
   "manual_verification": [
     {
       "result": "resolved-as-authored",
-      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "revision": "91a46fb028147942d77b31d6c3535d3822be0400+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
       "notes": "User compared E-Di with real-hardware footage at https://www.youtube.com/watch?v=Vj0GFhxTsi0 and confirmed that bullet effects also stop after the bat enemies on hardware. The earlier no-bullet-sound report lacked a pre/post-bat checkpoint and is therefore contextualized as potentially observing this expected transition."
     }
   ]

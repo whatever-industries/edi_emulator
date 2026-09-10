@@ -5,9 +5,9 @@
   "symptom": "When advancing between certain Drawing validation frames, a very brief lightning-like transition is visible. It occurs across every tested drawing representation, while each resulting still frame remains stable and does not shimmer.",
   "expected": "The shared drawing-mode transition is treated as authored validation-program behavior unless hardware evidence later shows otherwise; it is not conflated with the stationary artifact unique to CLUT 4 High Res.",
   "status": "resolved",
-  "reported_revision": "883e90e",
-  "last_reproduced_revision": "883e90e",
-  "last_verified_revision": "883e90e",
+  "reported_revision": "e5c04ab",
+  "last_reproduced_revision": "e5c04ab",
+  "last_verified_revision": "e5c04ab",
   "evidence_status": "current",
   "revalidation_reason": "Manual comparison found the same brief flash in every tested drawing mode, including modes whose stable output is clean. It is therefore closed as shared likely-authored transition behavior rather than evidence for the CLUT 4 High Res still-frame defect. Real-hardware evidence could justify reopening it.",
   "components": [
@@ -58,12 +58,12 @@
   "manual_verification": [
     {
       "result": "reported",
-      "revision": "883e90e",
+      "revision": "e5c04ab",
       "notes": "A brief lightning-like animation appears between certain clicked drawing modes. It seems to expose alternating fields, but the resulting still is stable and non-shimmering."
     },
     {
       "result": "accepted-as-shared-authored-behavior",
-      "revision": "883e90e",
+      "revision": "e5c04ab",
       "notes": "The flash occurs in every tested drawing mode. Only CLUT 4 High Res has stationary line artifacts, so the shared transition is not being treated as part of that defect. Reopen only if hardware evidence contradicts this classification."
     }
   ]

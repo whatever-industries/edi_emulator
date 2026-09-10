@@ -9,7 +9,7 @@
   "last_reproduced_revision": null,
   "last_verified_revision": null,
   "evidence_status": "needs-revalidation",
-  "revalidation_reason": "Reports span several pre-ac20dcd display implementations and screenshots without a consistently recorded commit. Recheck only discrepancies that remain visible on ac20dcd or a later build.",
+  "revalidation_reason": "Reports span several pre-09cd103 display implementations and screenshots without a consistently recorded commit. Recheck only discrepancies that remain visible on 09cd103 or a later build.",
   "components": [
     "mcd212",
     "frontend"

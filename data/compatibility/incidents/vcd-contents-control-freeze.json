@@ -5,8 +5,8 @@
   "symptom": "Selecting Contents in the native Video CD menu makes the in-disc controls stop responding in two tested Video CDs, while MPEG video continues playing.",
   "expected": "The native Contents action opens or navigates the disc's content selection and the Video CD controls remain responsive.",
   "status": "reproduced",
-  "reported_revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
-  "last_reproduced_revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+  "reported_revision": "eccb7cf+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+  "last_reproduced_revision": "eccb7cf+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": "Manually reproduced in two current-build Video CD runs. Continued MPEG playback shows that the decoder and presentation clocks continue, but no device boundary has yet been isolated.",
@@ -53,7 +53,7 @@
   "manual_verification": [
     {
       "result": "reproduced",
-      "revision": "53165b3+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
+      "revision": "eccb7cf+dirty:a8657d3f71e83b497cf499d7c6bbb49d326922c7ecd942bee6602185dbc90cb6",
       "notes": "The native Contents control became unresponsive in two tested Video CDs while the feature video continued to decode and play."
     }
   ]

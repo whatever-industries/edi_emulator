@@ -5,8 +5,8 @@
   "symptom": "A thin multicolored line intermittently appears at the bottom edge while native Video CD controls are displayed. It is reproduced by Addams Family Values USA, CD-i See It Hear It, Forrest Gump, Pete Townshend Live, and RoboCop. A playback-state change can clear it while controls remain available: CONTENTS-to-playback clears it in CD-i See It Hear It, Forrest Gump, and Addams Family Values USA, while fast-forward clears it in Pete Townshend. Die schoensten Frauen der Welt - Naomi Campbell and Addams Family Values UK are clean counterexamples.",
   "expected": "Whether a native control bar covers, transparently reveals, or is flush with the final picture rows must follow the title's configured engine and the player compositor; the current captures do not establish a universal expected lower boundary.",
   "status": "reproduced",
-  "reported_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
-  "last_reproduced_revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+  "reported_revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
+  "last_reproduced_revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": null,
@@ -58,7 +58,7 @@
     {
       "id": "dca-stop-field-latch",
       "context": {
-        "base_revision": "cd351260f978a8e09a1125f3aa6ec3ad2708f349",
+        "base_revision": "73ad73b5ca79bb1cb658f3c72e9a7e37f7836daa",
         "component_fingerprints": {
           "mcd212-dca": "process_dca per-line 64-byte slot advance"
         },
@@ -89,32 +89,32 @@
   "manual_verification": [
     {
       "result": "reproduced-current-clean-pass",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:7d54cde7bd22c797476cc88b62c71ad0c65d5645ee9842283c22318b683bda91",
       "notes": "The thin colored line is visible below the native controls in evidence img-20260802T234154.747285Z-61a0caeb9148-0fae9a062200 (SHA-256 0fae9a062200c238aab993810666f79d4ea9773d728c26a62be87e6f877a3c0b). No other issue was observed in Addams Family Values USA during this pass."
     },
     {
       "result": "intermittent-counterexample",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
       "notes": "A later playback frame retains the native controls but has no colored bottom line (evidence img-20260802T234813.741970Z-f06d74d4c2d6-f73a3729cf8b, SHA-256 f73a3729cf8b6bc8c40acb4adf67b5929ac418d6c6d89d1df6f9aa0e45484fdb). Control visibility is therefore not a sufficient trigger; the symptom is intermittent or dependent on underlying video/display state."
     },
     {
       "result": "cross-title-state-transition",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
       "notes": "CD-i See It Hear It displays correctly except for the same odd line below its native in-video controls. Selecting CONTENTS and then returning to video removes the line while playback controls remain available. This makes permanent MPEG corruption or a static control graphic less likely and prioritizes stateful control-plane redraw, DCA/lower-boundary latching, or content-dependent exposure of an unintended row."
     },
     {
       "result": "cross-title-pattern-confirmed",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
       "notes": "Forrest Gump has the line until CONTENTS is opened and playback restarts. Pete Townshend has the line until fast-forward is pressed. RoboCop also reproduces it. All three otherwise pass the current review. The two different clearing actions show that a broader playback/control-state transition, not CONTENTS specifically, jars the faulty state clear."
     },
     {
       "result": "clean-counterexample",
-      "revision": "30135d037898ed096169165d3335e1e2a64d652f+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
+      "revision": "612ac5826c141a9658c39cfbbecf62a2889b42e2+dirty:cb601f3c9cf12db72e94acc9192ee506871833818bb2ce4687eca1c7381e078a",
       "notes": "Die schoensten Frauen der Welt - Naomi Campbell (Germany) never shows the controls-line symptom during the current review."
     },
     {
       "result": "regional-engine-geometry-comparison",
-      "revision": "cd351260f978a8e09a1125f3aa6ec3ad2708f349",
+      "revision": "73ad73b5ca79bb1cb658f3c72e9a7e37f7836daa",
       "notes": "Accused NL shows a few lower picture rows behind its in-video bar without the colored-line symptom. Addams Family Values UK is flush at the lower edge and shows neither the colored line nor picture peeking below the bar. Addams Family Values USA reproduces the colored line, then a diagnostic captured after CONTENTS-to-playback shows it cleared. These observations support title engine/configuration or compositor state as variables; they do not establish a different Video CD specification by region. Local diagnostic images retain the detailed raster evidence."
     }
   ]

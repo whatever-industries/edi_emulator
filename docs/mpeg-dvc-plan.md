@@ -294,7 +294,7 @@ Philips clip are tracked separately.
 
 M3.13 revalidated the historical five-picture failure after the shared-IN4
 transport correction. Two identical 1.1-billion-instruction runs on
-`019fb5913e60d50bcf2ede6049e47376ecb5af39` each exercised five VMPEG plays,
+`427ef194567640071c071d366378a2507fd04763` each exercised five VMPEG plays,
 16,619 system packs, 7,853 decoded and presented video frames, and 25,226
 decoded audio frames. Both finished with identical machine, framebuffer, and
 audio hashes and zero demux, video, audio, or stream errors. Decoder errors

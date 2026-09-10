@@ -5,8 +5,8 @@
   "symptom": "Using the Play Control panel's backward-scan function produces transient black rectangular regions aligned to MPEG block boundaries while the surrounding video remains visible.",
   "expected": "Determine whether real VMPEG reverse scan displays complete GOP entry pictures or exposes comparable transient decoder artifacts; do not conceal the blocks without hardware evidence.",
   "status": "reported-unconfirmed",
-  "reported_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
-  "last_reproduced_revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666",
+  "reported_revision": "91a46fb028147942d77b31d6c3535d3822be0400",
+  "last_reproduced_revision": "91a46fb028147942d77b31d6c3535d3822be0400",
   "last_verified_revision": null,
   "evidence_status": "current",
   "revalidation_reason": null,
@@ -63,7 +63,7 @@
   "manual_verification": [
     {
       "result": "reported-current",
-      "revision": "5b3fd69fe7bab2a72c180eb5eca317d933a0b666+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
+      "revision": "91a46fb028147942d77b31d6c3535d3822be0400+dirty:f8f44d3582695ee01f7dcb0f4b9f8a4b2f9e0ae36856b137f5ef91d8495b2821",
       "notes": "A 768x574 diagnostic screenshot with SHA-256 ee0bcd5cb40d4508670a96a20fd87fa61417ce4b09738650418513b43aabeb7d captures black block-aligned regions during FMVDemo backward scan. The image remains local and untracked. Hardware correctness is unknown."
     }
   ]

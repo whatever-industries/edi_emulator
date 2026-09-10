@@ -5,9 +5,9 @@
   "symptom": "Restoring Philips section-6.2 instruction timing corrects guest cadence but regresses The 7th Guest transition under instruction-boundary device advancement",
   "expected": "Accurate SCC68070 timing and asynchronous device/DMA events coexist while preserving the seven-stage The 7th Guest sequence and neighboring regressions",
   "status": "resolved",
-  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
-  "last_reproduced_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
-  "last_verified_revision": "42fe2b5+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
+  "reported_revision": "dc7540fad5d9c9a0772bbe4ab9e3b305abd69957",
+  "last_reproduced_revision": "dc7540fad5d9c9a0772bbe4ab9e3b305abd69957",
+  "last_verified_revision": "dc7540f+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": [
@@ -124,7 +124,7 @@
     {
       "id": "dma0-completion-after-final-operand",
       "context": {
-        "base_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+        "base_revision": "dc7540fad5d9c9a0772bbe4ab9e3b305abd69957",
         "dirty_diff_hash": "45d999ba9a60f90f3f6d374582ad59d9f54f58eab602937d33c4472e010b01a5",
         "component_fingerprints": {
           "cdic": "81334a065f8cd9712d268427dbf4f42ebbd9d55a6c03c66458f5c80ba4c2d034",
@@ -180,7 +180,7 @@
     {
       "id": "shared-in4-owner-arbitration",
       "context": {
-        "base_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+        "base_revision": "dc7540fad5d9c9a0772bbe4ab9e3b305abd69957",
         "dirty_diff_hash": "48c5df7ebaa3c0e8e5568ee49251da4c42cc1190c7b73f536751b97bd5180d0c",
         "component_fingerprints": {
           "cpu-timing": "0334b631b27ec6d70a7cac319a225dce83c56f97145c063844dc5d273898ae2e",
@@ -235,12 +235,12 @@
   "manual_verification": [
     {
       "result": "neighboring-regressions-pass",
-      "revision": "42fe2b5+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
+      "revision": "dc7540f+dirty:96d4eff9dd26d713eb0e6cc00bb0eec519214c3681cfcf9c88628adc3f3a266b",
       "notes": "Manual checks other than the save-skipped The 7th Guest opening work well. The 7th Guest seven-stage manual check remains pending after NVRAM clearance."
     },
     {
       "result": "accepted",
-      "revision": "42fe2b5+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
+      "revision": "dc7540f+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
       "notes": "With clean NVRAM, manual testing confirmed the pre-title clip, title MPEG, both post-title MPEG stages, transition animation, automatic gameplay entry, and gameplay audio all proceed. Three brief black intervals are tracked separately and do not block the resolved scheduling/interrupt regression."
     }
   ]

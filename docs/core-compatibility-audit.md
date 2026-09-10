@@ -39,7 +39,7 @@ not independently authorize an emulation change.
 
 ## Preserved references
 
-- Current recoverable checkpoint: commit `af3ca1d`.
+- Current recoverable checkpoint: commit `93e40f1`.
 - Verified historical root tree:
   `2a1d9038b209dc9b0f7c3f05d8065c8ef3c85dcc`.
 - Its source archive, executable, hashes, and manual result are stored in the
@@ -161,7 +161,7 @@ be confused with the resolved post-title playback and audio regressions.
 ## Manual neighboring-title validation
 
 Manual validation on 2026-07-25 checked the committed modern audit baseline
-(`18beb7f`) against the highest-risk neighboring regressions:
+(`db54f6e`) against the highest-risk neighboring regressions:
 
 - Earth Command's menu audio terminates instead of looping.
 - The Naked Gun 2 1/2 releases its copyright clip and reaches the disc menu.
@@ -178,7 +178,7 @@ manual neighboring-title gate required before timing/scheduling
 reconstruction now passes.
 
 Manual validation on 2026-07-26 rechecked Earth Command audio termination and
-Alien Gate gameplay/firing audio at revision `ac20dcd`. Both played without
+Alien Gate gameplay/firing audio at revision `09cd103`. Both played without
 the historical looping fault. Alien Gate's separate missing-HUD edge report
 is display-only and is tracked in
 `data/compatibility/incidents/alien-gate-hud-lower-edge-missing.json`.
@@ -210,7 +210,7 @@ map, and correct faults shorten the firmware's early memory checks. The source
 has not checked every hole, access width, or direction, so this is not evidence
 for making every open-bus access fault unconditionally.
 
-A read-only E-Di trace at revision `36b46f7` confirmed the cost. During the
+A read-only E-Di trace at revision `4843b93` confirmed the cost. During the
 first 20,000,000 instructions of a PAL cdi220b firmware-only boot, the old
 open-bus path handled 9,605,190 byte reads at 9,075,906 distinct addresses
 from `$00500000` through `$00FF8003`.
@@ -222,7 +222,7 @@ whether long-frame `RTE` retries the failed cycle. Focused tests cover frame
 layout, RR suppression, access metadata, and the boundary between known BERR
 ranges and an unverified open-bus hole. Only the externally verified Mono-I
 absent-memory ranges `$080000-$1fffff` and `$500000-$cfffff` fault. At an exact
-30,000,000-instruction comparison, revision `3bfb46d` remained cyan after
+30,000,000-instruction comparison, revision `e375abe` remained cyan after
 330,734,670 cycles; the corrected worktree reached the player shell after
 159,555,961 cycles. The full address/access matrix remains open, so other
 holes must not be promoted to bus errors without hardware evidence.

@@ -5,9 +5,9 @@
   "symptom": "Switching the running Multilingual sample from Dutch to Japanese records one MP2 decode error",
   "expected": "The native in-place audio-stream change continues cleanly without decoder errors or underflow",
   "status": "resolved",
-  "reported_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
-  "last_reproduced_revision": "322e18083c8ffeaffc99c99690a3d79d04557c66",
-  "last_verified_revision": "322e18083c8ffeaffc99c99690a3d79d04557c66+dirty:6e5fd0a546b78d2656469a7989cce5069a5c390f6fe3a78845cf3ef03dc7545e",
+  "reported_revision": "9504c635d4b6a9942d67df8af64fc5efcf59fe38",
+  "last_reproduced_revision": "e4ce9665c0b59f1fda121649dd6770d8dfd04e17",
+  "last_verified_revision": "e4ce9665c0b59f1fda121649dd6770d8dfd04e17+dirty:6e5fd0a546b78d2656469a7989cce5069a5c390f6fe3a78845cf3ef03dc7545e",
   "evidence_status": "current",
   "revalidation_reason": null,
   "components": ["dvc", "mpeg-audio", "disc-cdfm"],
@@ -45,7 +45,7 @@
     {
       "id": "native-multilingual-script",
       "context": {
-        "base_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+        "base_revision": "9504c635d4b6a9942d67df8af64fc5efcf59fe38",
         "dirty_diff_hash": "89aa7263d56789fe6114a377f936b9127fa9cf2692c0cc623e72047f3101e332",
         "component_fingerprints": {
           "dvc": "66eee56771d5988b98250e3d4cb1d698c4522264677c00000789d119f29af6ca",
@@ -80,7 +80,7 @@
     {
       "id": "discard-old-compressed-tail",
       "context": {
-        "base_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+        "base_revision": "9504c635d4b6a9942d67df8af64fc5efcf59fe38",
         "dirty_diff_hash": "uncommitted local experiment",
         "component_fingerprints": {},
         "dependencies": {},
@@ -112,7 +112,7 @@
     {
       "id": "decoder-state-only-reacquisition",
       "context": {
-        "base_revision": "7dc46a9ed0defa4ca3af6e3b8fd05ef898b9361c",
+        "base_revision": "9504c635d4b6a9942d67df8af64fc5efcf59fe38",
         "dirty_diff_hash": "uncommitted local experiment",
         "component_fingerprints": {},
         "dependencies": {},
@@ -144,7 +144,7 @@
     {
       "id": "selected-pes-boundary-concealment",
       "context": {
-        "base_revision": "322e18083c8ffeaffc99c99690a3d79d04557c66",
+        "base_revision": "e4ce9665c0b59f1fda121649dd6770d8dfd04e17",
         "dirty_diff_hash": "74ef9a705172dd501eec43ade019ba4bf254a1fb788d38f334dc91d31ddcd41b",
         "component_fingerprints": {
           "dvc": "bbda3634985107fcc2143c6876a8345651d8ef373a054e6bd814e7ba2cac63ce",
@@ -204,7 +204,7 @@
       "expected": "Video continues, Japanese audio begins without a repeated underflow/stutter sequence, and playback remains synchronized. A single brief muted boundary frame may be audible."
     },
     {
-      "revision": "322e18083c8ffeaffc99c99690a3d79d04557c66+dirty:6e5fd0a546b78d2656469a7989cce5069a5c390f6fe3a78845cf3ef03dc7545e",
+      "revision": "e4ce9665c0b59f1fda121649dd6770d8dfd04e17+dirty:6e5fd0a546b78d2656469a7989cce5069a5c390f6fe3a78845cf3ef03dc7545e",
       "status": "verified",
       "steps": "Use FMVDemo Edit Room > Multilingual and switch among the authored language controls during uninterrupted playback.",
       "expected": "Picture and audio continue through each language change without a repeated stutter or loss of synchronization.",

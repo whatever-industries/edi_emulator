@@ -5,7 +5,7 @@
   "symptom": "The title freezes when the filing cabinet opens.",
   "expected": "Opening the filing cabinet completes its transition and leaves the title responsive so the user can continue.",
   "status": "reported",
-  "reported_revision": "cf6126718b3e90f3c46126b4511e391da610f9d2",
+  "reported_revision": "130978b24af778b5a660289178e71b18b6297dc4",
   "last_reproduced_revision": null,
   "last_verified_revision": null,
   "evidence_status": "reported-current",
@@ -66,7 +66,7 @@
   "manual_verification": [
     {
       "result": "reported",
-      "revision": "cf61267+dirty:b331d974edf66ed1f04e5bb34a528b79000bb0ce0338d19dc541e3396fd3f765",
+      "revision": "130978b+dirty:b331d974edf66ed1f04e5bb34a528b79000bb0ce0338d19dc541e3396fd3f765",
       "notes": "Uncover featuring Tatjana reportedly freezes when the filing cabinet opens. This has not yet been reproduced with diagnostics."
     }
   ]

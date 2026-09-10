@@ -5,7 +5,7 @@
   "symptom": "One or two brief audible hits or glitches occur near the start of the opening Philips logo clip.",
   "expected": "The opening Philips logo audio plays cleanly without transient hits while the clip and following MPEG sequence remain synchronized.",
   "status": "reported",
-  "reported_revision": "42fe2b5982de02abc9643c6dd0a5e922e03cb490",
+  "reported_revision": "dc7540fad5d9c9a0772bbe4ab9e3b305abd69957",
   "last_reproduced_revision": null,
   "last_verified_revision": null,
   "evidence_status": "reported-current",
@@ -50,7 +50,7 @@
   "manual_verification": [
     {
       "result": "reported",
-      "revision": "42fe2b5+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
+      "revision": "dc7540f+dirty:7a062159895612b8bf6da9f16630d9582db76cb5",
       "notes": "Manual listening during a clean-NVRAM seven-stage opening pass detected one or two brief audio hits near the start of the opening Philips logo. The remainder of the title/post-title/gameplay sequence proceeded."
     }
   ]

@@ -1481,6 +1481,9 @@ fn start_audio(
     let device = cpal::default_host()
         .default_output_device()
         .ok_or("no default audio output device")?;
+    // Pick a 44.1 kHz stereo-capable config in a sample format we can feed,
+    // preferring float, then signed, then unsigned 16-bit. Taking whichever
+    // config the host lists first can land on 8-bit output on some backends.
     let supported = device
         .supported_output_configs()?
         .filter(|range| {
@@ -1488,8 +1491,10 @@ fn start_audio(
                 && range.min_sample_rate().0 <= AUDIO_RATE
                 && range.max_sample_rate().0 >= AUDIO_RATE
         })
-        .max_by_key(|range| audio_sample_format_preference(range.sample_format()))
-        .ok_or("output device does not support 44.1 kHz stereo")?;
+        .filter_map(|range| sample_format_rank(range.sample_format()).map(|rank| (rank, range)))
+        .min_by_key(|(rank, range)| (*rank, range.channels()))
+        .map(|(_, range)| range)
+        .ok_or("output device does not support 44.1 kHz stereo as f32, i16 or u16")?;
     let sample_format = supported.sample_format();
     let config = supported
         .with_sample_rate(cpal::SampleRate(AUDIO_RATE))
@@ -1541,20 +1546,6 @@ fn start_audio(
             on_error,
             None,
         )?,
-        cpal::SampleFormat::U8 => device.build_output_stream(
-            &config,
-            move |data: &mut [u8], _| {
-                fill_audio(
-                    data,
-                    channels,
-                    &mut consumer,
-                    muted.load(Ordering::Relaxed) || suppressed.load(Ordering::Relaxed),
-                    signed_pcm_to_u8,
-                );
-            },
-            on_error,
-            None,
-        )?,
         format => return Err(format!("unsupported audio sample format {format}").into()),
     };
     stream.play()?;
@@ -1566,17 +1557,14 @@ fn start_audio(
     Ok((stream, producer))
 }
 
-fn signed_pcm_to_u8(sample: i16) -> u8 {
-    ((i32::from(sample) + 32_768) >> 8) as u8
-}
-
-fn audio_sample_format_preference(format: cpal::SampleFormat) -> u8 {
+/// Preference order for host output sample formats `start_audio` can feed
+/// (lower is better); `None` for formats it has no stream callback for.
+fn sample_format_rank(format: cpal::SampleFormat) -> Option<u8> {
     match format {
-        cpal::SampleFormat::I16 => 4,
-        cpal::SampleFormat::F32 => 3,
-        cpal::SampleFormat::U16 => 2,
-        cpal::SampleFormat::U8 => 1,
-        _ => 0,
+        cpal::SampleFormat::F32 => Some(0),
+        cpal::SampleFormat::I16 => Some(1),
+        cpal::SampleFormat::U16 => Some(2),
+        _ => None,
     }
 }
 
@@ -4946,17 +4934,16 @@ impl eframe::App for App {
 mod tests {
     use super::presentation::{screenshot_dimensions, DisplayAperture};
     use super::{
-        audio_sample_format_preference, backup_nvram, cdi_keyboard_code, configure_ui,
-        configured_nvram_path, contains_title_string, controller_deflection,
-        controller_dpad_deflection, controller_stick_deflection, disc_load_action,
-        display_aperture, display_diagnostic_field_count, display_name, fill_audio, fit_aspect,
-        is_quick_menu_button, library_dpad_direction, library_pad_action, load_nvram,
-        parental_passcode, pointer_mapping, presentation_aspect, quick_menu_chord_pressed,
-        quick_menu_consumes_controller_poll, region_video_hint, screenshot_image, signed_pcm_to_u8,
-        standard_for_region_hint, suppress_guest_buttons_until_release, write_nvram,
-        DiscLoadAction, DiscOverride, HostMenuBinding, LibraryPadAction, MixedRegionPreference,
-        Prefs, RegionVideoHint, SharedFrame, StartButtonAction, MAX_DISPLAY_DIAGNOSTIC_FIELDS,
-        UI_SELECTED_TEXT,
+        backup_nvram, cdi_keyboard_code, configure_ui, configured_nvram_path,
+        contains_title_string, controller_deflection, controller_dpad_deflection,
+        controller_stick_deflection, disc_load_action, display_aperture,
+        display_diagnostic_field_count, display_name, fill_audio, fit_aspect, is_quick_menu_button,
+        library_dpad_direction, library_pad_action, load_nvram, parental_passcode, pointer_mapping,
+        presentation_aspect, quick_menu_chord_pressed, quick_menu_consumes_controller_poll,
+        region_video_hint, sample_format_rank, screenshot_image, standard_for_region_hint,
+        suppress_guest_buttons_until_release, write_nvram, DiscLoadAction, DiscOverride,
+        HostMenuBinding, LibraryPadAction, MixedRegionPreference, Prefs, RegionVideoHint,
+        SharedFrame, StartButtonAction, MAX_DISPLAY_DIAGNOSTIC_FIELDS, UI_SELECTED_TEXT,
     };
     use cdi_core::mcd212::DisplayGeometry;
 
@@ -5012,25 +4999,19 @@ mod tests {
     }
 
     #[test]
-    fn signed_pcm_converts_to_full_unsigned_8_bit_range() {
-        assert_eq!(signed_pcm_to_u8(i16::MIN), 0);
-        assert_eq!(signed_pcm_to_u8(0), 128);
-        assert_eq!(signed_pcm_to_u8(i16::MAX), 255);
-    }
-
-    #[test]
-    fn audio_output_prefers_higher_fidelity_formats_over_u8() {
-        assert!(
-            audio_sample_format_preference(cpal::SampleFormat::I16)
-                > audio_sample_format_preference(cpal::SampleFormat::F32)
-        );
-        assert!(
-            audio_sample_format_preference(cpal::SampleFormat::F32)
-                > audio_sample_format_preference(cpal::SampleFormat::U16)
-        );
-        assert!(
-            audio_sample_format_preference(cpal::SampleFormat::U16)
-                > audio_sample_format_preference(cpal::SampleFormat::U8)
+    fn audio_prefers_float_then_16_bit_and_rejects_8_bit() {
+        use cpal::SampleFormat;
+        let mut formats = vec![
+            SampleFormat::U8,
+            SampleFormat::U16,
+            SampleFormat::I16,
+            SampleFormat::F32,
+        ];
+        formats.retain(|format| sample_format_rank(*format).is_some());
+        formats.sort_by_key(|format| sample_format_rank(*format));
+        assert_eq!(
+            formats,
+            [SampleFormat::F32, SampleFormat::I16, SampleFormat::U16]
         );
     }
 

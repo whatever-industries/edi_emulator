@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Sector reader for .bin files (single-bin and multi-bin).
 //!
 //! Strips the sync/header prefix from raw 2352-byte sectors to expose

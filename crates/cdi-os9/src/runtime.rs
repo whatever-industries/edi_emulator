@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Read-only CD-RTOS/OS-9 runtime classification helpers.
 //!
 //! These helpers deliberately stop at structures whose layout is specified

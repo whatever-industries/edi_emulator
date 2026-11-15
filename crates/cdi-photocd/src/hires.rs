@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! 4Base (1536×1024) and 16Base (3072×2048) Huffman residual decoder.
 //!
 //! Layout (spec Sections IV.3.12–21, confirmed via pcdtojpeg):

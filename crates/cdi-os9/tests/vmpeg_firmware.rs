@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 
 use cdi_os9::{parse_csd_records, scan_modules, CsdParseError, Module, ModuleType};
 

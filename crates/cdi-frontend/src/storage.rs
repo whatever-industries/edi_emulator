@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Host persistence for the player's battery-backed SRAM.
 
 use std::io::Write;

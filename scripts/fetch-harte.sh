@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: MIT
 # Fetch the SingleStepTests m68000 vectors (MIT-licensed) used by the
 # cdi-scc68070 conformance tests. Files land in tests-data/harte-68000/.
 set -eu

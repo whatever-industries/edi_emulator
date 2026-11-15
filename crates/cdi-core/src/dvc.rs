@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Optional CD-i Digital Video Cartridge support.
 //!
 //! M3 targets the Philips 22ER9141 VMPEG cartridge: MCD251 video decoding,

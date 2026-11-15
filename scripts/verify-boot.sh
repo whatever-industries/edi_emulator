@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: MIT
 # Deterministic boot regression check: boots cdi220b.rom headlessly and
 # compares the framebuffer hash against tests-data/hashes.toml.
 set -eu

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! .cue sheet parser (single-bin and multi-bin aware).
 //!
 //! Handles `FILE`, `TRACK`, `INDEX 00`, `INDEX 01`, and quoted file paths.

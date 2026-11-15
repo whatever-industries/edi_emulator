@@ -2,8 +2,12 @@
 
 ## Licensing rules (read first)
 
-- All contributions are GPL-3.0-or-later. Every source file starts with
-  `// SPDX-License-Identifier: GPL-3.0-or-later`.
+- All contributions are MIT. Every source file starts with
+  `// SPDX-License-Identifier: MIT`. The exceptions are files transliterated
+  from LGPL-2.0-or-later sources (currently `cdi-core/src/boards.rs` and
+  `cdi-os9/src/rules.rs`), which keep
+  `// SPDX-License-Identifier: LGPL-2.0-or-later`. Do not move code from
+  those files into MIT files.
 - Porting logic from **MAME's** CD-i files (BSD-3-Clause) is allowed; add an
   attribution comment naming the MAME source file and authors, preserve its
   copyright notice in `NOTICE.md`, and keep the applicable terms in

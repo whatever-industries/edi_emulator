@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Read-only CD-i disc inventory and real-time-file provenance.
 //!
 //! This module intentionally records metadata, bounds, and hashes rather than

@@ -3,7 +3,7 @@ name = "cdi-core"
 description = "CD-i machine core: bus, scheduler, boards, and devices"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "MIT AND LGPL-2.0-or-later"
 rust-version.workspace = true
 
 [features]

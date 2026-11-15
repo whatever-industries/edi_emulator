@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Optional local-media compatibility suites and sanitized title-matrix promotion.
 
 use std::collections::BTreeSet;

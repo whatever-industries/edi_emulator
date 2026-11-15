@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Canonical Huffman tables and bit-stream decoder for 4Base/16Base
 //! residuals (spec Section IV.3 Figs IV.17–20).
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Disc-library discovery, Store-ZIP resolution, and controller navigation.
 //!
 //! This module deliberately owns no emulator state. It turns persisted folder

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Event scheduler.
 //!
 //! Generic event ordering plus the documented regional Mono-I clock constants.

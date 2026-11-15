@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Philips K-mode CD-i keyboard serial peripheral.
 //!
 //! The keyboard is an optional device on the SCC68070 UART. It supplies a

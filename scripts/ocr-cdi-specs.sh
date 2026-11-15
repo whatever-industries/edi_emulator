@@ -1,5 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 # Reproducibly extract/OCR CD-i PDF references into ignored local storage.
 set -eu
 

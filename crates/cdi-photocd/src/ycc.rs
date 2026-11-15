@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Photo YCC → sRGB conversion.
 //!
 //! Spec Section IV.2.5 (CCIR 709 primaries). Neutrals:

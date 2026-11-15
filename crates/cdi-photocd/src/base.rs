@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Base (768×512) image plane decoder.
 //!
 //! Layout of the 288-sector (589,824-byte) Base data area (confirmed by

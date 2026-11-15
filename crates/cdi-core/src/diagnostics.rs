@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Read-only, bounded machine diagnostics.
 
 use crate::cdic::CdicDiagnosticSnapshot;

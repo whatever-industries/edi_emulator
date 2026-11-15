@@ -66,5 +66,9 @@ Game disc images are not included and must be supplied by the user.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for
-third-party attribution.
+MIT. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for third-party
+attribution. Two files transliterated from LGPL-2.0-or-later data
+(`crates/cdi-core/src/boards.rs`, `crates/cdi-os9/src/rules.rs`) remain under
+that license. Releases up to and including v0.2.17 were published under
+GPL-3.0-or-later. Bundled firmware in `firmware/` is not covered by the MIT
+license.

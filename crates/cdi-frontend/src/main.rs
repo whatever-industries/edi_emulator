@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Desktop frontend: renders the MCD212 framebuffer in an eframe window and
 //! feeds mouse and gamepad input to the SLAVE pointer device.
 //!

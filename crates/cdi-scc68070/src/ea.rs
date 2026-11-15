@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Effective-address calculation and operand access.
 
 use crate::bus::Bus68k;

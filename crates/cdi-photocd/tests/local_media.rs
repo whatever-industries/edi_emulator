@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Local, media-gated integration tests.
 //!
 //! These run only when `CDI_PHOTOCD_LIBRARY` points to a Photo CD disc

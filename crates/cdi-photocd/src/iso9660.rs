@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! ISO 9660 / High Sierra PVD + directory walker.
 //!
 //! Handles the CD-ROM XA quirk where directory records have an extra

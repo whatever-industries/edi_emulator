@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Headless harness for E-Di: Emulator Disc Interactive.
 
 use std::io::Read;

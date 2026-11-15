@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Store-only ZIP support for CUE/BIN disc images.
 //!
 //! Compressed disc data cannot be sector-read efficiently by the existing

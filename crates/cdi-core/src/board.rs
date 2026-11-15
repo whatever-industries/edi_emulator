@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Board and model definitions.
 //!
 //! A board is a list of devices at base addresses — the same shape as the

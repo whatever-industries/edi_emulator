@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! Top-level: open a Photo CD disc from a .cue path.
 //!
 //! Parses the cue, picks a data track whose .bin contains a valid PVD,

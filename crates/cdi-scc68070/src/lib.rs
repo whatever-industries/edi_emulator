@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Philips SCC68070 CPU core.
 //!
 //! The SCC68070 is a 68000-user-ISA microprocessor with its own microcycle

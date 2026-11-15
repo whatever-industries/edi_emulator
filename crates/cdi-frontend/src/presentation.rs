@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Host presentation geometry shared by rendering, screenshots, and pointer
 //! mapping.
 

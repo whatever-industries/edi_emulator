@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: MIT
 """Create payload-free, per-play VMPEG timing and transition summaries."""
 
 from __future__ import annotations

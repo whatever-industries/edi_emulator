@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Exact-disc identification and hardware-standard profiles.
 //!
 //! CD-i application data does not carry a universal PAL/NTSC declaration.

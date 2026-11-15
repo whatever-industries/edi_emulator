@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //! PLAYLIST.PCD parser (spec Section III.2.4, Figs III.7–9).
 //!
 //! Walks chained Play Sequences. Each sequence contains per-image display

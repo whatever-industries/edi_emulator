@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! The emulated machine: memory system built from a board definition.
 //!
 //! Address decoding uses a 4 KB page table over the low 16 MB (the decoded

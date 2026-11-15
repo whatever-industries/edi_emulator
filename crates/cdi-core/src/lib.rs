@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! CD-i machine core: boards, bus, scheduler, and devices.
 //!
 //! This crate is deterministic by construction: no wall-clock time, no

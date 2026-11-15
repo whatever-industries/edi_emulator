@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: MIT
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)

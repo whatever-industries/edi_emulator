@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Local incident lifecycle and context-aware experiment memory.
 
 use std::collections::BTreeMap;

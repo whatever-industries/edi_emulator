@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! Bus interface the CPU core drives.
 
 /// 68k function codes (supervisor/user, program/data), used by address

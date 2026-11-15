@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 //! ECMA-130 sector scrambling.
 //!
 //! Data sectors are scrambled on disc with a 15-bit LFSR (x^15 + x + 1,

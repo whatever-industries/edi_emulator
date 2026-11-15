@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0-or-later
+# SPDX-License-Identifier: MIT
 set -euo pipefail
 
 for required in CDI_SYSTEM_ROM CDI_VMPEG_ROM CDI_7TH_GUEST_CUE; do

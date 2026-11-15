@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: MIT
 
 use cdi_scc68070::bus::{Bus68k, BusAccessSize, BusError, FnCode, WaitTicks};
 use cdi_scc68070::Cpu;

@@ -106,8 +106,8 @@ fn read_state(r: &mut Reader) -> State {
     let _numbytes = r.u32v();
     assert_eq!(r.u32v(), 0x0123_4567, "state magic");
     let mut st = State::default();
-    for i in 0..19 {
-        st.regs[i] = r.u32v();
+    for reg in &mut st.regs {
+        *reg = r.u32v();
     }
     st.prefetch = [r.u32v(), r.u32v()];
     let num_rams = r.u32v();

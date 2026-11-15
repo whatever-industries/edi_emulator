@@ -271,8 +271,8 @@ fn dyuv_luts() -> &'static DyuvLuts {
             l.delta_y[d] = DELTAS[d & 15];
             l.delta_uv[d] = DELTAS[d >> 4];
         }
-        for w in 0..0x300usize {
-            l.limit[w] = if w < 0x100 {
+        for (w, limit) in l.limit.iter_mut().enumerate() {
+            *limit = if w < 0x100 {
                 0
             } else if w < 0x200 {
                 (w - 0x100) as u8
